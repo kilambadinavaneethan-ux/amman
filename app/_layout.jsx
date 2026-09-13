@@ -173,10 +173,22 @@ function AppContent() {
     // Hide native splash screen once the custom animated splash mounts
     SplashScreen.hideAsync().catch(() => {});
     
-    // Trigger background auto backup check
-    checkBackgroundAutoBackup().catch((err) => {
-      console.log("[AutoBackup] Silent run failed:", err.message);
-    });
+    // Defer background auto backup check until 15s after startup and idle time
+    const backupTimer = setTimeout(() => {
+      const runBackup = () => {
+        checkBackgroundAutoBackup().catch((err) => {
+          console.log("[AutoBackup] Silent run failed:", err.message);
+        });
+      };
+
+      if (typeof requestIdleCallback === "function") {
+        requestIdleCallback(runBackup);
+      } else {
+        runBackup();
+      }
+    }, 15000);
+
+    return () => clearTimeout(backupTimer);
   }, []);
 
   const { isOnline, wasOffline } = useNetwork();

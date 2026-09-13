@@ -42,7 +42,7 @@ export default function Orders() {
   const paramOrderId = (params?.orderId || params?.id || params?.highlightId) as string | undefined;
 
   const [focusedOrderId, setFocusedOrderId] = useState<string | null>(null);
-  const [dateGroupLimit, setDateGroupLimit] = useState<number>(12);
+  const [dateGroupLimit, setDateGroupLimit] = useState<number>(6);
 
   useEffect(() => {
     if (paramOrderId) {
@@ -296,10 +296,24 @@ export default function Orders() {
     }), [items]);
 
   const [search, setSearch] = useState("");
+  const [debouncedSearch, setDebouncedSearch] = useState("");
   const [filterStatus, setFilterStatus] = useState<string>("all");
   const [selectedFilterDate, setSelectedFilterDate] = useState<Date | null>(null);
   const [dateFilterPreset, setDateFilterPreset] = useState<"all" | "today" | "yesterday" | "this_month" | "custom">("all");
   const [isSearchCalendarOpen, setIsSearchCalendarOpen] = useState(false);
+
+  // Debounce search query to eliminate typing lag
+  useEffect(() => {
+    const timer = setTimeout(() => {
+      setDebouncedSearch(search);
+    }, 150);
+    return () => clearTimeout(timer);
+  }, [search]);
+
+  // Reset date group render window on filter change
+  useEffect(() => {
+    setDateGroupLimit(6);
+  }, [debouncedSearch, filterStatus, selectedFilterDate, dateFilterPreset]);
 
   // Edit Modal State
   const [editModalVisible, setEditModalVisible] = useState(false);
@@ -470,14 +484,15 @@ export default function Orders() {
       return [targetOrder];
     }
     return (orders || []).filter((order: any) => {
+      const q = debouncedSearch.trim().toLowerCase();
       const matchesSearch =
-        !search ||
-        order.customerName?.toLowerCase().includes(search.toLowerCase()) ||
-        order.customerPhone?.toLowerCase().includes(search.toLowerCase()) ||
+        !q ||
+        order.customerName?.toLowerCase().includes(q) ||
+        order.customerPhone?.toLowerCase().includes(q) ||
         order.items?.some((itm: any) =>
-          itm.itemName?.toLowerCase().includes(search.toLowerCase()),
+          itm.itemName?.toLowerCase().includes(q),
         ) ||
-        order.itemName?.toLowerCase().includes(search.toLowerCase());
+        order.itemName?.toLowerCase().includes(q);
 
       const matchesStatus = filterStatus === "all" || order.status === filterStatus;
       const orderDate = order.createdAt || order.orderedDate;
@@ -485,25 +500,26 @@ export default function Orders() {
 
       return matchesSearch && matchesStatus && matchesDate;
     });
-  }, [orders, search, filterStatus, matchesDateFilter, focusedOrderId, targetOrder]);
+  }, [orders, debouncedSearch, filterStatus, matchesDateFilter, focusedOrderId, targetOrder]);
 
   const filteredExpenses = useMemo(() => {
     if (focusedOrderId && targetOrder) {
       return [];
     }
     return (expenses || []).filter((expense: any) => {
+      const q = debouncedSearch.trim().toLowerCase();
       const matchesSearch =
-        !search ||
-        expense.title?.toLowerCase().includes(search.toLowerCase()) ||
-        expense.category?.toLowerCase().includes(search.toLowerCase()) ||
-        expense.description?.toLowerCase().includes(search.toLowerCase());
+        !q ||
+        expense.title?.toLowerCase().includes(q) ||
+        expense.category?.toLowerCase().includes(q) ||
+        expense.description?.toLowerCase().includes(q);
 
       const matchesStatus = filterStatus === "all";
       const matchesDate = matchesDateFilter(expense.expenseDate);
 
       return matchesSearch && matchesStatus && matchesDate;
     });
-  }, [expenses, search, filterStatus, matchesDateFilter, focusedOrderId, targetOrder]);
+  }, [expenses, debouncedSearch, filterStatus, matchesDateFilter, focusedOrderId, targetOrder]);
 
   // Grouping both orders and expenses by date string
   const { groupedData, sortedDates } = useMemo(() => {

@@ -107,6 +107,73 @@ function PartnerDetailsScreen() {
   const [activitySubFilter, setActivitySubFilter] = useState("all"); // "all" | "trip" | "payment" | "repayment" | "bonus" | "order" | "cust_payment"
   const [activitySearch, setActivitySearch] = useState("");
 
+  // Checked / Reconciled Logs State
+  const [checkedLogIds, setCheckedLogIds] = useState([]);
+  const [checkStatusFilter, setCheckStatusFilter] = useState("all"); // "all" | "checked" | "unchecked"
+
+  useEffect(() => {
+    if (partner?.checkedLogIds && Array.isArray(partner.checkedLogIds)) {
+      setCheckedLogIds(partner.checkedLogIds);
+    }
+  }, [partner?.checkedLogIds]);
+
+  const toggleCheckLog = useCallback(
+    async (logId) => {
+      if (!logId) return;
+      const currentSet = new Set(checkedLogIds);
+      if (currentSet.has(logId)) {
+        currentSet.delete(logId);
+      } else {
+        currentSet.add(logId);
+      }
+      const updatedArray = Array.from(currentSet);
+      setCheckedLogIds(updatedArray);
+
+      if (partner?.id) {
+        try {
+          const partnerRef = doc(db, "deliveryPartners", partner.id);
+          await updateDoc(partnerRef, {
+            checkedLogIds: updatedArray,
+            updatedAt: new Date(),
+          });
+        } catch (err) {
+          console.error("Failed to update checked logs in Firestore:", err);
+        }
+      }
+    },
+    [checkedLogIds, partner?.id]
+  );
+
+  const handleCheckAllVisible = useCallback(
+    async (idsToCheck) => {
+      if (!idsToCheck || idsToCheck.length === 0) return;
+      const currentSet = new Set(checkedLogIds);
+      const allAlreadyChecked = idsToCheck.every((id) => currentSet.has(id));
+
+      if (allAlreadyChecked) {
+        idsToCheck.forEach((id) => currentSet.delete(id));
+      } else {
+        idsToCheck.forEach((id) => currentSet.add(id));
+      }
+
+      const updatedArray = Array.from(currentSet);
+      setCheckedLogIds(updatedArray);
+
+      if (partner?.id) {
+        try {
+          const partnerRef = doc(db, "deliveryPartners", partner.id);
+          await updateDoc(partnerRef, {
+            checkedLogIds: updatedArray,
+            updatedAt: new Date(),
+          });
+        } catch (err) {
+          console.error("Failed to batch update checked logs in Firestore:", err);
+        }
+      }
+    },
+    [checkedLogIds, partner?.id]
+  );
+
   // Raw Firestore Data
   const [trips, setTrips] = useState([]);
   const [payments, setPayments] = useState([]);
@@ -603,10 +670,18 @@ function PartnerDetailsScreen() {
     return entries;
   }, [partnerTrips, partnerBonuses, partnerPayments, filteredPartnerCustomerOrders, partnerCustomerPayments, colors.text.primary]);
 
-  // Filtered Activity Ledger by sub-filter & search
+  const checkedSet = useMemo(() => new Set(checkedLogIds), [checkedLogIds]);
+
+  // Filtered Activity Ledger by sub-filter, check status & search
   const filteredActivityLedger = useMemo(() => {
     return activityLedger.filter((entry) => {
       if (activitySubFilter !== "all" && entry.type !== activitySubFilter) {
+        return false;
+      }
+      if (checkStatusFilter === "checked" && !checkedSet.has(entry.id)) {
+        return false;
+      }
+      if (checkStatusFilter === "unchecked" && checkedSet.has(entry.id)) {
         return false;
       }
       if (activitySearch.trim()) {
@@ -618,7 +693,99 @@ function PartnerDetailsScreen() {
       }
       return true;
     });
-  }, [activityLedger, activitySubFilter, activitySearch]);
+  }, [activityLedger, activitySubFilter, checkStatusFilter, checkedSet, activitySearch]);
+
+  // Filtered Tab items for direct tabs
+  const filteredDisplayTrips = useMemo(() => {
+    return partnerTrips.filter((t) => {
+      const key = `trip-${t.id}`;
+      if (checkStatusFilter === "checked") return checkedSet.has(key);
+      if (checkStatusFilter === "unchecked") return !checkedSet.has(key);
+      return true;
+    });
+  }, [partnerTrips, checkStatusFilter, checkedSet]);
+
+  const filteredDisplayPayments = useMemo(() => {
+    return partnerPayments.filter((p) => {
+      const key = `payment-${p.id}`;
+      if (checkStatusFilter === "checked") return checkedSet.has(key);
+      if (checkStatusFilter === "unchecked") return !checkedSet.has(key);
+      return true;
+    });
+  }, [partnerPayments, checkStatusFilter, checkedSet]);
+
+  const filteredDisplayBonuses = useMemo(() => {
+    return partnerBonuses.filter((b) => {
+      const key = `bonus-${b.id}`;
+      if (checkStatusFilter === "checked") return checkedSet.has(key);
+      if (checkStatusFilter === "unchecked") return !checkedSet.has(key);
+      return true;
+    });
+  }, [partnerBonuses, checkStatusFilter, checkedSet]);
+
+  const filteredDisplayCustomerOrders = useMemo(() => {
+    return filteredPartnerCustomerOrders.filter((o) => {
+      const key = `order-${o.id}`;
+      if (checkStatusFilter === "checked") return checkedSet.has(key);
+      if (checkStatusFilter === "unchecked") return !checkedSet.has(key);
+      return true;
+    });
+  }, [filteredPartnerCustomerOrders, checkStatusFilter, checkedSet]);
+
+  // Active Tab Visible IDs for Check All / Uncheck All
+  const activeTabVisibleIds = useMemo(() => {
+    if (activeTab === "activity") return filteredActivityLedger.map((e) => e.id);
+    if (activeTab === "trips") return filteredDisplayTrips.map((t) => `trip-${t.id}`);
+    if (activeTab === "payments") return filteredDisplayPayments.map((p) => `payment-${p.id}`);
+    if (activeTab === "bonuses") return filteredDisplayBonuses.map((b) => `bonus-${b.id}`);
+    if (activeTab === "orders") return filteredDisplayCustomerOrders.map((o) => `order-${o.id}`);
+    return [];
+  }, [
+    activeTab,
+    filteredActivityLedger,
+    filteredDisplayTrips,
+    filteredDisplayPayments,
+    filteredDisplayBonuses,
+    filteredDisplayCustomerOrders,
+  ]);
+
+  const activeTabTotalListCount = useMemo(() => {
+    if (activeTab === "activity") return activityLedger.length;
+    if (activeTab === "trips") return partnerTrips.length;
+    if (activeTab === "payments") return partnerPayments.length;
+    if (activeTab === "bonuses") return partnerBonuses.length;
+    if (activeTab === "orders") return filteredPartnerCustomerOrders.length;
+    return 0;
+  }, [
+    activeTab,
+    activityLedger.length,
+    partnerTrips.length,
+    partnerPayments.length,
+    partnerBonuses.length,
+    filteredPartnerCustomerOrders.length,
+  ]);
+
+  const activeTabCheckedCount = useMemo(() => {
+    if (activeTab === "activity") return activityLedger.filter((e) => checkedSet.has(e.id)).length;
+    if (activeTab === "trips") return partnerTrips.filter((t) => checkedSet.has(`trip-${t.id}`)).length;
+    if (activeTab === "payments") return partnerPayments.filter((p) => checkedSet.has(`payment-${p.id}`)).length;
+    if (activeTab === "bonuses") return partnerBonuses.filter((b) => checkedSet.has(`bonus-${b.id}`)).length;
+    if (activeTab === "orders") return filteredPartnerCustomerOrders.filter((o) => checkedSet.has(`order-${o.id}`)).length;
+    return 0;
+  }, [
+    activeTab,
+    activityLedger,
+    partnerTrips,
+    partnerPayments,
+    partnerBonuses,
+    filteredPartnerCustomerOrders,
+    checkedSet,
+  ]);
+
+  const isAllVisibleChecked = useMemo(() => {
+    if (activeTabVisibleIds.length === 0) return false;
+    return activeTabVisibleIds.every((id) => checkedSet.has(id));
+  }, [activeTabVisibleIds, checkedSet]);
 
   // Counts for Sub-Filters
   const activityCounts = useMemo(() => {
@@ -1298,6 +1465,86 @@ function PartnerDetailsScreen() {
     }
   };
 
+  const renderLogCheckToolbar = () => {
+    const totalCount = activeTabTotalListCount;
+    const checkedCount = activeTabCheckedCount;
+    const uncheckedCount = Math.max(0, totalCount - checkedCount);
+    const percent = totalCount > 0 ? Math.round((checkedCount / totalCount) * 100) : 0;
+
+    return (
+      <View style={styles.logCheckToolbar}>
+        <View style={styles.logCheckHeaderRow}>
+          <View style={{ flexDirection: "row", alignItems: "center", gap: 8 }}>
+            <View style={[styles.logCheckIconCircle, { backgroundColor: "#10b98118" }]}>
+              <MaterialIcons name="fact-check" size={15} color="#10b981" />
+            </View>
+            <View>
+              <Text style={styles.logCheckHeading}>LOG AUDIT & CHECK</Text>
+              <Text style={styles.logCheckSubheading}>
+                {checkedCount} of {totalCount} verified ({percent}%)
+              </Text>
+            </View>
+          </View>
+
+          {activeTabVisibleIds.length > 0 && (
+            <Pressable
+              style={({ pressed }) => [
+                styles.checkAllBtn,
+                isAllVisibleChecked && styles.checkAllBtnActive,
+                pressed && styles.buttonPressed,
+              ]}
+              onPress={() => handleCheckAllVisible(activeTabVisibleIds)}
+            >
+              <MaterialIcons
+                name={isAllVisibleChecked ? "check-box" : "check-box-outline-blank"}
+                size={16}
+                color={isAllVisibleChecked ? "#10b981" : colors.text.muted}
+              />
+              <Text
+                style={[
+                  styles.checkAllBtnText,
+                  isAllVisibleChecked && { color: "#10b981", fontWeight: "800" },
+                ]}
+              >
+                {isAllVisibleChecked ? "Uncheck All" : "Check All"}
+              </Text>
+            </Pressable>
+          )}
+        </View>
+
+        {/* Check Filter Pills */}
+        <View style={styles.logCheckFilterRow}>
+          {[
+            { id: "all", label: `All (${totalCount})` },
+            { id: "checked", label: `✓ Checked (${checkedCount})` },
+            { id: "unchecked", label: `⏳ Unchecked (${uncheckedCount})` },
+          ].map((f) => {
+            const active = checkStatusFilter === f.id;
+            return (
+              <Pressable
+                key={f.id}
+                style={[
+                  styles.checkFilterPill,
+                  active && styles.checkFilterPillActive,
+                ]}
+                onPress={() => setCheckStatusFilter(f.id)}
+              >
+                <Text
+                  style={[
+                    styles.checkFilterPillText,
+                    active && styles.checkFilterPillTextActive,
+                  ]}
+                >
+                  {f.label}
+                </Text>
+              </Pressable>
+            );
+          })}
+        </View>
+      </View>
+    );
+  };
+
   if (!partner) {
     return (
       <View style={styles.errorContainer}>
@@ -1761,6 +2008,9 @@ function PartnerDetailsScreen() {
             </ScrollView>
           </View>
 
+          {/* Log Audit & Check Toolbar */}
+          {renderLogCheckToolbar()}
+
           {/* TAB CONTENTS */}
 
           {/* TAB 1: ALL ACTIVITY (CONSOLIDATED COMPLETE LEDGER) */}
@@ -1827,15 +2077,16 @@ function PartnerDetailsScreen() {
                   <MaterialIcons name="event-note" size={40} color={colors.border.medium} />
                   <Text style={styles.emptyTitle}>No Matching Activity Found</Text>
                   <Text style={styles.emptyDesc}>
-                    {activitySearch || activitySubFilter !== "all"
-                      ? "No records match your active sub-filter or search query."
+                    {activitySearch || activitySubFilter !== "all" || checkStatusFilter !== "all"
+                      ? "No records match your active filter or search query."
                       : "No delivery trips, bonuses, or payments recorded for this time range."}
                   </Text>
-                  {activitySearch || activitySubFilter !== "all" ? (
+                  {activitySearch || activitySubFilter !== "all" || checkStatusFilter !== "all" ? (
                     <Pressable
                       style={styles.emptyActionBtn}
                       onPress={() => {
                         setActivitySubFilter("all");
+                        setCheckStatusFilter("all");
                         setActivitySearch("");
                       }}
                     >
@@ -1884,10 +2135,17 @@ function PartnerDetailsScreen() {
                       ? "shopping-bag"
                       : "account-balance-wallet";
 
+                    const logKey = entry.id;
+                    const isChecked = checkedSet.has(logKey);
+
                     return (
                       <Pressable
                         key={entry.id}
-                        style={({ pressed }) => [styles.ledgerCard, pressed && styles.cardPressed]}
+                        style={({ pressed }) => [
+                          styles.ledgerCard,
+                          isChecked && styles.ledgerCardChecked,
+                          pressed && styles.cardPressed,
+                        ]}
                         onPress={() => handleLedgerItemPress(entry)}
                       >
                         <View style={[styles.ledgerIconCircle, { backgroundColor: badgeBg }]}>
@@ -1899,15 +2157,43 @@ function PartnerDetailsScreen() {
                             <Text style={styles.ledgerTitle} numberOfLines={1}>
                               {entry.title}
                             </Text>
-                            <Text
-                              style={[
-                                styles.ledgerAmount,
-                                { color: entry.amountColor || colors.text.primary },
-                              ]}
-                            >
-                              {entry.amountPrefix ? `${entry.amountPrefix} ` : ""}₹
-                              {entry.amount.toLocaleString("en-IN")}
-                            </Text>
+                            <View style={{ flexDirection: "row", alignItems: "center", gap: 6 }}>
+                              <Text
+                                style={[
+                                  styles.ledgerAmount,
+                                  { color: entry.amountColor || colors.text.primary },
+                                ]}
+                              >
+                                {entry.amountPrefix ? `${entry.amountPrefix} ` : ""}₹
+                                {entry.amount.toLocaleString("en-IN")}
+                              </Text>
+                              <Pressable
+                                style={({ pressed }) => [
+                                  styles.logCheckBtn,
+                                  isChecked && styles.logCheckBtnChecked,
+                                  pressed && styles.buttonPressed,
+                                ]}
+                                onPress={(e) => {
+                                  e.stopPropagation?.();
+                                  toggleCheckLog(logKey);
+                                }}
+                                hitSlop={6}
+                              >
+                                <MaterialIcons
+                                  name={isChecked ? "check-circle" : "radio-button-unchecked"}
+                                  size={15}
+                                  color={isChecked ? "#10b981" : colors.text.muted}
+                                />
+                                <Text
+                                  style={[
+                                    styles.logCheckBtnText,
+                                    isChecked && styles.logCheckBtnTextChecked,
+                                  ]}
+                                >
+                                  {isChecked ? "Checked" : "Check"}
+                                </Text>
+                              </Pressable>
+                            </View>
                           </View>
 
                           <View style={styles.ledgerSubRow}>
@@ -1966,7 +2252,7 @@ function PartnerDetailsScreen() {
             <View style={styles.tabContentArea}>
               <View style={styles.tabHeaderRow}>
                 <Text style={styles.tabSectionTitle}>
-                  Delivery Trips ({partnerTrips.length})
+                  Delivery Trips ({filteredDisplayTrips.length}{partnerTrips.length !== filteredDisplayTrips.length ? ` of ${partnerTrips.length}` : ""})
                 </Text>
                 <Pressable
                   style={({ pressed }) => [styles.tabAddButton, pressed && styles.buttonPressed]}
@@ -1979,28 +2265,45 @@ function PartnerDetailsScreen() {
 
               {tripsLoading ? (
                 <ActivityIndicator size="small" color="#16a34a" style={{ padding: 24 }} />
-              ) : partnerTrips.length === 0 ? (
+              ) : filteredDisplayTrips.length === 0 ? (
                 <View style={styles.emptyCard}>
                   <MaterialIcons name="local-shipping" size={40} color={colors.border.medium} />
-                  <Text style={styles.emptyTitle}>No Delivery Trips Recorded</Text>
+                  <Text style={styles.emptyTitle}>No Delivery Trips Found</Text>
                   <Text style={styles.emptyDesc}>
-                    Log trips to record deliveries, shipment charges, and track pending driver balances.
+                    {checkStatusFilter !== "all"
+                      ? "No trips match your active log check filter."
+                      : "Log trips to record deliveries, shipment charges, and track pending driver balances."}
                   </Text>
-                  <Pressable style={styles.emptyActionBtn} onPress={handleOpenAddTripModal}>
-                    <MaterialIcons name="add" size={16} color="#ffffff" />
-                    <Text style={styles.emptyActionBtnText}>Log First Trip</Text>
-                  </Pressable>
+                  {checkStatusFilter !== "all" ? (
+                    <Pressable
+                      style={styles.emptyActionBtn}
+                      onPress={() => setCheckStatusFilter("all")}
+                    >
+                      <Text style={styles.emptyActionBtnText}>Clear Check Filter</Text>
+                    </Pressable>
+                  ) : (
+                    <Pressable style={styles.emptyActionBtn} onPress={handleOpenAddTripModal}>
+                      <MaterialIcons name="add" size={16} color="#ffffff" />
+                      <Text style={styles.emptyActionBtnText}>Log First Trip</Text>
+                    </Pressable>
+                  )}
                 </View>
               ) : (
                 <View style={styles.ledgerList}>
-                  {partnerTrips.map((trip) => {
+                  {filteredDisplayTrips.map((trip) => {
                     const isPaid = trip.paymentStatus === "Paid";
                     const tripDateObj = trip.createdAt instanceof Date ? trip.createdAt : new Date(trip.createdAt);
+                    const logKey = `trip-${trip.id}`;
+                    const isChecked = checkedSet.has(logKey);
 
                     return (
                       <Pressable
                         key={trip.id}
-                        style={({ pressed }) => [styles.ledgerCard, pressed && styles.cardPressed]}
+                        style={({ pressed }) => [
+                          styles.ledgerCard,
+                          isChecked && styles.ledgerCardChecked,
+                          pressed && styles.cardPressed,
+                        ]}
                         onPress={() => handleOpenEditTripModal(trip)}
                       >
                         <View
@@ -2021,9 +2324,37 @@ function PartnerDetailsScreen() {
                             <Text style={styles.ledgerTitle} numberOfLines={1}>
                               {trip.customerName || "Customer"}
                             </Text>
-                            <Text style={[styles.ledgerAmount, { color: colors.text.primary }]}>
-                              ₹{Number(trip.deliveryCharge || 0).toLocaleString("en-IN")}
-                            </Text>
+                            <View style={{ flexDirection: "row", alignItems: "center", gap: 6 }}>
+                              <Text style={[styles.ledgerAmount, { color: colors.text.primary }]}>
+                                ₹{Number(trip.deliveryCharge || 0).toLocaleString("en-IN")}
+                              </Text>
+                              <Pressable
+                                style={({ pressed }) => [
+                                  styles.logCheckBtn,
+                                  isChecked && styles.logCheckBtnChecked,
+                                  pressed && styles.buttonPressed,
+                                ]}
+                                onPress={(e) => {
+                                  e.stopPropagation?.();
+                                  toggleCheckLog(logKey);
+                                }}
+                                hitSlop={6}
+                              >
+                                <MaterialIcons
+                                  name={isChecked ? "check-circle" : "radio-button-unchecked"}
+                                  size={15}
+                                  color={isChecked ? "#10b981" : colors.text.muted}
+                                />
+                                <Text
+                                  style={[
+                                    styles.logCheckBtnText,
+                                    isChecked && styles.logCheckBtnTextChecked,
+                                  ]}
+                                >
+                                  {isChecked ? "Checked" : "Check"}
+                                </Text>
+                              </Pressable>
+                            </View>
                           </View>
 
                           {trip.deliveredItem ? (
@@ -2085,7 +2416,7 @@ function PartnerDetailsScreen() {
             <View style={styles.tabContentArea}>
               <View style={styles.tabHeaderRow}>
                 <Text style={styles.tabSectionTitle}>
-                  Payments & Advances ({partnerPayments.length})
+                  Payments & Advances ({filteredDisplayPayments.length}{partnerPayments.length !== filteredDisplayPayments.length ? ` of ${partnerPayments.length}` : ""})
                 </Text>
                 <View style={{ flexDirection: "row", gap: 6 }}>
                   <Pressable
@@ -2108,33 +2439,50 @@ function PartnerDetailsScreen() {
 
               {paymentsLoading ? (
                 <ActivityIndicator size="small" color="#16a34a" style={{ padding: 24 }} />
-              ) : partnerPayments.length === 0 ? (
+              ) : filteredDisplayPayments.length === 0 ? (
                 <View style={styles.emptyCard}>
                   <MaterialIcons name="payment" size={40} color={colors.border.medium} />
-                  <Text style={styles.emptyTitle}>No Payments Recorded</Text>
+                  <Text style={styles.emptyTitle}>No Payments Found</Text>
                   <Text style={styles.emptyDesc}>
-                    Disbursements, advances, and advance refunds for this partner will show up here.
+                    {checkStatusFilter !== "all"
+                      ? "No payments match your active log check filter."
+                      : "Disbursements, advances, and advance refunds for this partner will show up here."}
                   </Text>
-                  <Pressable
-                    style={styles.emptyActionBtn}
-                    onPress={() => handleOpenPayModal(null)}
-                  >
-                    <MaterialIcons name="payment" size={16} color="#ffffff" />
-                    <Text style={styles.emptyActionBtnText}>Record Payment</Text>
-                  </Pressable>
+                  {checkStatusFilter !== "all" ? (
+                    <Pressable
+                      style={styles.emptyActionBtn}
+                      onPress={() => setCheckStatusFilter("all")}
+                    >
+                      <Text style={styles.emptyActionBtnText}>Clear Check Filter</Text>
+                    </Pressable>
+                  ) : (
+                    <Pressable
+                      style={styles.emptyActionBtn}
+                      onPress={() => handleOpenPayModal(null)}
+                    >
+                      <MaterialIcons name="payment" size={16} color="#ffffff" />
+                      <Text style={styles.emptyActionBtnText}>Record Payment</Text>
+                    </Pressable>
+                  )}
                 </View>
               ) : (
                 <View style={styles.ledgerList}>
-                  {partnerPayments.map((payment) => {
+                  {filteredDisplayPayments.map((payment) => {
                     const rawAmt = Number(payment.amount || 0);
                     const isRepay = payment.isRepayment || rawAmt < 0;
                     const absAmt = Math.abs(rawAmt);
                     const payDateObj = payment.createdAt instanceof Date ? payment.createdAt : new Date(payment.createdAt);
+                    const logKey = `payment-${payment.id}`;
+                    const isChecked = checkedSet.has(logKey);
 
                     return (
                       <Pressable
                         key={payment.id}
-                        style={({ pressed }) => [styles.ledgerCard, pressed && styles.cardPressed]}
+                        style={({ pressed }) => [
+                          styles.ledgerCard,
+                          isChecked && styles.ledgerCardChecked,
+                          pressed && styles.cardPressed,
+                        ]}
                         onPress={() => handleOpenEditPayment(payment)}
                       >
                         <View style={[styles.ledgerIconCircle, { backgroundColor: isRepay ? "#0d948818" : "#dcfce7" }]}>
@@ -2146,9 +2494,37 @@ function PartnerDetailsScreen() {
                             <Text style={styles.ledgerTitle}>
                               {isRepay ? "Advance Repaid by Driver" : "Payment Disbursed"}
                             </Text>
-                            <Text style={[styles.ledgerAmount, { color: isRepay ? "#0d9488" : "#16a34a" }]}>
-                              {isRepay ? "+ " : "- "}₹{absAmt.toLocaleString("en-IN")}
-                            </Text>
+                            <View style={{ flexDirection: "row", alignItems: "center", gap: 6 }}>
+                              <Text style={[styles.ledgerAmount, { color: isRepay ? "#0d9488" : "#16a34a" }]}>
+                                {isRepay ? "+ " : "- "}₹{absAmt.toLocaleString("en-IN")}
+                              </Text>
+                              <Pressable
+                                style={({ pressed }) => [
+                                  styles.logCheckBtn,
+                                  isChecked && styles.logCheckBtnChecked,
+                                  pressed && styles.buttonPressed,
+                                ]}
+                                onPress={(e) => {
+                                  e.stopPropagation?.();
+                                  toggleCheckLog(logKey);
+                                }}
+                                hitSlop={6}
+                              >
+                                <MaterialIcons
+                                  name={isChecked ? "check-circle" : "radio-button-unchecked"}
+                                  size={15}
+                                  color={isChecked ? "#10b981" : colors.text.muted}
+                                />
+                                <Text
+                                  style={[
+                                    styles.logCheckBtnText,
+                                    isChecked && styles.logCheckBtnTextChecked,
+                                  ]}
+                                >
+                                  {isChecked ? "Checked" : "Check"}
+                                </Text>
+                              </Pressable>
+                            </View>
                           </View>
 
                           <View style={styles.ledgerSubRow}>
@@ -2186,7 +2562,7 @@ function PartnerDetailsScreen() {
             <View style={styles.tabContentArea}>
               <View style={styles.tabHeaderRow}>
                 <Text style={styles.tabSectionTitle}>
-                  Bonus Rewards ({partnerBonuses.length})
+                  Bonus Rewards ({filteredDisplayBonuses.length}{partnerBonuses.length !== filteredDisplayBonuses.length ? ` of ${partnerBonuses.length}` : ""})
                 </Text>
                 <Pressable
                   style={({ pressed }) => [styles.tabAddButton, pressed && styles.buttonPressed]}
@@ -2199,30 +2575,47 @@ function PartnerDetailsScreen() {
 
               {bonusesLoading ? (
                 <ActivityIndicator size="small" color="#8b5cf6" style={{ padding: 24 }} />
-              ) : partnerBonuses.length === 0 ? (
+              ) : filteredDisplayBonuses.length === 0 ? (
                 <View style={styles.emptyCard}>
                   <MaterialIcons name="stars" size={40} color={colors.border.medium} />
-                  <Text style={styles.emptyTitle}>No Bonuses Awarded Yet</Text>
+                  <Text style={styles.emptyTitle}>No Bonuses Found</Text>
                   <Text style={styles.emptyDesc}>
-                    Incentivize on-time deliveries, festival bonuses, and fuel allowances for this partner.
+                    {checkStatusFilter !== "all"
+                      ? "No bonuses match your active log check filter."
+                      : "Incentivize on-time deliveries, festival bonuses, and fuel allowances for this partner."}
                   </Text>
-                  <Pressable
-                    style={[styles.emptyActionBtn, { backgroundColor: "#8b5cf6" }]}
-                    onPress={handleOpenAddBonusModal}
-                  >
-                    <MaterialIcons name="stars" size={16} color="#ffffff" />
-                    <Text style={styles.emptyActionBtnText}>Award First Bonus</Text>
-                  </Pressable>
+                  {checkStatusFilter !== "all" ? (
+                    <Pressable
+                      style={styles.emptyActionBtn}
+                      onPress={() => setCheckStatusFilter("all")}
+                    >
+                      <Text style={styles.emptyActionBtnText}>Clear Check Filter</Text>
+                    </Pressable>
+                  ) : (
+                    <Pressable
+                      style={[styles.emptyActionBtn, { backgroundColor: "#8b5cf6" }]}
+                      onPress={handleOpenAddBonusModal}
+                    >
+                      <MaterialIcons name="stars" size={16} color="#ffffff" />
+                      <Text style={styles.emptyActionBtnText}>Award First Bonus</Text>
+                    </Pressable>
+                  )}
                 </View>
               ) : (
                 <View style={styles.ledgerList}>
-                  {partnerBonuses.map((bonus) => {
+                  {filteredDisplayBonuses.map((bonus) => {
                     const bonusDateObj = bonus.createdAt instanceof Date ? bonus.createdAt : new Date(bonus.createdAt);
+                    const logKey = `bonus-${bonus.id}`;
+                    const isChecked = checkedSet.has(logKey);
 
                     return (
                       <Pressable
                         key={bonus.id}
-                        style={({ pressed }) => [styles.ledgerCard, pressed && styles.cardPressed]}
+                        style={({ pressed }) => [
+                          styles.ledgerCard,
+                          isChecked && styles.ledgerCardChecked,
+                          pressed && styles.cardPressed,
+                        ]}
                         onPress={() => handleOpenEditBonusModal(bonus)}
                       >
                         <View style={[styles.ledgerIconCircle, { backgroundColor: "#8b5cf618" }]}>
@@ -2234,9 +2627,37 @@ function PartnerDetailsScreen() {
                             <Text style={styles.ledgerTitle} numberOfLines={1}>
                               {bonus.reason || "Special Bonus"}
                             </Text>
-                            <Text style={[styles.ledgerAmount, { color: "#8b5cf6" }]}>
-                              + ₹{Number(bonus.amount || 0).toLocaleString("en-IN")}
-                            </Text>
+                            <View style={{ flexDirection: "row", alignItems: "center", gap: 6 }}>
+                              <Text style={[styles.ledgerAmount, { color: "#8b5cf6" }]}>
+                                + ₹{Number(bonus.amount || 0).toLocaleString("en-IN")}
+                              </Text>
+                              <Pressable
+                                style={({ pressed }) => [
+                                  styles.logCheckBtn,
+                                  isChecked && styles.logCheckBtnChecked,
+                                  pressed && styles.buttonPressed,
+                                ]}
+                                onPress={(e) => {
+                                  e.stopPropagation?.();
+                                  toggleCheckLog(logKey);
+                                }}
+                                hitSlop={6}
+                              >
+                                <MaterialIcons
+                                  name={isChecked ? "check-circle" : "radio-button-unchecked"}
+                                  size={15}
+                                  color={isChecked ? "#10b981" : colors.text.muted}
+                                />
+                                <Text
+                                  style={[
+                                    styles.logCheckBtnText,
+                                    isChecked && styles.logCheckBtnTextChecked,
+                                  ]}
+                                >
+                                  {isChecked ? "Checked" : "Check"}
+                                </Text>
+                              </Pressable>
+                            </View>
                           </View>
 
                           <View style={styles.ledgerSubRow}>
@@ -2275,7 +2696,7 @@ function PartnerDetailsScreen() {
               <View style={styles.tabHeaderRow}>
                 <Text style={styles.tabSectionTitle}>Product Orders Purchased</Text>
                 <Text style={styles.tabBadgeCount}>
-                  {partnerOrderSummary.count} Orders • {partnerOrderSummary.totalBricks.toLocaleString("en-IN")} items
+                  {filteredDisplayCustomerOrders.length}{filteredPartnerCustomerOrders.length !== filteredDisplayCustomerOrders.length ? ` of ${filteredPartnerCustomerOrders.length}` : ""} Orders • {partnerOrderSummary.totalBricks.toLocaleString("en-IN")} items
                 </Text>
               </View>
 
@@ -2316,17 +2737,23 @@ function PartnerDetailsScreen() {
               </View>
 
               <View style={styles.ledgerList}>
-                {filteredPartnerCustomerOrders.map((ord) => {
+                {filteredDisplayCustomerOrders.map((ord) => {
                   const totalQty =
                     ord.items && ord.items.length > 0
                       ? ord.items.reduce((s, itm) => s + Number(itm.quantity || 0), 0)
                       : Number(ord.quantity || 0);
                   const orderDate = ord.createdAt instanceof Date ? ord.createdAt : new Date(ord.createdAt);
+                  const logKey = `order-${ord.id}`;
+                  const isChecked = checkedSet.has(logKey);
 
                   return (
                     <Pressable
                       key={ord.id}
-                      style={({ pressed }) => [styles.ledgerCard, pressed && styles.cardPressed]}
+                      style={({ pressed }) => [
+                        styles.ledgerCard,
+                        isChecked && styles.ledgerCardChecked,
+                        pressed && styles.cardPressed,
+                      ]}
                       onPress={() => router.push({ pathname: "/orders", params: { highlightId: ord.id } })}
                     >
                       <View style={[styles.ledgerIconCircle, { backgroundColor: "#ea580c18" }]}>
@@ -2338,9 +2765,37 @@ function PartnerDetailsScreen() {
                           <Text style={styles.ledgerTitle} numberOfLines={1}>
                             Invoice #{ord.id ? ord.id.slice(-6).toUpperCase() : ""}
                           </Text>
-                          <Text style={[styles.ledgerAmount, { color: colors.text.primary }]}>
-                            ₹{Number(ord.total || 0).toLocaleString("en-IN")}
-                          </Text>
+                          <View style={{ flexDirection: "row", alignItems: "center", gap: 6 }}>
+                            <Text style={[styles.ledgerAmount, { color: colors.text.primary }]}>
+                              ₹{Number(ord.total || 0).toLocaleString("en-IN")}
+                            </Text>
+                            <Pressable
+                              style={({ pressed }) => [
+                                styles.logCheckBtn,
+                                isChecked && styles.logCheckBtnChecked,
+                                pressed && styles.buttonPressed,
+                              ]}
+                              onPress={(e) => {
+                                e.stopPropagation?.();
+                                toggleCheckLog(logKey);
+                              }}
+                              hitSlop={6}
+                            >
+                              <MaterialIcons
+                                name={isChecked ? "check-circle" : "radio-button-unchecked"}
+                                size={15}
+                                color={isChecked ? "#10b981" : colors.text.muted}
+                              />
+                              <Text
+                                style={[
+                                  styles.logCheckBtnText,
+                                  isChecked && styles.logCheckBtnTextChecked,
+                                ]}
+                              >
+                                {isChecked ? "Checked" : "Check"}
+                              </Text>
+                            </Pressable>
+                          </View>
                         </View>
 
                         <View style={styles.ledgerSubRow}>
@@ -3268,7 +3723,7 @@ function PartnerDetailsScreen() {
 }
 
 const getStyles = (theme) => {
-  const { colors } = theme;
+  const { colors, isDark } = theme;
   return StyleSheet.create({
     screenWrapper: {
       flex: 1,
@@ -3798,6 +4253,87 @@ const getStyles = (theme) => {
       padding: 0,
     },
 
+    // Log Check Toolbar & Batch Filter
+    logCheckToolbar: {
+      backgroundColor: colors.bg.primary,
+      borderRadius: 14,
+      padding: 12,
+      borderWidth: 1,
+      borderColor: colors.border.subtle,
+      marginBottom: 12,
+      gap: 10,
+    },
+    logCheckHeaderRow: {
+      flexDirection: "row",
+      alignItems: "center",
+      justifyContent: "space-between",
+    },
+    logCheckIconCircle: {
+      width: 28,
+      height: 28,
+      borderRadius: 8,
+      alignItems: "center",
+      justifyContent: "center",
+    },
+    logCheckHeading: {
+      fontSize: 11,
+      fontWeight: "800",
+      color: colors.text.primary,
+      letterSpacing: 0.5,
+    },
+    logCheckSubheading: {
+      fontSize: 10,
+      fontWeight: "600",
+      color: colors.text.muted,
+      marginTop: 1,
+    },
+    checkAllBtn: {
+      flexDirection: "row",
+      alignItems: "center",
+      gap: 5,
+      paddingHorizontal: 10,
+      paddingVertical: 5,
+      borderRadius: 8,
+      backgroundColor: colors.bg.card,
+      borderWidth: 1,
+      borderColor: colors.border.subtle,
+    },
+    checkAllBtnActive: {
+      backgroundColor: "#10b98118",
+      borderColor: "#10b98150",
+    },
+    checkAllBtnText: {
+      fontSize: 11,
+      fontWeight: "700",
+      color: colors.text.secondary,
+    },
+    logCheckFilterRow: {
+      flexDirection: "row",
+      alignItems: "center",
+      gap: 6,
+    },
+    checkFilterPill: {
+      paddingHorizontal: 10,
+      paddingVertical: 4,
+      borderRadius: 8,
+      backgroundColor: colors.bg.card,
+      borderWidth: 1,
+      borderColor: colors.border.subtle,
+    },
+    checkFilterPillActive: {
+      backgroundColor: "#10b98118",
+      borderColor: "#10b981",
+    },
+    checkFilterPillText: {
+      fontSize: 11,
+      fontWeight: "600",
+      color: colors.text.secondary,
+    },
+    checkFilterPillTextActive: {
+      color: "#10b981",
+      fontWeight: "800",
+    },
+
     // Tab Contents & Lists
     tabContentArea: {
       minHeight: 200,
@@ -3846,6 +4382,34 @@ const getStyles = (theme) => {
       borderWidth: 1,
       borderColor: colors.border.subtle,
       gap: 12,
+    },
+    ledgerCardChecked: {
+      backgroundColor: isDark ? "#064e3b15" : "#f0fdf4",
+      borderColor: isDark ? "#05966960" : "#86efac",
+    },
+    logCheckBtn: {
+      flexDirection: "row",
+      alignItems: "center",
+      gap: 4,
+      paddingHorizontal: 8,
+      paddingVertical: 4,
+      borderRadius: 8,
+      backgroundColor: colors.bg.card,
+      borderWidth: 1,
+      borderColor: colors.border.subtle,
+    },
+    logCheckBtnChecked: {
+      backgroundColor: "#10b98118",
+      borderColor: "#10b98160",
+    },
+    logCheckBtnText: {
+      fontSize: 10.5,
+      fontWeight: "600",
+      color: colors.text.muted,
+    },
+    logCheckBtnTextChecked: {
+      color: "#10b981",
+      fontWeight: "800",
     },
     ledgerIconCircle: {
       width: 38,

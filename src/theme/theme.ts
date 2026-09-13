@@ -8,6 +8,7 @@ export const colors = {
   bg: {
     primary: "#F3F4F6",    // Light grey background
     card: "#FFFFFF",       // White card
+    surface: "#FFFFFF",    // White surface
     elevated: "#E5E7EB",   // Slightly darker grey for overlays/modals
     input: "#F9FAFB",      // Off-white input
     overlay: "rgba(0,0,0,0.3)", // Modal backdrop

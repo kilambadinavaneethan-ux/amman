@@ -21,7 +21,7 @@ const TABS = [
 
 const INDICATOR_WIDTH = 28;
 
-export default function BottomNavbar() {
+const BottomNavbar = React.memo(function BottomNavbar() {
   const router = useRouter();
   const pathname = usePathname();
   const { theme } = useTheme();
@@ -80,7 +80,7 @@ export default function BottomNavbar() {
       </View>
     </View>
   );
-}
+});
 
 // Inner component for individual animated tab button
 interface TabButtonProps {
@@ -176,4 +176,6 @@ const getStyles = (theme: any, insets?: any) => StyleSheet.create({
     borderRadius: 1.5,
   },
 });
+
+export default BottomNavbar;
 

@@ -9,7 +9,7 @@ import {
     updateDoc,
     writeBatch,
 } from "firebase/firestore";
-import { createContext, useEffect, useState, useMemo } from "react";
+import { createContext, useEffect, useState, useMemo, useCallback } from "react";
 import { db, normalizeDateValue } from "../../src/config/firebase";
 
 export const PaymentContext = createContext(null);
@@ -57,7 +57,7 @@ export function PaymentProvider({ children }) {
     return () => unsubscribe();
   }, []);
 
-  const addPayment = async (paymentData) => {
+  const addPayment = useCallback(async (paymentData) => {
     try {
       const { customerId, customerName, amountReceived, discountAmount, paymentMethod, notes } =
         paymentData;
@@ -138,9 +138,9 @@ export function PaymentProvider({ children }) {
     } catch (error) {
       return null;
     }
-  };
+  }, []);
 
-  const deletePayment = async (paymentId) => {
+  const deletePayment = useCallback(async (paymentId) => {
     try {
       // Read payment doc (serves from cache when offline)
       const paymentRef = doc(db, "payments", paymentId);
@@ -192,9 +192,9 @@ export function PaymentProvider({ children }) {
       console.error("deletePayment error:", error);
       return false;
     }
-  };
+  }, []);
 
-  const editPayment = async (paymentId, updatedData, oldData) => {
+  const editPayment = useCallback(async (paymentId, updatedData, oldData) => {
     try {
       const paymentRef = doc(db, "payments", paymentId);
       const { amountReceived: newAmount, discountAmount: newDiscount, paymentMethod, notes, createdAt } = updatedData;
@@ -284,7 +284,7 @@ export function PaymentProvider({ children }) {
       console.error("editPayment error:", error);
       return false;
     }
-  };
+  }, []);
 
   const contextValue = useMemo(
     () => ({
@@ -294,7 +294,7 @@ export function PaymentProvider({ children }) {
       editPayment,
       deletePayment,
     }),
-    [payments, loading],
+    [payments, loading, addPayment, editPayment, deletePayment],
   );
 
   return (

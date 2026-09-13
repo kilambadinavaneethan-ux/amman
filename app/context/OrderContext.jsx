@@ -12,7 +12,7 @@ import {
     where,
     writeBatch,
 } from "firebase/firestore";
-import { createContext, useEffect, useState, useMemo, useCallback } from "react";
+import { createContext, useEffect, useState, useMemo, useCallback, useRef } from "react";
 import { db, normalizeDateValue } from "../../src/config/firebase";
 import { getDocsOfflineSafe } from "../../src/utils/offlineHelpers";
 
@@ -21,6 +21,10 @@ export const OrderContext = createContext(null);
 export function OrderProvider({ children }) {
   const [orders, setOrders] = useState([]);
   const [loading, setLoading] = useState(true);
+  const ordersRef = useRef(orders);
+  useEffect(() => {
+    ordersRef.current = orders;
+  }, [orders]);
 
   const adjustItemStockAndLog = async (itemId, changeQty, type, notes, customDate = null) => {
     try {
@@ -244,7 +248,7 @@ export function OrderProvider({ children }) {
     }
   };
 
-  const addOrder = async (orderData) => {
+  const addOrder = useCallback(async (orderData) => {
     try {
       const {
         customerId,
@@ -471,9 +475,9 @@ export function OrderProvider({ children }) {
     } catch (error) {
       return null;
     }
-  };
+  }, []);
 
-  const updateOrderStatus = async (orderId, status) => {
+  const updateOrderStatus = useCallback(async (orderId, status) => {
     try {
       const orderRef = doc(db, "orders", orderId);
       const orderSnap = await getDoc(orderRef);
@@ -805,9 +809,9 @@ export function OrderProvider({ children }) {
       console.error("Error in updateOrderStatus:", error);
       return false;
     }
-  };
+  }, []);
 
-  const assignDeliveryPartner = async (orderId, partnerId, partnerName) => {
+  const assignDeliveryPartner = useCallback(async (orderId, partnerId, partnerName) => {
     try {
       const orderRef = doc(db, "orders", orderId);
       await updateDoc(orderRef, {
@@ -820,11 +824,11 @@ export function OrderProvider({ children }) {
     } catch (error) {
       return false;
     }
-  };
+  }, []);
 
-  const deleteOrder = async (orderId, orderData) => {
+  const deleteOrder = useCallback(async (orderId, orderData) => {
     try {
-      const orderPayload = orderData || orders.find((o) => o.id === orderId);
+      const orderPayload = orderData || (ordersRef.current || []).find((o) => o.id === orderId);
       if (!orderPayload) {
         const orderRef = doc(db, "orders", orderId);
         await deleteDoc(orderRef);
@@ -966,9 +970,9 @@ export function OrderProvider({ children }) {
         return false;
       }
     }
-  };
+  }, []);
 
-  const editOrder = async (orderId, newOrderData, oldOrderData) => {
+  const editOrder = useCallback(async (orderId, newOrderData, oldOrderData) => {
     try {
       const oldStatus = oldOrderData.status;
       const newStatus = newOrderData.status || oldOrderData.status;
@@ -1377,7 +1381,7 @@ export function OrderProvider({ children }) {
       console.error("Error in editOrder:", error);
       return false;
     }
-  };
+  }, []);
 
   const getTodaySales = () => {
     const today = new Date();
@@ -1446,7 +1450,7 @@ export function OrderProvider({ children }) {
       todaySales,
       todayOrdersCount,
     }),
-    [orders, loading, todaySales, todayOrdersCount]
+    [orders, loading, todaySales, todayOrdersCount, addOrder, editOrder, deleteOrder, updateOrderStatus, assignDeliveryPartner]
   );
 
   return (

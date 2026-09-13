@@ -57,7 +57,7 @@ export default function Home() {
   const { orders, todaySales, deleteOrder, editOrder } = useContext(OrderContext) as any;
   const { totalBalance, customers } = useContext(CustomerContext) as any;
   const { expenses, addExpense, deleteExpense } = useContext(ExpenseContext) as any;
-  const { items } = useContext(ItemContext) as any;
+  const { items, updateItem } = useContext(ItemContext) as any;
   const { payments, addPayment, deletePayment, editPayment } = useContext(PaymentContext) as any;
   const { logs: rawLogs, deleteTransaction: deleteRawTransaction } = useContext(RawMaterialContext) as any;
 
@@ -716,6 +716,14 @@ export default function Home() {
   const [attendanceSearch, setAttendanceSearch] = useState("");
   const [isSavingAttendance, setIsSavingAttendance] = useState(false);
   const [showAttendanceSuccess, setShowAttendanceSuccess] = useState(false);
+  const [showStockAndSlotsInAttendance, setShowStockAndSlotsInAttendance] = useState(false);
+  const [editingStockItem, setEditingStockItem] = useState<any>(null);
+  const [stockEditTotal, setStockEditTotal] = useState<string>("");
+  const [stockEditSlots, setStockEditSlots] = useState<Array<{ id: string; slotName: string; quantity: string }>>([]);
+  const [isStockEditorModalOpen, setIsStockEditorModalOpen] = useState(false);
+  const [isSavingStockUpdate, setIsSavingStockUpdate] = useState(false);
+  const [stockProductFilter, setStockProductFilter] = useState("");
+  const [attendanceStockCategoryFilter, setAttendanceStockCategoryFilter] = useState<"all" | "products" | "raw_materials">("all");
 
   // Worker Attendance Calendar Date Selection states
   const [selectedAttendanceDate, setSelectedAttendanceDate] = useState<Date>(new Date());
@@ -733,8 +741,12 @@ export default function Home() {
   const [selectedActivityProfile, setSelectedActivityProfile] = useState<any>(null);
   const [isActivityProfileModalOpen, setIsActivityProfileModalOpen] = useState(false);
 
-  // Re-calculate inventory stock value reactively (finished products only)
-  const finishedItems = (items || []).filter((item: any) => item.itemType !== "raw_material");
+  // Re-calculate inventory stock value reactively (active finished products only)
+  const finishedItems = useMemo(() => {
+    return (items || []).filter(
+      (item: any) => item.itemType !== "raw_material" && item.status !== "Inactive"
+    );
+  }, [items]);
 
   // Selling price stock value
   const stockValue = finishedItems.reduce((sum: number, item: any) => {
@@ -1170,6 +1182,31 @@ export default function Home() {
     );
   }, [todayAttendanceMap]);
 
+  const totalOpeningStockCount = useMemo(() => {
+    return (items || []).reduce((sum: number, itm: any) => {
+      const s = itm.openingStock !== undefined ? itm.openingStock : (itm.stock || 0);
+      return sum + Number(s || 0);
+    }, 0);
+  }, [items]);
+
+  const totalPiecesInAttendance = useMemo(() => {
+    let sum = 0;
+    Object.values(attendanceEntries).forEach((e) => {
+      if (e.status !== "absent") {
+        sum += Number(e.pieces || 0);
+      }
+    });
+    (activeWorkers || []).forEach((w: any) => {
+      if (todayAttendanceMap[w.id] && !editingWorkerIds[w.id]) {
+        const rec = todayAttendanceMap[w.id];
+        if (rec && rec.status !== "absent") {
+          sum += Number(rec.piecesProduced || 0);
+        }
+      }
+    });
+    return sum;
+  }, [attendanceEntries, activeWorkers, todayAttendanceMap, editingWorkerIds]);
+
   const handleOpenAttendanceModal = () => {
     const initial: Record<string, { status: string; overtime: string; pieces?: string }> = {};
     activeWorkers.forEach((w: any) => {
@@ -1352,6 +1389,163 @@ export default function Home() {
     }
   };
 
+  // Opening Stock & Slots In-Modal Editor Handlers
+  const handleOpenStockEditor = (item: any) => {
+    setEditingStockItem(item);
+    const currentStockVal = Number(item?.openingStock !== undefined ? item.openingStock : item?.stock || 0);
+    setStockEditTotal(String(currentStockVal));
+
+    let currentSlots = Array.isArray(item?.openingStockSlots) && item.openingStockSlots.length > 0
+      ? item.openingStockSlots
+      : [{ id: "1", slotName: "Slot 1 (Billing / Main)", quantity: String(currentStockVal) }];
+
+    setStockEditSlots(
+      currentSlots.map((s: any, idx: number) => ({
+        id: s.id || String(idx + 1),
+        slotName: s.slotName || (idx === 0 ? "Slot 1 (Billing / Main)" : `Slot ${idx + 1}`),
+        quantity: String(s.quantity !== undefined ? s.quantity : (idx === 0 ? currentStockVal : 0)),
+      }))
+    );
+    setIsStockEditorModalOpen(true);
+  };
+
+  const handleCloseStockEditor = () => {
+    setIsStockEditorModalOpen(false);
+    setEditingStockItem(null);
+    setStockEditTotal("");
+    setStockEditSlots([]);
+  };
+
+  const handleAutoBalanceSlots = () => {
+    const targetStock = parseInt(stockEditTotal, 10) || 0;
+    if (stockEditSlots.length === 0) {
+      setStockEditSlots([{ id: "1", slotName: "Slot 1 (Billing / Main)", quantity: String(targetStock) }]);
+      return;
+    }
+    setStockEditSlots((prev) => {
+      const updated = [...prev];
+      const otherSum = updated.slice(1).reduce((acc, cur) => acc + (parseInt(cur.quantity, 10) || 0), 0);
+      updated[0] = {
+        ...updated[0],
+        quantity: String(Math.max(0, targetStock - otherSum)),
+      };
+      return updated;
+    });
+  };
+
+  const handleDistributeSlotsEvenly = () => {
+    const targetStock = parseInt(stockEditTotal, 10) || 0;
+    if (stockEditSlots.length === 0) return;
+    const count = stockEditSlots.length;
+    const base = Math.floor(targetStock / count);
+    const remainder = targetStock % count;
+
+    setStockEditSlots((prev) =>
+      prev.map((s, idx) => ({
+        ...s,
+        quantity: String(base + (idx === 0 ? remainder : 0)),
+      }))
+    );
+  };
+
+  const handleResetToSingleSlot = () => {
+    const targetStock = parseInt(stockEditTotal, 10) || 0;
+    setStockEditSlots([
+      { id: "1", slotName: "Slot 1 (Billing / Main)", quantity: String(targetStock) },
+    ]);
+  };
+
+  const handleAddSlotInEditor = () => {
+    const targetStock = parseInt(stockEditTotal, 10) || 0;
+    const nextNum = stockEditSlots.length + 1;
+    const roleLabel = nextNum === 2 ? "Mfg / Output" : `Buffer ${nextNum}`;
+    setStockEditSlots((prev) => {
+      const updated = [
+        ...prev,
+        { id: Date.now().toString(), slotName: `Slot ${nextNum} (${roleLabel})`, quantity: "0" },
+      ];
+      const otherSum = updated.slice(1).reduce((acc, cur) => acc + (parseInt(cur.quantity, 10) || 0), 0);
+      updated[0].quantity = String(Math.max(0, targetStock - otherSum));
+      return updated;
+    });
+  };
+
+  const handleRemoveSlotInEditor = (id: string) => {
+    if (stockEditSlots.length <= 1) return;
+    const targetStock = parseInt(stockEditTotal, 10) || 0;
+    setStockEditSlots((prev) => {
+      const updated = prev.filter((s) => s.id !== id);
+      const otherSum = updated.slice(1).reduce((acc, cur) => acc + (parseInt(cur.quantity, 10) || 0), 0);
+      if (updated.length > 0) {
+        updated[0] = {
+          ...updated[0],
+          quantity: String(Math.max(0, targetStock - otherSum)),
+        };
+      }
+      return updated;
+    });
+  };
+
+  const handleStepTotalStock = (delta: number) => {
+    const current = parseInt(stockEditTotal, 10) || 0;
+    const nextVal = Math.max(0, current + delta);
+    setStockEditTotal(String(nextVal));
+  };
+
+  const handleStepSlotQty = (index: number, delta: number) => {
+    setStockEditSlots((prev) => {
+      const updated = [...prev];
+      if (updated[index]) {
+        const curQty = parseInt(updated[index].quantity, 10) || 0;
+        updated[index] = {
+          ...updated[index],
+          quantity: String(Math.max(0, curQty + delta)),
+        };
+      }
+      return updated;
+    });
+  };
+
+  const handleSyncTotalFromSlots = () => {
+    const sum = stockEditSlots.reduce((acc, cur) => acc + (parseInt(cur.quantity, 10) || 0), 0);
+    setStockEditTotal(String(sum));
+  };
+
+  const handleSaveStockAndSlots = async () => {
+    if (!editingStockItem || isSavingStockUpdate) return;
+    const parsedTotal = parseInt(stockEditTotal, 10) || 0;
+
+    let updatedSlots = stockEditSlots.map((s) => ({
+      id: s.id,
+      slotName: s.slotName.trim() || "Slot",
+      quantity: Math.max(0, parseInt(s.quantity, 10) || 0),
+    }));
+
+    if (updatedSlots.length === 0) {
+      updatedSlots = [{ id: "1", slotName: "Slot 1 (Billing / Main)", quantity: parsedTotal }];
+    }
+
+    setIsSavingStockUpdate(true);
+    try {
+      const success = await updateItem(editingStockItem.id, {
+        openingStock: parsedTotal,
+        openingStockSlots: updatedSlots,
+      });
+
+      if (success) {
+        Alert.alert("Stock Updated", `Successfully updated opening stock & slots for "${editingStockItem.itemName || editingStockItem.name}".`);
+        handleCloseStockEditor();
+      } else {
+        Alert.alert("Update Failed", "Failed to update stock. Please try again.");
+      }
+    } catch (e) {
+      console.error(e);
+      Alert.alert("Error", "An error occurred while saving stock.");
+    } finally {
+      setIsSavingStockUpdate(false);
+    }
+  };
+
   const selectedTargetKey = useMemo(() => {
     const d = new Date(selectedReportDate);
     d.setHours(0, 0, 0, 0);
@@ -1506,6 +1700,12 @@ export default function Home() {
 
     const targetKey = selectedTargetKey;
 
+    // Fast O(1) map for order lookups
+    const orderIdMap = new Map();
+    (orders || []).forEach((o: any) => {
+      if (o?.id) orderIdMap.set(o.id, o);
+    });
+
     // Combine all activities
     const allActivities = [
       ...(orders || []).map((o: any) => {
@@ -1561,6 +1761,13 @@ export default function Home() {
           customerTotalBalance = Math.max(0, totalAmount - amountPaid);
         }
 
+        const deliveryCharge = Number(o.deliveryCharge || o.shipmentCharge || 0);
+        const discount = Number(o.discount || 0);
+        const subtotal = Number(o.subtotal || (totalAmount - deliveryCharge + discount));
+        const paymentMethod = o.paymentMethod || o.paymentMode || o.paymentType || "Cash";
+        const orderBalanceDue = Math.max(0, totalAmount - amountPaid);
+        const paymentStatus = orderBalanceDue <= 0 ? "Fully Paid" : (amountPaid > 0 ? "Partially Paid" : "Payment Due");
+
         const createdDate = getBestActivityDate(o.orderedDate, o.createdAt, o.date);
 
         return {
@@ -1572,8 +1779,16 @@ export default function Home() {
           title: getCustomerName(o),
           baseSubtitle: `${o.itemName || "Items"} (${totalQty || 0} qty)`,
           amount: totalAmount,
+          orderTotal: totalAmount,
           amountPaid,
           balanceDue: customerTotalBalance,
+          orderBalanceDue,
+          paymentMethod,
+          paymentStatus,
+          deliveryCharge,
+          discount,
+          subtotal,
+          items: orderItems,
           isPositive: false,
           time: createdDate,
           completedTime,
@@ -1587,7 +1802,7 @@ export default function Home() {
       ...(payments || []).map((p: any) => {
         let orderTimestamp = null;
         if (p.orderId) {
-          const matchedOrder = (orders || []).find((o: any) => o.id === p.orderId);
+          const matchedOrder = orderIdMap.get(p.orderId);
           if (matchedOrder && (matchedOrder.createdAt || matchedOrder.orderedDate)) {
             orderTimestamp = matchedOrder.createdAt || matchedOrder.orderedDate;
           }
@@ -2586,6 +2801,217 @@ export default function Home() {
           </Pressable>
         </Animated.View>
 
+        {/* Active Products & Opening Stock Slots (Outside Card) */}
+        <Animated.View entering={FadeInDown.duration(200)}>
+          <View style={{
+            backgroundColor: colors.bg.surface,
+            borderRadius: radius.lg || 16,
+            padding: 14,
+            borderWidth: 1,
+            borderColor: colors.border.subtle,
+            marginBottom: spacing.md,
+            gap: 10,
+          }}>
+            {/* Header */}
+            <View style={{ flexDirection: "row", justifyContent: "space-between", alignItems: "center" }}>
+              <View style={{ flexDirection: "row", alignItems: "center", gap: 8 }}>
+                <View style={{
+                  width: 32,
+                  height: 32,
+                  borderRadius: 8,
+                  backgroundColor: `${colors.accent.primary}18`,
+                  justifyContent: "center",
+                  alignItems: "center",
+                }}>
+                  <MaterialIcons name="inventory-2" size={18} color={colors.accent.primary} />
+                </View>
+                <View>
+                  <View style={{ flexDirection: "row", alignItems: "center", gap: 6 }}>
+                    <Text style={{ fontSize: 13.5, fontWeight: "800", color: colors.text.primary }}>
+                      Active Products & Stock
+                    </Text>
+                    <View style={{
+                      backgroundColor: `${colors.accent.success}18`,
+                      paddingHorizontal: 6,
+                      paddingVertical: 1.5,
+                      borderRadius: 6,
+                    }}>
+                      <Text style={{ fontSize: 9.5, fontWeight: "800", color: colors.accent.success }}>
+                        {finishedItems.length} Active
+                      </Text>
+                    </View>
+                  </View>
+                  <Text style={{ fontSize: 10.5, color: colors.text.muted, marginTop: 1 }}>
+                    {totalOpeningStockCount.toLocaleString("en-IN")} total units • ₹{stockValue.toLocaleString("en-IN")} value
+                  </Text>
+                </View>
+              </View>
+
+              <Pressable
+                style={({ pressed }) => [{
+                  flexDirection: "row",
+                  alignItems: "center",
+                  gap: 3,
+                  paddingHorizontal: 8,
+                  paddingVertical: 4,
+                  borderRadius: 6,
+                  backgroundColor: `${colors.accent.primary}12`,
+                }, pressed && { opacity: 0.7 }]}
+                onPress={() => router.push("/settings/items" as any)}
+              >
+                <Text style={{ fontSize: 11, fontWeight: "700", color: colors.accent.primary }}>
+                  All Items ➔
+                </Text>
+              </Pressable>
+            </View>
+
+            {/* Product Cards List */}
+            {finishedItems.length === 0 ? (
+              <View style={{
+                backgroundColor: colors.bg.primary,
+                borderRadius: 10,
+                padding: 12,
+                alignItems: "center",
+                justifyContent: "center",
+                borderWidth: 1,
+                borderColor: colors.border.subtle,
+              }}>
+                <Text style={{ fontSize: 12, color: colors.text.muted, fontStyle: "italic" }}>
+                  No active products found. Add products in Settings → Items.
+                </Text>
+              </View>
+            ) : (
+              <View style={{ gap: 8 }}>
+                {finishedItems.map((itm: any) => {
+                  const currentStock = itm.openingStock !== undefined ? itm.openingStock : (itm.stock || 0);
+                  const totalUnits = Number(currentStock) || 0;
+                  const slots = Array.isArray(itm.openingStockSlots) ? itm.openingStockSlots : [];
+                  const hasSlots = slots.length > 0;
+                  const unitLabel = itm.unit || "units";
+                  const rate = Number(itm.sellingRate || itm.sellingPrice || 0);
+
+                  return (
+                    <View
+                      key={itm.id}
+                      style={{
+                        backgroundColor: colors.bg.primary,
+                        borderRadius: 10,
+                        padding: 10,
+                        borderWidth: 1,
+                        borderColor: colors.border.subtle,
+                      }}
+                    >
+                      {/* Product Row */}
+                      <View style={{ flexDirection: "row", justifyContent: "space-between", alignItems: "center" }}>
+                        <View style={{ flexDirection: "row", alignItems: "center", gap: 6, flex: 1, marginRight: 8 }}>
+                          <MaterialIcons name="inventory" size={15} color={colors.accent.primary} />
+                          <View style={{ flex: 1 }}>
+                            <Text style={{ fontSize: 12.5, fontWeight: "700", color: colors.text.primary }} numberOfLines={1}>
+                              {itm.itemName || itm.name}
+                            </Text>
+                            {rate > 0 && (
+                              <Text style={{ fontSize: 10, color: colors.text.muted }}>
+                                Rate: ₹{rate.toLocaleString("en-IN")} • Value: ₹{(totalUnits * rate).toLocaleString("en-IN")}
+                              </Text>
+                            )}
+                          </View>
+                        </View>
+
+                        <View style={{ flexDirection: "row", alignItems: "center", gap: 8 }}>
+                          <View style={{ alignItems: "flex-end" }}>
+                            <Text style={{ fontSize: 13, fontWeight: "800", color: colors.accent.primary }}>
+                              {totalUnits.toLocaleString("en-IN")} <Text style={{ fontSize: 10, fontWeight: "600", color: colors.text.muted }}>{unitLabel}</Text>
+                            </Text>
+                          </View>
+
+                          <Pressable
+                            style={({ pressed }) => [{
+                              flexDirection: "row",
+                              alignItems: "center",
+                              gap: 3,
+                              backgroundColor: `${colors.accent.primary}18`,
+                              borderColor: `${colors.accent.primary}40`,
+                              borderWidth: 1,
+                              paddingHorizontal: 7,
+                              paddingVertical: 3,
+                              borderRadius: 6,
+                            }, pressed && { opacity: 0.7 }]}
+                            onPress={() => handleOpenStockEditor(itm)}
+                          >
+                            <MaterialIcons name="edit" size={13} color={colors.accent.primary} />
+                            <Text style={{ fontSize: 10.5, fontWeight: "700", color: colors.accent.primary }}>
+                              Edit
+                            </Text>
+                          </Pressable>
+                        </View>
+                      </View>
+
+                      {/* Slot breakdown chips */}
+                      {hasSlots ? (
+                        <View style={{ flexDirection: "row", flexWrap: "wrap", gap: 5, marginTop: 8, paddingTop: 6, borderTopWidth: 1, borderTopColor: colors.border.subtle }}>
+                          {slots.map((s: any, sIdx: number) => {
+                            const slotQty = Number(s.quantity || 0);
+                            const pct = totalUnits > 0 ? Math.min(100, Math.round((slotQty / totalUnits) * 100)) : 0;
+                            const isFirst = sIdx === 0;
+                            const isLast = sIdx === slots.length - 1 && slots.length > 1;
+
+                            let badgeBg = `${colors.border.subtle}40`;
+                            let badgeText = colors.text.secondary;
+                            let roleTag = "";
+
+                            if (isFirst) {
+                              badgeBg = "#fef2f2";
+                              badgeText = "#dc2626";
+                              roleTag = " (-Bill)";
+                            } else if (isLast) {
+                              badgeBg = "#ecfdf5";
+                              badgeText = "#059669";
+                              roleTag = " (+Mfg)";
+                            }
+
+                            return (
+                              <View
+                                key={s.id || sIdx}
+                                style={{
+                                  backgroundColor: badgeBg,
+                                  paddingHorizontal: 6,
+                                  paddingVertical: 2.5,
+                                  borderRadius: 5,
+                                  flexDirection: "row",
+                                  alignItems: "center",
+                                  gap: 4,
+                                }}
+                              >
+                                <Text style={{ fontSize: 9.5, fontWeight: "700", color: badgeText }}>
+                                  {s.slotName || `Slot ${sIdx + 1}`}{roleTag}: {slotQty} ({pct}%)
+                                </Text>
+                              </View>
+                            );
+                          })}
+                        </View>
+                      ) : (
+                        <View style={{ flexDirection: "row", alignItems: "center", justifyContent: "space-between", marginTop: 6, paddingTop: 4, borderTopWidth: 1, borderTopColor: colors.border.subtle }}>
+                          <View style={{ flexDirection: "row", alignItems: "center", gap: 4 }}>
+                            <MaterialIcons name="grid-view" size={12} color={colors.text.muted} />
+                            <Text style={{ fontSize: 10.5, color: colors.text.muted }}>
+                              Main Stock: 100% in default slot
+                            </Text>
+                          </View>
+                          <Pressable onPress={() => handleOpenStockEditor(itm)}>
+                            <Text style={{ fontSize: 10, fontWeight: "700", color: colors.accent.primary }}>
+                              + Split into slots
+                            </Text>
+                          </Pressable>
+                        </View>
+                      )}
+                    </View>
+                  );
+                })}
+              </View>
+            )}
+          </View>
+        </Animated.View>
+
         {/* Received Today Strip */}
         <Animated.View entering={FadeInDown.duration(200)}>
           <Pressable 
@@ -2933,6 +3359,14 @@ export default function Home() {
                                     <MaterialIcons name="hourglass-empty" size={11} color="#ea580c" />
                                     <Text style={{ fontSize: 11, fontWeight: "700", color: "#ea580c" }}>
                                       Due: ₹{Number(item.balanceDue || 0).toLocaleString("en-IN")}
+                                    </Text>
+                                  </View>
+                                ) : null}
+                                {item.paymentMethod ? (
+                                  <View style={{ flexDirection: "row", alignItems: "center", gap: 3, backgroundColor: `${colors.accent.primary}12`, paddingHorizontal: 6, paddingVertical: 2, borderRadius: 6, borderWidth: 1, borderColor: `${colors.accent.primary}25` }}>
+                                    <MaterialIcons name="payment" size={10} color={colors.accent.primary} />
+                                    <Text style={{ fontSize: 10, fontWeight: "700", color: colors.accent.primary }}>
+                                      {item.paymentMethod}
                                     </Text>
                                   </View>
                                 ) : null}
@@ -4288,7 +4722,14 @@ export default function Home() {
               </View>
             ) : (
               <View style={{ flex: 1 }}>
-                <View style={[styles.attDateBanner, { justifyContent: "space-between" }]}>
+                <ScrollView
+                  style={{ flex: 1 }}
+                  contentContainerStyle={{ paddingBottom: 24 }}
+                  keyboardShouldPersistTaps="handled"
+                  nestedScrollEnabled={true}
+                  showsVerticalScrollIndicator={true}
+                >
+                  <View style={[styles.attDateBanner, { justifyContent: "space-between" }]}>
                   <View style={{ flexDirection: "row", alignItems: "center", gap: 8, flex: 1 }}>
                     <MaterialIcons name="event" size={18} color={colors.accent.info} />
                     <Text style={styles.attDateText}>
@@ -4344,8 +4785,451 @@ export default function Home() {
                   </Pressable>
                 </View>
 
-                <ScrollView style={{ flex: 1 }} keyboardShouldPersistTaps="handled" showsVerticalScrollIndicator={false}>
-                  {(() => {
+                {/* Opening Stock & Slots Expandable Banner / Card */}
+                <View style={{
+                  backgroundColor: colors.bg.elevated,
+                  borderRadius: radius.md,
+                  borderWidth: 1,
+                  borderColor: colors.border.subtle,
+                  marginBottom: spacing.md,
+                  overflow: "hidden",
+                }}>
+                  {/* Toggle Header Row */}
+                  <Pressable
+                    style={({ pressed }) => [{
+                      flexDirection: "row",
+                      alignItems: "center",
+                      justifyContent: "space-between",
+                      paddingHorizontal: spacing.md,
+                      paddingVertical: 10,
+                      backgroundColor: showStockAndSlotsInAttendance ? `${colors.accent.primary}12` : colors.bg.elevated,
+                    }, pressed && { opacity: 0.8 }]}
+                    onPress={() => setShowStockAndSlotsInAttendance(!showStockAndSlotsInAttendance)}
+                  >
+                    <View style={{ flexDirection: "row", alignItems: "center", gap: 8, flex: 1 }}>
+                      <View style={{
+                        width: 30,
+                        height: 30,
+                        borderRadius: 8,
+                        backgroundColor: `${colors.accent.primary}20`,
+                        justifyContent: "center",
+                        alignItems: "center",
+                      }}>
+                        <MaterialIcons name="inventory-2" size={17} color={colors.accent.primary} />
+                      </View>
+                      <View style={{ flex: 1 }}>
+                        <Text style={{ fontSize: 13, fontWeight: "800", color: colors.text.primary }}>
+                          Opening Stock & Slots
+                        </Text>
+                        <Text style={{ fontSize: 10.5, color: colors.text.muted, marginTop: 1 }}>
+                          {(items || []).length} total items • {totalOpeningStockCount.toLocaleString("en-IN")} units • Tap to view all
+                        </Text>
+                      </View>
+                    </View>
+
+                    <View style={{ flexDirection: "row", alignItems: "center", gap: 6 }}>
+                      <View style={{
+                        paddingHorizontal: 8,
+                        paddingVertical: 3,
+                        borderRadius: 6,
+                        backgroundColor: showStockAndSlotsInAttendance ? colors.accent.primary : `${colors.accent.primary}18`,
+                      }}>
+                        <Text style={{
+                          fontSize: 11,
+                          fontWeight: "700",
+                          color: showStockAndSlotsInAttendance ? "#FFFFFF" : colors.accent.primary,
+                        }}>
+                          {showStockAndSlotsInAttendance ? "Hide Slots ▲" : "Show All Items ▼"}
+                        </Text>
+                      </View>
+                    </View>
+                  </Pressable>
+
+                  {/* Expanded Stock & Slots Overview */}
+                  {showStockAndSlotsInAttendance && (
+                    <View style={{
+                      padding: spacing.md,
+                      paddingTop: 8,
+                      borderTopWidth: 1,
+                      borderTopColor: colors.border.subtle,
+                      gap: 10,
+                    }}>
+                      {/* 3-Column Stock & Live Production Metric Tiles */}
+                      <View style={{ flexDirection: "row", gap: 8 }}>
+                        <View style={{
+                          flex: 1,
+                          backgroundColor: colors.bg.card,
+                          borderRadius: 10,
+                          padding: 8,
+                          borderWidth: 1,
+                          borderColor: colors.border.subtle,
+                          alignItems: "center",
+                        }}>
+                          <Text style={{ fontSize: 9.5, fontWeight: "700", color: colors.text.muted, textTransform: "uppercase" }}>
+                            Opening Stock
+                          </Text>
+                          <Text style={{ fontSize: 14, fontWeight: "800", color: colors.text.primary, marginTop: 2 }}>
+                            {totalOpeningStockCount.toLocaleString("en-IN")}
+                          </Text>
+                        </View>
+
+                        <View style={{
+                          flex: 1,
+                          backgroundColor: colors.bg.card,
+                          borderRadius: 10,
+                          padding: 8,
+                          borderWidth: 1,
+                          borderColor: colors.border.subtle,
+                          alignItems: "center",
+                        }}>
+                          <Text style={{ fontSize: 9.5, fontWeight: "700", color: colors.accent.success || "#10B981", textTransform: "uppercase" }}>
+                            Today's Output
+                          </Text>
+                          <Text style={{ fontSize: 14, fontWeight: "800", color: colors.accent.success || "#10B981", marginTop: 2 }}>
+                            +{totalPiecesInAttendance.toLocaleString("en-IN")}
+                          </Text>
+                        </View>
+
+                        <View style={{
+                          flex: 1,
+                          backgroundColor: colors.bg.card,
+                          borderRadius: 10,
+                          padding: 8,
+                          borderWidth: 1,
+                          borderColor: colors.border.subtle,
+                          alignItems: "center",
+                        }}>
+                          <Text style={{ fontSize: 9.5, fontWeight: "700", color: colors.accent.primary, textTransform: "uppercase" }}>
+                            Total Stock
+                          </Text>
+                          <Text style={{ fontSize: 14, fontWeight: "800", color: colors.accent.primary, marginTop: 2 }}>
+                            {(totalOpeningStockCount + totalPiecesInAttendance).toLocaleString("en-IN")}
+                          </Text>
+                        </View>
+                      </View>
+
+                      {/* Category Filter Chips (All Items, Products, Raw Materials) */}
+                      {(() => {
+                        const allCount = (items || []).length;
+                        const productsCount = (items || []).filter((i: any) => i.itemType !== "raw_material").length;
+                        const rawCount = (items || []).filter((i: any) => i.itemType === "raw_material").length;
+
+                        return (
+                          <View style={{ flexDirection: "row", gap: 6, flexWrap: "wrap" }}>
+                            <Pressable
+                              style={({ pressed }) => [{
+                                paddingHorizontal: 10,
+                                paddingVertical: 5,
+                                borderRadius: 8,
+                                backgroundColor: attendanceStockCategoryFilter === "all" ? colors.accent.primary : colors.bg.card,
+                                borderWidth: 1,
+                                borderColor: attendanceStockCategoryFilter === "all" ? colors.accent.primary : colors.border.subtle,
+                              }, pressed && { opacity: 0.8 }]}
+                              onPress={() => setAttendanceStockCategoryFilter("all")}
+                            >
+                              <Text style={{
+                                fontSize: 11,
+                                fontWeight: "700",
+                                color: attendanceStockCategoryFilter === "all" ? "#FFFFFF" : colors.text.secondary,
+                              }}>
+                                All Items ({allCount})
+                              </Text>
+                            </Pressable>
+
+                            <Pressable
+                              style={({ pressed }) => [{
+                                paddingHorizontal: 10,
+                                paddingVertical: 5,
+                                borderRadius: 8,
+                                backgroundColor: attendanceStockCategoryFilter === "products" ? colors.accent.primary : colors.bg.card,
+                                borderWidth: 1,
+                                borderColor: attendanceStockCategoryFilter === "products" ? colors.accent.primary : colors.border.subtle,
+                              }, pressed && { opacity: 0.8 }]}
+                              onPress={() => setAttendanceStockCategoryFilter("products")}
+                            >
+                              <Text style={{
+                                fontSize: 11,
+                                fontWeight: "700",
+                                color: attendanceStockCategoryFilter === "products" ? "#FFFFFF" : colors.text.secondary,
+                              }}>
+                                📦 Products ({productsCount})
+                              </Text>
+                            </Pressable>
+
+                            <Pressable
+                              style={({ pressed }) => [{
+                                paddingHorizontal: 10,
+                                paddingVertical: 5,
+                                borderRadius: 8,
+                                backgroundColor: attendanceStockCategoryFilter === "raw_materials" ? colors.accent.primary : colors.bg.card,
+                                borderWidth: 1,
+                                borderColor: attendanceStockCategoryFilter === "raw_materials" ? colors.accent.primary : colors.border.subtle,
+                              }, pressed && { opacity: 0.8 }]}
+                              onPress={() => setAttendanceStockCategoryFilter("raw_materials")}
+                            >
+                              <Text style={{
+                                fontSize: 11,
+                                fontWeight: "700",
+                                color: attendanceStockCategoryFilter === "raw_materials" ? "#FFFFFF" : colors.text.secondary,
+                              }}>
+                                🧵 Raw Materials ({rawCount})
+                              </Text>
+                            </Pressable>
+                          </View>
+                        );
+                      })()}
+
+                      {/* Product Search Box */}
+                      {(items || []).length > 2 && (
+                        <View style={{
+                          flexDirection: "row",
+                          alignItems: "center",
+                          backgroundColor: colors.bg.card,
+                          borderRadius: 8,
+                          paddingHorizontal: 8,
+                          paddingVertical: 4,
+                          borderWidth: 1,
+                          borderColor: colors.border.subtle,
+                        }}>
+                          <MaterialIcons name="search" size={16} color={colors.text.muted} style={{ marginRight: 6 }} />
+                          <TextInput
+                            style={{
+                              flex: 1,
+                              fontSize: 12,
+                              color: colors.text.primary,
+                              paddingVertical: 2,
+                            }}
+                            placeholder="Filter all items..."
+                            value={stockProductFilter}
+                            onChangeText={setStockProductFilter}
+                            placeholderTextColor={colors.text.muted}
+                          />
+                          {stockProductFilter.length > 0 && (
+                            <Pressable onPress={() => setStockProductFilter("")}>
+                              <MaterialIcons name="close" size={15} color={colors.text.muted} />
+                            </Pressable>
+                          )}
+                        </View>
+                      )}
+
+                      {/* Item-by-Item Slot Allocation List */}
+                      <View style={{ gap: 8 }}>
+                        <View style={{ flexDirection: "row", justifyContent: "space-between", alignItems: "center" }}>
+                          <Text style={{ fontSize: 11, fontWeight: "800", color: colors.text.secondary, textTransform: "uppercase", letterSpacing: 0.3 }}>
+                            All Items & Slot Breakdown
+                          </Text>
+                          <Text style={{ fontSize: 10, color: colors.text.muted }}>
+                            Tap pencil to edit stock
+                          </Text>
+                        </View>
+
+                        {(() => {
+                          const allCatalogItems = items || [];
+                          const displayedItems = allCatalogItems.filter((itm: any) => {
+                            const matchesSearch = (itm.itemName || itm.name || "").toLowerCase().includes(stockProductFilter.toLowerCase());
+                            if (!matchesSearch) return false;
+                            if (attendanceStockCategoryFilter === "products") return itm.itemType !== "raw_material";
+                            if (attendanceStockCategoryFilter === "raw_materials") return itm.itemType === "raw_material";
+                            return true;
+                          });
+
+                          if (displayedItems.length === 0) {
+                            return (
+                              <Text style={{ fontSize: 11.5, color: colors.text.muted, fontStyle: "italic", textAlign: "center", paddingVertical: 6 }}>
+                                {allCatalogItems.length === 0 ? "No items found. Add items in Settings → Items." : "No matching items found for selected filter."}
+                              </Text>
+                            );
+                          }
+
+                          return displayedItems.map((itm: any) => {
+                            const currentStock = itm.openingStock !== undefined ? itm.openingStock : (itm.stock || 0);
+                            const totalUnits = Number(currentStock) || 0;
+                            const slots = Array.isArray(itm.openingStockSlots) ? itm.openingStockSlots : [];
+                            const hasSlots = slots.length > 0;
+                            const unitLabel = itm.unit || "units";
+                            const isRawMaterial = itm.itemType === "raw_material";
+                            const rate = Number(itm.sellingRate || itm.sellingPrice || itm.costPrice || 0);
+
+                            return (
+                              <View
+                                key={itm.id}
+                                style={{
+                                  backgroundColor: colors.bg.card,
+                                  borderRadius: 10,
+                                  padding: 10,
+                                  borderWidth: 1,
+                                  borderColor: colors.border.subtle,
+                                }}
+                              >
+                                {/* Item Header */}
+                                <View style={{ flexDirection: "row", justifyContent: "space-between", alignItems: "center", marginBottom: hasSlots ? 6 : 0 }}>
+                                  <View style={{ flexDirection: "row", alignItems: "center", gap: 6, flex: 1, marginRight: 8 }}>
+                                    <MaterialIcons
+                                      name={isRawMaterial ? "category" : "inventory"}
+                                      size={15}
+                                      color={isRawMaterial ? colors.accent.warning || "#f59e0b" : colors.accent.primary}
+                                    />
+                                    <View style={{ flex: 1 }}>
+                                      <View style={{ flexDirection: "row", alignItems: "center", gap: 5 }}>
+                                        <Text style={{ fontSize: 12.5, fontWeight: "700", color: colors.text.primary }} numberOfLines={1}>
+                                          {itm.itemName || itm.name}
+                                        </Text>
+                                        <View style={{
+                                          backgroundColor: isRawMaterial ? `${colors.accent.warning || "#f59e0b"}20` : `${colors.accent.primary}18`,
+                                          paddingHorizontal: 5,
+                                          paddingVertical: 1,
+                                          borderRadius: 4,
+                                        }}>
+                                          <Text style={{
+                                            fontSize: 8.5,
+                                            fontWeight: "700",
+                                            color: isRawMaterial ? colors.accent.warning || "#f59e0b" : colors.accent.primary,
+                                          }}>
+                                            {isRawMaterial ? "Raw Material" : "Product"}
+                                          </Text>
+                                        </View>
+                                      </View>
+                                      {rate > 0 && (
+                                        <Text style={{ fontSize: 10, color: colors.text.muted }}>
+                                          {isRawMaterial ? `Cost: ₹${rate.toLocaleString("en-IN")}` : `₹${(totalUnits * rate).toLocaleString("en-IN")} value`}
+                                        </Text>
+                                      )}
+                                    </View>
+                                  </View>
+
+                                  <View style={{ flexDirection: "row", alignItems: "center", gap: 8 }}>
+                                    <Text style={{ fontSize: 13, fontWeight: "800", color: colors.accent.primary }}>
+                                      {totalUnits.toLocaleString("en-IN")} <Text style={{ fontSize: 10.5, fontWeight: "600", color: colors.text.muted }}>{unitLabel}</Text>
+                                    </Text>
+
+                                    {/* In-Modal Quick Edit Button */}
+                                    <Pressable
+                                      style={({ pressed }) => [{
+                                        flexDirection: "row",
+                                        alignItems: "center",
+                                        gap: 3,
+                                        backgroundColor: `${colors.accent.primary}18`,
+                                        borderColor: `${colors.accent.primary}40`,
+                                        borderWidth: 1,
+                                        paddingHorizontal: 7,
+                                        paddingVertical: 3,
+                                        borderRadius: 6,
+                                      }, pressed && { opacity: 0.7 }]}
+                                      onPress={() => handleOpenStockEditor(itm)}
+                                    >
+                                      <MaterialIcons name="edit" size={13} color={colors.accent.primary} />
+                                      <Text style={{ fontSize: 10.5, fontWeight: "700", color: colors.accent.primary }}>
+                                        Edit
+                                      </Text>
+                                    </Pressable>
+                                  </View>
+                                </View>
+
+                                {/* Slots Breakdown */}
+                                {hasSlots ? (
+                                  <View style={{ gap: 6, marginTop: 4, paddingTop: 4, borderTopWidth: 1, borderTopColor: colors.border.subtle }}>
+                                    {slots.map((s: any, sIdx: number) => {
+                                      const slotQty = Number(s.quantity || 0);
+                                      const pct = totalUnits > 0 ? Math.min(100, Math.round((slotQty / totalUnits) * 100)) : 0;
+                                      const isFirst = sIdx === 0;
+                                      const isLast = sIdx === slots.length - 1 && slots.length > 1;
+
+                                      let badgeBg = `${colors.border.subtle}30`;
+                                      let badgeText = colors.text.secondary;
+                                      let badgeLabel = "Neutral";
+
+                                      if (isFirst) {
+                                        badgeBg = "#fef2f2";
+                                        badgeText = "#dc2626";
+                                        badgeLabel = "- Bill (Dec)";
+                                      } else if (isLast) {
+                                        badgeBg = "#ecfdf5";
+                                        badgeText = "#059669";
+                                        badgeLabel = "+ Mfg (Inc)";
+                                      }
+
+                                      return (
+                                        <View key={s.id || sIdx} style={{ gap: 2 }}>
+                                          <View style={{ flexDirection: "row", justifyContent: "space-between", alignItems: "center" }}>
+                                            <View style={{ flexDirection: "row", alignItems: "center", gap: 4 }}>
+                                              <MaterialIcons name="dns" size={12} color={colors.text.secondary} />
+                                              <Text style={{ fontSize: 11, fontWeight: "600", color: colors.text.primary }}>
+                                                {s.slotName || `Slot ${sIdx + 1}`}
+                                              </Text>
+                                              <View style={{ backgroundColor: badgeBg, paddingHorizontal: 4, paddingVertical: 1, borderRadius: 4 }}>
+                                                <Text style={{ fontSize: 8.5, fontWeight: "700", color: badgeText }}>
+                                                  {badgeLabel}
+                                                </Text>
+                                              </View>
+                                            </View>
+
+                                            <Text style={{ fontSize: 11, fontWeight: "700", color: colors.text.primary }}>
+                                              {slotQty.toLocaleString("en-IN")} <Text style={{ fontSize: 9.5, color: colors.text.muted }}>({pct}%)</Text>
+                                            </Text>
+                                          </View>
+
+                                          {/* Mini Progress Bar */}
+                                          <View style={{ height: 4, backgroundColor: colors.border.subtle, borderRadius: 2, overflow: "hidden" }}>
+                                            <View style={{ height: "100%", width: `${pct}%`, backgroundColor: isFirst ? "#ef4444" : (isLast ? "#10b981" : colors.accent.primary), borderRadius: 2 }} />
+                                          </View>
+
+                                          {/* Live Output Linkage Indicator */}
+                                          {!isRawMaterial && isLast && totalPiecesInAttendance > 0 && (
+                                            <Text style={{ fontSize: 9, color: colors.accent.success || "#10B981", fontWeight: "600", marginTop: 1 }}>
+                                              ⚡ +{totalPiecesInAttendance} pcs from today's attendance will increment into this slot
+                                            </Text>
+                                          )}
+                                        </View>
+                                      );
+                                    })}
+                                  </View>
+                                ) : (
+                                  <View style={{ flexDirection: "row", alignItems: "center", justifyContent: "space-between", marginTop: 4, paddingTop: 4, borderTopWidth: 1, borderTopColor: colors.border.subtle }}>
+                                    <View style={{ flexDirection: "row", alignItems: "center", gap: 4 }}>
+                                      <MaterialIcons name="grid-view" size={12} color={colors.text.muted} />
+                                      <Text style={{ fontSize: 10.5, color: colors.text.muted }}>
+                                        Single Slot (100% in default stock)
+                                      </Text>
+                                    </View>
+                                    <Pressable onPress={() => handleOpenStockEditor(itm)}>
+                                      <Text style={{ fontSize: 10.5, fontWeight: "700", color: colors.accent.primary }}>
+                                        + Split into Slots
+                                      </Text>
+                                    </Pressable>
+                                  </View>
+                                )}
+                              </View>
+                            );
+                          });
+                        })()}
+                      </View>
+
+                      {/* Quick Link to Items Management */}
+                      <Pressable
+                        style={({ pressed }) => [{
+                          flexDirection: "row",
+                          alignItems: "center",
+                          justifyContent: "center",
+                          gap: 4,
+                          paddingVertical: 7,
+                          borderRadius: 8,
+                          backgroundColor: `${colors.accent.primary}12`,
+                        }, pressed && { opacity: 0.7 }]}
+                        onPress={() => {
+                          handleCloseAttendanceModal();
+                          router.push("/settings/items" as any);
+                        }}
+                      >
+                        <MaterialIcons name="tune" size={13} color={colors.accent.primary} />
+                        <Text style={{ fontSize: 11.5, fontWeight: "700", color: colors.accent.primary }}>
+                          Manage Items, Stock & Slots in Settings ➔
+                        </Text>
+                      </Pressable>
+                    </View>
+                  )}
+                </View>
+
+                {(() => {
                     const unmarkedWorkers = activeWorkers.filter((w: any) =>
                       (!todayAttendanceMap[w.id] || editingWorkerIds[w.id]) &&
                       w.name?.toLowerCase().includes(attendanceSearch.toLowerCase())
@@ -4545,6 +5429,483 @@ export default function Home() {
             )}
           </View>
         </View>
+      </Modal>
+
+      {/* OPENING STOCK & SLOTS IN-MODAL QUICK EDITOR */}
+      <Modal
+        visible={isStockEditorModalOpen}
+        animationType="slide"
+        transparent={true}
+        onRequestClose={handleCloseStockEditor}
+      >
+        <KeyboardAvoidingView
+          behavior={Platform.OS === "ios" ? "padding" : undefined}
+          style={styles.summaryModalCenterBackdrop}
+        >
+          <Pressable style={StyleSheet.absoluteFill} onPress={handleCloseStockEditor} />
+          <View style={[styles.summaryModalCenterCard, {
+            maxHeight: "85%",
+            maxWidth: 540,
+            flex: 1,
+            display: "flex",
+            flexDirection: "column",
+            overflow: "hidden",
+            padding: 0,
+          }]}>
+            {/* Header */}
+            <View style={[styles.modalHeader, { paddingHorizontal: 16, paddingTop: 16, paddingBottom: 12, borderBottomWidth: 1, borderBottomColor: colors.border.subtle }]}>
+              <View style={{ flex: 1, marginRight: 8 }}>
+                <View style={{ flexDirection: "row", alignItems: "center", gap: 6 }}>
+                  <MaterialIcons name="inventory-2" size={22} color={colors.accent.primary} />
+                  <Text style={styles.modalTitle} numberOfLines={1}>
+                    {editingStockItem?.itemName || editingStockItem?.name || "Edit Opening Stock & Slots"}
+                  </Text>
+                </View>
+                <Text style={{ fontSize: 11, color: colors.text.muted, marginTop: 2 }}>
+                  Adjust Opening Stock & Slot Allocations for today
+                </Text>
+              </View>
+              <Pressable style={styles.modalCloseBtn} onPress={handleCloseStockEditor}>
+                <MaterialIcons name="close" size={24} color={colors.text.muted} />
+              </Pressable>
+            </View>
+
+            <ScrollView
+              style={{ flex: 1 }}
+              contentContainerStyle={{ padding: 16, paddingBottom: 24 }}
+              keyboardShouldPersistTaps="handled"
+              nestedScrollEnabled={true}
+              showsVerticalScrollIndicator={true}
+            >
+              {/* Total Opening Stock Input & Quick Steppers */}
+              <View style={{
+                backgroundColor: colors.bg.primary,
+                borderRadius: 12,
+                padding: 12,
+                borderWidth: 1,
+                borderColor: colors.border.medium,
+                marginBottom: 14,
+              }}>
+                <View style={{ flexDirection: "row", justifyContent: "space-between", alignItems: "center", marginBottom: 6 }}>
+                  <Text style={{ fontSize: 12, fontWeight: "800", color: colors.text.primary, textTransform: "uppercase" }}>
+                    Total Opening Stock ({editingStockItem?.unit || "units"})
+                  </Text>
+                  <Text style={{ fontSize: 11, fontWeight: "700", color: colors.accent.primary }}>
+                    ₹{((parseInt(stockEditTotal, 10) || 0) * Number(editingStockItem?.sellingRate || editingStockItem?.sellingPrice || 0)).toLocaleString("en-IN")} Value
+                  </Text>
+                </View>
+
+                <TextInput
+                  style={{
+                    backgroundColor: colors.bg.surface,
+                    borderWidth: 1.5,
+                    borderColor: colors.accent.primary,
+                    borderRadius: 8,
+                    paddingHorizontal: 12,
+                    paddingVertical: 10,
+                    fontSize: 18,
+                    fontWeight: "800",
+                    color: colors.text.primary,
+                    textAlign: "center",
+                  }}
+                  value={stockEditTotal}
+                  onChangeText={setStockEditTotal}
+                  keyboardType="numeric"
+                  placeholder="0"
+                  placeholderTextColor={colors.text.muted}
+                />
+
+                {/* Quick Step Buttons for Total */}
+                <View style={{ flexDirection: "row", justifyContent: "center", gap: 6, marginTop: 10, flexWrap: "wrap" }}>
+                  {[-50, -10, -5, +5, +10, +50, +100].map((step) => (
+                    <Pressable
+                      key={step}
+                      style={({ pressed }) => [{
+                        backgroundColor: step > 0 ? `${colors.accent.success}18` : `${colors.accent.danger}18`,
+                        borderColor: step > 0 ? `${colors.accent.success}40` : `${colors.accent.danger}40`,
+                        borderWidth: 1,
+                        paddingHorizontal: 9,
+                        paddingVertical: 5,
+                        borderRadius: 6,
+                      }, pressed && { opacity: 0.7 }]}
+                      onPress={() => handleStepTotalStock(step)}
+                    >
+                      <Text style={{
+                        fontSize: 11,
+                        fontWeight: "700",
+                        color: step > 0 ? colors.accent.success : colors.accent.danger,
+                      }}>
+                        {step > 0 ? `+${step}` : step}
+                      </Text>
+                    </Pressable>
+                  ))}
+                </View>
+              </View>
+
+              {/* Slots Allocation Header & Action Bar */}
+              {(() => {
+                const totalTarget = parseInt(stockEditTotal, 10) || 0;
+                const slotSum = stockEditSlots.reduce((acc, cur) => acc + (parseInt(cur.quantity, 10) || 0), 0);
+                const diff = totalTarget - slotSum;
+                const isBalanced = diff === 0;
+
+                return (
+                  <View style={{ marginBottom: 12 }}>
+                    <View style={{ flexDirection: "row", justifyContent: "space-between", alignItems: "center", marginBottom: 8 }}>
+                      <Text style={{ fontSize: 12, fontWeight: "800", color: colors.text.secondary, textTransform: "uppercase" }}>
+                        Slot Distribution ({stockEditSlots.length} Slots)
+                      </Text>
+                      <View style={{
+                        backgroundColor: isBalanced ? "#ecfdf5" : (diff > 0 ? "#fffbeb" : "#fef2f2"),
+                        borderColor: isBalanced ? "#10b981" : (diff > 0 ? "#f59e0b" : "#ef4444"),
+                        borderWidth: 1,
+                        paddingHorizontal: 8,
+                        paddingVertical: 2,
+                        borderRadius: 6,
+                      }}>
+                        <Text style={{
+                          fontSize: 10.5,
+                          fontWeight: "800",
+                          color: isBalanced ? "#059669" : (diff > 0 ? "#d97706" : "#dc2626"),
+                        }}>
+                          {isBalanced ? `✅ Balanced (${slotSum}/${totalTarget})` : (diff > 0 ? `⚠️ ${diff} Unallocated` : `⚠️ Over by ${Math.abs(diff)}`)}
+                        </Text>
+                      </View>
+                    </View>
+
+                    {/* Quick Slot Allocation Tools */}
+                    <View style={{ flexDirection: "row", flexWrap: "wrap", gap: 6, marginBottom: 10 }}>
+                      <Pressable
+                        style={({ pressed }) => [{
+                          backgroundColor: `${colors.accent.primary}15`,
+                          borderColor: `${colors.accent.primary}35`,
+                          borderWidth: 1,
+                          paddingHorizontal: 9,
+                          paddingVertical: 5,
+                          borderRadius: 6,
+                          flexDirection: "row",
+                          alignItems: "center",
+                          gap: 4,
+                        }, pressed && { opacity: 0.7 }]}
+                        onPress={handleAutoBalanceSlots}
+                      >
+                        <MaterialIcons name="balance" size={13} color={colors.accent.primary} />
+                        <Text style={{ fontSize: 11, fontWeight: "700", color: colors.accent.primary }}>Auto-Balance</Text>
+                      </Pressable>
+
+                      <Pressable
+                        style={({ pressed }) => [{
+                          backgroundColor: `${colors.accent.primary}15`,
+                          borderColor: `${colors.accent.primary}35`,
+                          borderWidth: 1,
+                          paddingHorizontal: 9,
+                          paddingVertical: 5,
+                          borderRadius: 6,
+                          flexDirection: "row",
+                          alignItems: "center",
+                          gap: 4,
+                        }, pressed && { opacity: 0.7 }]}
+                        onPress={handleDistributeSlotsEvenly}
+                      >
+                        <MaterialIcons name="grid-goldenratio" size={13} color={colors.accent.primary} />
+                        <Text style={{ fontSize: 11, fontWeight: "700", color: colors.accent.primary }}>Distribute Evenly</Text>
+                      </Pressable>
+
+                      <Pressable
+                        style={({ pressed }) => [{
+                          backgroundColor: `${colors.accent.success}15`,
+                          borderColor: `${colors.accent.success}35`,
+                          borderWidth: 1,
+                          paddingHorizontal: 9,
+                          paddingVertical: 5,
+                          borderRadius: 6,
+                          flexDirection: "row",
+                          alignItems: "center",
+                          gap: 4,
+                        }, pressed && { opacity: 0.7 }]}
+                        onPress={handleAddSlotInEditor}
+                      >
+                        <MaterialIcons name="add" size={13} color={colors.accent.success} />
+                        <Text style={{ fontSize: 11, fontWeight: "700", color: colors.accent.success }}>+ Add Slot</Text>
+                      </Pressable>
+
+                      {!isBalanced && (
+                        <Pressable
+                          style={({ pressed }) => [{
+                            backgroundColor: "#fef3c7",
+                            borderColor: "#f59e0b",
+                            borderWidth: 1,
+                            paddingHorizontal: 9,
+                            paddingVertical: 5,
+                            borderRadius: 6,
+                            flexDirection: "row",
+                            alignItems: "center",
+                            gap: 4,
+                          }, pressed && { opacity: 0.7 }]}
+                          onPress={handleSyncTotalFromSlots}
+                        >
+                          <MaterialIcons name="sync" size={13} color="#d97706" />
+                          <Text style={{ fontSize: 11, fontWeight: "700", color: "#b45309" }}>Sync Total ({slotSum})</Text>
+                        </Pressable>
+                      )}
+
+                      {stockEditSlots.length > 1 && (
+                        <Pressable
+                          style={({ pressed }) => [{
+                            backgroundColor: `${colors.border.subtle}30`,
+                            borderColor: colors.border.subtle,
+                            borderWidth: 1,
+                            paddingHorizontal: 8,
+                            paddingVertical: 5,
+                            borderRadius: 6,
+                          }, pressed && { opacity: 0.7 }]}
+                          onPress={handleResetToSingleSlot}
+                        >
+                          <Text style={{ fontSize: 10.5, fontWeight: "600", color: colors.text.muted }}>Reset to Single</Text>
+                        </Pressable>
+                      )}
+                    </View>
+
+                    {/* Slot Rows List */}
+                    <View style={{ gap: 8 }}>
+                      {stockEditSlots.map((s, idx) => {
+                        const slotQty = parseInt(s.quantity, 10) || 0;
+                        const pct = totalTarget > 0 ? Math.min(100, Math.round((slotQty / totalTarget) * 100)) : 0;
+                        const isFirst = idx === 0;
+                        const isLast = idx === stockEditSlots.length - 1 && stockEditSlots.length > 1;
+
+                        let roleBadgeBg = `${colors.border.subtle}30`;
+                        let roleBadgeText = colors.text.secondary;
+                        let roleLabel = "Buffer / Storage";
+
+                        if (isFirst) {
+                          roleBadgeBg = "#fef2f2";
+                          roleBadgeText = "#dc2626";
+                          roleLabel = "🔴 Billing / Despatch (-Bill)";
+                        } else if (isLast) {
+                          roleBadgeBg = "#ecfdf5";
+                          roleBadgeText = "#059669";
+                          roleLabel = "🟢 Production / Output (+Mfg)";
+                        }
+
+                        return (
+                          <View
+                            key={s.id || idx}
+                            style={{
+                              backgroundColor: colors.bg.primary,
+                              borderRadius: 10,
+                              padding: 10,
+                              borderWidth: 1,
+                              borderColor: colors.border.subtle,
+                              gap: 8,
+                            }}
+                          >
+                            {/* Row 1: Role Badge, Name Input, Delete */}
+                            <View style={{ flexDirection: "row", alignItems: "center", gap: 6 }}>
+                              <View style={{
+                                backgroundColor: roleBadgeBg,
+                                paddingHorizontal: 6,
+                                paddingVertical: 2,
+                                borderRadius: 4,
+                              }}>
+                                <Text style={{ fontSize: 9.5, fontWeight: "700", color: roleBadgeText }}>
+                                  {roleLabel}
+                                </Text>
+                              </View>
+
+                              <TextInput
+                                style={{
+                                  flex: 1,
+                                  backgroundColor: colors.bg.surface,
+                                  borderWidth: 1,
+                                  borderColor: colors.border.subtle,
+                                  borderRadius: 6,
+                                  paddingHorizontal: 8,
+                                  paddingVertical: 5,
+                                  fontSize: 12,
+                                  fontWeight: "700",
+                                  color: colors.text.primary,
+                                }}
+                                value={s.slotName}
+                                onChangeText={(text) => {
+                                  setStockEditSlots((prev) => {
+                                    const updated = [...prev];
+                                    updated[idx] = { ...updated[idx], slotName: text };
+                                    return updated;
+                                  });
+                                }}
+                                placeholder={`Slot ${idx + 1} Name`}
+                                placeholderTextColor={colors.text.muted}
+                              />
+
+                              {stockEditSlots.length > 1 && (
+                                <Pressable
+                                  style={({ pressed }) => [{
+                                    padding: 6,
+                                    borderRadius: 6,
+                                    backgroundColor: `${colors.accent.danger}15`,
+                                  }, pressed && { opacity: 0.7 }]}
+                                  onPress={() => handleRemoveSlotInEditor(s.id)}
+                                >
+                                  <MaterialIcons name="delete-outline" size={16} color={colors.accent.danger} />
+                                </Pressable>
+                              )}
+                            </View>
+
+                            {/* Row 2: Quantity Input, Steppers, Percentage Bar */}
+                            <View style={{ flexDirection: "row", alignItems: "center", justifyContent: "space-between", gap: 8 }}>
+                              <View style={{ flexDirection: "row", alignItems: "center", gap: 4 }}>
+                                <Pressable
+                                  style={({ pressed }) => [{
+                                    backgroundColor: `${colors.accent.danger}15`,
+                                    paddingHorizontal: 7,
+                                    paddingVertical: 5,
+                                    borderRadius: 6,
+                                  }, pressed && { opacity: 0.7 }]}
+                                  onPress={() => handleStepSlotQty(idx, -10)}
+                                >
+                                  <Text style={{ fontSize: 10, fontWeight: "700", color: colors.accent.danger }}>-10</Text>
+                                </Pressable>
+
+                                <Pressable
+                                  style={({ pressed }) => [{
+                                    backgroundColor: `${colors.accent.danger}15`,
+                                    paddingHorizontal: 6,
+                                    paddingVertical: 5,
+                                    borderRadius: 6,
+                                  }, pressed && { opacity: 0.7 }]}
+                                  onPress={() => handleStepSlotQty(idx, -1)}
+                                >
+                                  <Text style={{ fontSize: 10, fontWeight: "700", color: colors.accent.danger }}>-1</Text>
+                                </Pressable>
+
+                                <TextInput
+                                  style={{
+                                    width: 70,
+                                    backgroundColor: colors.bg.surface,
+                                    borderWidth: 1,
+                                    borderColor: colors.border.subtle,
+                                    borderRadius: 6,
+                                    paddingHorizontal: 8,
+                                    paddingVertical: 5,
+                                    fontSize: 13,
+                                    fontWeight: "800",
+                                    color: colors.text.primary,
+                                    textAlign: "center",
+                                  }}
+                                  value={s.quantity}
+                                  onChangeText={(text) => {
+                                    setStockEditSlots((prev) => {
+                                      const updated = [...prev];
+                                      updated[idx] = { ...updated[idx], quantity: text };
+                                      return updated;
+                                    });
+                                  }}
+                                  keyboardType="numeric"
+                                  placeholder="0"
+                                  placeholderTextColor={colors.text.muted}
+                                />
+
+                                <Pressable
+                                  style={({ pressed }) => [{
+                                    backgroundColor: `${colors.accent.success}15`,
+                                    paddingHorizontal: 6,
+                                    paddingVertical: 5,
+                                    borderRadius: 6,
+                                  }, pressed && { opacity: 0.7 }]}
+                                  onPress={() => handleStepSlotQty(idx, +1)}
+                                >
+                                  <Text style={{ fontSize: 10, fontWeight: "700", color: colors.accent.success }}>+1</Text>
+                                </Pressable>
+
+                                <Pressable
+                                  style={({ pressed }) => [{
+                                    backgroundColor: `${colors.accent.success}15`,
+                                    paddingHorizontal: 7,
+                                    paddingVertical: 5,
+                                    borderRadius: 6,
+                                  }, pressed && { opacity: 0.7 }]}
+                                  onPress={() => handleStepSlotQty(idx, +10)}
+                                >
+                                  <Text style={{ fontSize: 10, fontWeight: "700", color: colors.accent.success }}>+10</Text>
+                                </Pressable>
+                              </View>
+
+                              <Text style={{ fontSize: 11, fontWeight: "700", color: colors.text.secondary }}>
+                                {pct}% <Text style={{ fontSize: 9.5, color: colors.text.muted }}>share</Text>
+                              </Text>
+                            </View>
+
+                            {/* Mini Progress Bar */}
+                            <View style={{ height: 4, backgroundColor: colors.border.subtle, borderRadius: 2, overflow: "hidden" }}>
+                              <View style={{ height: "100%", width: `${pct}%`, backgroundColor: isFirst ? "#ef4444" : (isLast ? "#10b981" : colors.accent.primary), borderRadius: 2 }} />
+                            </View>
+                          </View>
+                        );
+                      })}
+                    </View>
+                  </View>
+                );
+              })()}
+            </ScrollView>
+
+            {/* Footer Actions */}
+            <View style={{
+              flexDirection: "row",
+              gap: 10,
+              padding: 16,
+              paddingTop: 12,
+              borderTopWidth: 1,
+              borderTopColor: colors.border.subtle,
+              backgroundColor: colors.bg.card,
+            }}>
+              <Pressable
+                style={({ pressed }) => [{
+                  flex: 1,
+                  paddingVertical: 12,
+                  borderRadius: 10,
+                  backgroundColor: colors.bg.primary,
+                  borderWidth: 1,
+                  borderColor: colors.border.medium,
+                  alignItems: "center",
+                  justifyContent: "center",
+                }, pressed && { opacity: 0.7 }]}
+                onPress={handleCloseStockEditor}
+                disabled={isSavingStockUpdate}
+              >
+                <Text style={{ fontSize: 13, fontWeight: "700", color: colors.text.secondary }}>
+                  Cancel
+                </Text>
+              </Pressable>
+
+              <Pressable
+                style={({ pressed }) => [{
+                  flex: 2,
+                  paddingVertical: 12,
+                  borderRadius: 10,
+                  backgroundColor: colors.accent.primary,
+                  alignItems: "center",
+                  justifyContent: "center",
+                  flexDirection: "row",
+                  gap: 6,
+                }, (pressed || isSavingStockUpdate) && { opacity: 0.85 }]}
+                onPress={handleSaveStockAndSlots}
+                disabled={isSavingStockUpdate}
+              >
+                {isSavingStockUpdate ? (
+                  <ActivityIndicator size="small" color="#ffffff" />
+                ) : (
+                  <>
+                    <MaterialIcons name="check-circle" size={17} color="#ffffff" />
+                    <Text style={{ fontSize: 13, fontWeight: "800", color: "#ffffff" }}>
+                      Save & Update Stock
+                    </Text>
+                  </>
+                )}
+              </Pressable>
+            </View>
+          </View>
+        </KeyboardAvoidingView>
       </Modal>
 
       {/* ATTENDANCE CALENDAR DATE SELECTION MODAL */}
@@ -5625,55 +6986,417 @@ export default function Home() {
                   </View>
                 ) : null}
 
-                {/* Triggered Activity Log Context Card */}
-                {selectedActivityProfile.activityLogItem && (
-                  <Pressable
-                    style={({ pressed }) => [{
+                {/* Triggered Activity Log Context Card with Full Order Payment Details */}
+                {selectedActivityProfile.activityLogItem && (() => {
+                  const actItem = selectedActivityProfile.activityLogItem;
+                  const isOrder = actItem.type === "order";
+
+                  if (!isOrder) {
+                    return (
+                      <Pressable
+                        style={({ pressed }) => [{
+                          backgroundColor: colors.bg.primary,
+                          borderRadius: 14,
+                          padding: 14,
+                          marginBottom: 20,
+                          borderWidth: 1,
+                          borderColor: colors.border.subtle,
+                          borderLeftWidth: 4,
+                          borderLeftColor: actItem.iconColor || colors.accent.primary,
+                        }, pressed && { opacity: 0.85, transform: [{ scale: 0.99 }] }]}
+                        onPress={() => {
+                          setIsActivityProfileModalOpen(false);
+                          handlePressActivity(actItem);
+                        }}
+                      >
+                        <View style={{ flexDirection: "row", justifyContent: "space-between", alignItems: "center", marginBottom: 6 }}>
+                          <Text style={{ fontSize: 11, fontWeight: "700", color: colors.text.secondary, textTransform: "uppercase" }}>
+                            Selected Activity Log
+                          </Text>
+                          <Text style={{ fontSize: 10.5, fontWeight: "700", color: colors.accent.primary }}>
+                            Tap for details ↗
+                          </Text>
+                        </View>
+                        <View style={{ flexDirection: "row", justifyContent: "space-between", alignItems: "center" }}>
+                          <View style={{ flex: 1, marginRight: 8 }}>
+                            <Text selectable={true} style={{ fontSize: 14, fontWeight: "700", color: colors.text.primary }} numberOfLines={1}>
+                              {actItem.title}
+                            </Text>
+                            <Text selectable={true} style={{ fontSize: 12, color: colors.text.secondary, marginTop: 2 }} numberOfLines={2}>
+                              {actItem.subtitle}
+                            </Text>
+                          </View>
+                          <Text style={{
+                            fontSize: 15,
+                            fontWeight: "800",
+                            color: actItem.isPositive ? (colors.accent.success || "#10B981") : colors.text.primary,
+                          }}>
+                            {actItem.isPositive ? "+" : ""}₹{Number(actItem.amount || 0).toLocaleString("en-IN")}
+                          </Text>
+                        </View>
+                      </Pressable>
+                    );
+                  }
+
+                  // CUSTOMER ORDER - FULL PAYMENT & BILLING DETAILS
+                  const rawOrder = actItem.rawOrder || (orders || []).find((o: any) => o.id === actItem.rawId) || {};
+                  const orderId = rawOrder.id || actItem.rawId || String(actItem.id || "").replace(/^order-/, "");
+                  const orderTotal = Number(rawOrder.total !== undefined ? rawOrder.total : (actItem.amount || 0));
+
+                  let paidAmt = 0;
+                  if (rawOrder.paidAmount !== undefined) paidAmt = Number(rawOrder.paidAmount || 0);
+                  else if (rawOrder.amountPaid !== undefined) paidAmt = Number(rawOrder.amountPaid || 0);
+                  else if (actItem.amountPaid !== undefined) paidAmt = Number(actItem.amountPaid || 0);
+                  else if (rawOrder.advancePaid !== undefined) paidAmt = Number(rawOrder.advancePaid || 0);
+
+                  const orderDue = Math.max(0, orderTotal - paidAmt);
+                  const paymentMode = rawOrder.paymentMethod || rawOrder.paymentMode || rawOrder.paymentType || actItem.paymentMethod || "Cash";
+                  const deliveryCharge = Number(rawOrder.deliveryCharge || rawOrder.shipmentCharge || actItem.deliveryCharge || 0);
+                  const discount = Number(rawOrder.discount || actItem.discount || 0);
+                  const subtotal = Number(rawOrder.subtotal || (orderTotal - deliveryCharge + discount));
+
+                  const isPaid = orderDue <= 0;
+                  const isPartial = !isPaid && paidAmt > 0;
+                  const paymentStatusLabel = isPaid ? "Fully Paid" : (isPartial ? "Partially Paid" : "Payment Due");
+                  const statusColor = isPaid ? (colors.accent.success || "#10B981") : (isPartial ? (colors.accent.warning || "#F59E0B") : (colors.accent.danger || "#EF4444"));
+
+                  // Find chronological payment logs linked specifically to this order
+                  const linkedOrderPayments = (payments || []).filter((p: any) => {
+                    if (p.orderId && (p.orderId === orderId || p.orderId === `order-${orderId}`)) return true;
+                    if (p.notes && orderId && p.notes.toLowerCase().includes(orderId.slice(-6).toLowerCase())) return true;
+                    return false;
+                  }).sort((a: any, b: any) => {
+                    const da = a.createdAt ? new Date(a.createdAt).getTime() : 0;
+                    const db = b.createdAt ? new Date(b.createdAt).getTime() : 0;
+                    return da - db;
+                  });
+
+                  const orderItemsList = Array.isArray(rawOrder.items) && rawOrder.items.length > 0 ? rawOrder.items : [];
+
+                  return (
+                    <View style={{
                       backgroundColor: colors.bg.primary,
-                      borderRadius: 12,
-                      padding: 12,
+                      borderRadius: 16,
+                      padding: 14,
                       marginBottom: 20,
                       borderWidth: 1,
                       borderColor: colors.border.subtle,
                       borderLeftWidth: 4,
-                      borderLeftColor: selectedActivityProfile.activityLogItem.iconColor || colors.accent.primary,
-                    }, pressed && { opacity: 0.8, transform: [{ scale: 0.99 }] }]}
-                    onPress={() => {
-                      setIsActivityProfileModalOpen(false);
-                      handlePressActivity(selectedActivityProfile.activityLogItem);
-                    }}
-                  >
-                    <View style={{ flexDirection: "row", justifyContent: "space-between", alignItems: "center", marginBottom: 6 }}>
-                      <Text style={{ fontSize: 11, fontWeight: "700", color: colors.text.secondary, textTransform: "uppercase" }}>
-                        Selected Activity Log
-                      </Text>
-                      {selectedActivityProfile.activityLogItem.type === "order" && (
-                        <View style={{ flexDirection: "row", alignItems: "center", gap: 3 }}>
-                          <Text style={{ fontSize: 10.5, fontWeight: "700", color: colors.accent.primary }}>
-                            Tap to view order ↗
+                      borderLeftColor: colors.accent.primary,
+                    }}>
+                      {/* Selected Order Header */}
+                      <View style={{ flexDirection: "row", justifyContent: "space-between", alignItems: "flex-start", marginBottom: 10, paddingBottom: 8, borderBottomWidth: 1, borderBottomColor: colors.border.subtle }}>
+                        <View style={{ flex: 1, marginRight: 8 }}>
+                          <View style={{ flexDirection: "row", alignItems: "center", gap: 6 }}>
+                            <MaterialIcons name="receipt-long" size={16} color={colors.accent.primary} />
+                            <Text style={{ fontSize: 12, fontWeight: "800", color: colors.text.primary, letterSpacing: 0.5, textTransform: "uppercase" }}>
+                              Selected Order Log
+                            </Text>
+                            {orderId ? (
+                              <View style={{ backgroundColor: `${colors.accent.primary}15`, paddingHorizontal: 6, paddingVertical: 1.5, borderRadius: 6 }}>
+                                <Text style={{ fontSize: 10.5, fontWeight: "700", color: colors.accent.primary }}>
+                                  #{orderId.slice(-6).toUpperCase()}
+                                </Text>
+                              </View>
+                            ) : null}
+                          </View>
+                          <Text style={{ fontSize: 11, color: colors.text.muted, marginTop: 3 }}>
+                            {actItem.subtitle}
                           </Text>
                         </View>
-                      )}
-                    </View>
-                    <View style={{ flexDirection: "row", justifyContent: "space-between", alignItems: "center" }}>
-                      <View style={{ flex: 1, marginRight: 8 }}>
-                        <Text selectable={true} style={{ fontSize: 14, fontWeight: "700", color: colors.text.primary }} numberOfLines={1}>
-                          {selectedActivityProfile.activityLogItem.title}
-                        </Text>
-                        <Text selectable={true} style={{ fontSize: 12, color: colors.text.secondary, marginTop: 2 }} numberOfLines={2}>
-                          {selectedActivityProfile.activityLogItem.subtitle}
-                        </Text>
+
+                        {/* Order Payment Status Pill */}
+                        <View style={{
+                          flexDirection: "row",
+                          alignItems: "center",
+                          gap: 4,
+                          backgroundColor: `${statusColor}18`,
+                          paddingHorizontal: 8,
+                          paddingVertical: 3,
+                          borderRadius: 8,
+                          borderWidth: 1,
+                          borderColor: `${statusColor}35`,
+                        }}>
+                          <MaterialIcons name={isPaid ? "check-circle" : (isPartial ? "hourglass-top" : "pending")} size={12} color={statusColor} />
+                          <Text style={{ fontSize: 11, fontWeight: "800", color: statusColor }}>
+                            {paymentStatusLabel}
+                          </Text>
+                        </View>
                       </View>
-                      <Text style={{
-                        fontSize: 15,
-                        fontWeight: "800",
-                        color: selectedActivityProfile.activityLogItem.isPositive ? (colors.accent.success || "#10B981") : colors.text.primary,
+
+                      {/* 3-Column Order Payment Financial Matrix */}
+                      <View style={{
+                        flexDirection: "row",
+                        backgroundColor: colors.bg.card,
+                        borderRadius: 12,
+                        padding: 10,
+                        marginBottom: 12,
+                        borderWidth: 1,
+                        borderColor: colors.border.subtle,
                       }}>
-                        {selectedActivityProfile.activityLogItem.isPositive ? "+" : ""}₹{Number(selectedActivityProfile.activityLogItem.amount || 0).toLocaleString("en-IN")}
-                      </Text>
+                        {/* Total Invoiced */}
+                        <View style={{ flex: 1, alignItems: "center" }}>
+                          <Text style={{ fontSize: 10, fontWeight: "700", color: colors.text.muted, textTransform: "uppercase" }}>
+                            Total Invoiced
+                          </Text>
+                          <Text style={{ fontSize: 15, fontWeight: "800", color: colors.text.primary, marginTop: 2 }}>
+                            ₹{orderTotal.toLocaleString("en-IN")}
+                          </Text>
+                        </View>
+
+                        <View style={{ width: 1, height: "75%", alignSelf: "center", backgroundColor: colors.border.subtle }} />
+
+                        {/* Paid Amount */}
+                        <View style={{ flex: 1, alignItems: "center" }}>
+                          <Text style={{ fontSize: 10, fontWeight: "700", color: colors.accent.success, textTransform: "uppercase" }}>
+                            Amount Paid
+                          </Text>
+                          <Text style={{ fontSize: 15, fontWeight: "800", color: colors.accent.success || "#10B981", marginTop: 2 }}>
+                            ₹{paidAmt.toLocaleString("en-IN")}
+                          </Text>
+                        </View>
+
+                        <View style={{ width: 1, height: "75%", alignSelf: "center", backgroundColor: colors.border.subtle }} />
+
+                        {/* Balance Due */}
+                        <View style={{ flex: 1, alignItems: "center" }}>
+                          <Text style={{ fontSize: 10, fontWeight: "700", color: orderDue > 0 ? (colors.accent.danger || "#EF4444") : colors.text.muted, textTransform: "uppercase" }}>
+                            Balance Due
+                          </Text>
+                          <Text style={{ fontSize: 15, fontWeight: "800", color: orderDue > 0 ? (colors.accent.danger || "#EF4444") : (colors.accent.success || "#10B981"), marginTop: 2 }}>
+                            ₹{orderDue.toLocaleString("en-IN")}
+                          </Text>
+                        </View>
+                      </View>
+
+                      {/* Detailed Billing & Charges Breakdown */}
+                      <View style={{
+                        backgroundColor: colors.bg.card,
+                        borderRadius: 12,
+                        padding: 10,
+                        marginBottom: 12,
+                        borderWidth: 1,
+                        borderColor: colors.border.subtle,
+                        gap: 6,
+                      }}>
+                        <Text style={{ fontSize: 10.5, fontWeight: "800", color: colors.text.secondary, textTransform: "uppercase", marginBottom: 2 }}>
+                          Billing Breakdown & Payment Mode
+                        </Text>
+
+                        <View style={{ flexDirection: "row", justifyContent: "space-between", alignItems: "center" }}>
+                          <Text style={{ fontSize: 12, color: colors.text.secondary }}>Base Products / Subtotal</Text>
+                          <Text style={{ fontSize: 12, fontWeight: "700", color: colors.text.primary }}>
+                            ₹{subtotal.toLocaleString("en-IN")}
+                          </Text>
+                        </View>
+
+                        {deliveryCharge > 0 && (
+                          <View style={{ flexDirection: "row", justifyContent: "space-between", alignItems: "center" }}>
+                            <Text style={{ fontSize: 12, color: colors.text.secondary }}>Transport / Delivery Charge</Text>
+                            <Text style={{ fontSize: 12, fontWeight: "700", color: colors.accent.primary }}>
+                              + ₹{deliveryCharge.toLocaleString("en-IN")}
+                            </Text>
+                          </View>
+                        )}
+
+                        {discount > 0 && (
+                          <View style={{ flexDirection: "row", justifyContent: "space-between", alignItems: "center" }}>
+                            <Text style={{ fontSize: 12, color: colors.accent.danger }}>Discount Applied</Text>
+                            <Text style={{ fontSize: 12, fontWeight: "700", color: colors.accent.danger }}>
+                              - ₹{discount.toLocaleString("en-IN")}
+                            </Text>
+                          </View>
+                        )}
+
+                        <View style={{ height: 1, backgroundColor: colors.border.subtle, marginVertical: 2 }} />
+
+                        <View style={{ flexDirection: "row", justifyContent: "space-between", alignItems: "center" }}>
+                          <View style={{ flexDirection: "row", alignItems: "center", gap: 5 }}>
+                            <MaterialIcons name="payment" size={14} color={colors.accent.primary} />
+                            <Text style={{ fontSize: 12, color: colors.text.secondary }}>Payment Method</Text>
+                          </View>
+                          <View style={{ backgroundColor: `${colors.accent.primary}15`, paddingHorizontal: 7, paddingVertical: 2, borderRadius: 6 }}>
+                            <Text style={{ fontSize: 11, fontWeight: "800", color: colors.accent.primary }}>
+                              {paymentMode}
+                            </Text>
+                          </View>
+                        </View>
+                      </View>
+
+                      {/* Order Items Summary */}
+                      {orderItemsList.length > 0 && (
+                        <View style={{
+                          backgroundColor: colors.bg.card,
+                          borderRadius: 12,
+                          padding: 10,
+                          marginBottom: 12,
+                          borderWidth: 1,
+                          borderColor: colors.border.subtle,
+                        }}>
+                          <Text style={{ fontSize: 10.5, fontWeight: "800", color: colors.text.secondary, textTransform: "uppercase", marginBottom: 6 }}>
+                            Ordered Items ({orderItemsList.length})
+                          </Text>
+                          {orderItemsList.map((itm: any, idx: number) => {
+                            const itmName = itm.itemName || itm.name || "Item";
+                            const itmQty = Number(itm.quantity !== undefined ? itm.quantity : (itm.qty || 0));
+                            const itmRate = Number(itm.rate !== undefined ? itm.rate : (itm.price || 0));
+                            const itmTotal = itm.amount !== undefined ? Number(itm.amount) : (itmQty * itmRate);
+
+                            return (
+                              <View key={idx} style={{ flexDirection: "row", justifyContent: "space-between", alignItems: "center", paddingVertical: 3 }}>
+                                <Text style={{ fontSize: 11.5, color: colors.text.primary, fontWeight: "600", flex: 1 }} numberOfLines={1}>
+                                  {itmName} <Text style={{ color: colors.text.muted, fontWeight: "500" }}>({itmQty.toLocaleString("en-IN")} pcs @ ₹{itmRate})</Text>
+                                </Text>
+                                <Text style={{ fontSize: 11.5, fontWeight: "700", color: colors.text.primary }}>
+                                  ₹{itmTotal.toLocaleString("en-IN")}
+                                </Text>
+                              </View>
+                            );
+                          })}
+                        </View>
+                      )}
+
+                      {/* Installment Receipts / Linked Payments History */}
+                      <View style={{
+                        backgroundColor: colors.bg.card,
+                        borderRadius: 12,
+                        padding: 10,
+                        marginBottom: 12,
+                        borderWidth: 1,
+                        borderColor: colors.border.subtle,
+                      }}>
+                        <View style={{ flexDirection: "row", justifyContent: "space-between", alignItems: "center", marginBottom: 6 }}>
+                          <View style={{ flexDirection: "row", alignItems: "center", gap: 4 }}>
+                            <MaterialIcons name="history" size={14} color={colors.accent.success || "#10B981"} />
+                            <Text style={{ fontSize: 10.5, fontWeight: "800", color: colors.text.secondary, textTransform: "uppercase" }}>
+                              Payment Receipts History
+                            </Text>
+                          </View>
+                          <Text style={{ fontSize: 10.5, fontWeight: "700", color: colors.accent.success || "#10B981" }}>
+                            Total Paid: ₹{paidAmt.toLocaleString("en-IN")}
+                          </Text>
+                        </View>
+
+                        {linkedOrderPayments.length > 0 ? (
+                          linkedOrderPayments.map((p: any, idx: number) => {
+                            const pDate = p.createdAt ? (p.createdAt instanceof Date ? p.createdAt : (p.createdAt.toDate ? p.createdAt.toDate() : new Date(p.createdAt))) : new Date();
+                            const pAmt = Number(p.amountReceived || p.amount || 0);
+                            const pMethod = p.paymentMethod || p.paymentMode || "Cash";
+
+                            return (
+                              <View key={p.id || idx} style={{
+                                flexDirection: "row",
+                                justifyContent: "space-between",
+                                alignItems: "center",
+                                paddingVertical: 5,
+                                borderTopWidth: idx > 0 ? 1 : 0,
+                                borderTopColor: colors.border.subtle,
+                              }}>
+                                <View style={{ flex: 1, marginRight: 8 }}>
+                                  <Text style={{ fontSize: 11.5, fontWeight: "700", color: colors.text.primary }}>
+                                    Payment #{idx + 1} ({pMethod})
+                                  </Text>
+                                  <Text style={{ fontSize: 10, color: colors.text.muted }}>
+                                    {pDate.toLocaleDateString("en-IN", { day: "2-digit", month: "short", year: "numeric" })}{p.notes ? ` • ${p.notes}` : ""}
+                                  </Text>
+                                </View>
+                                <Text style={{ fontSize: 12.5, fontWeight: "800", color: colors.accent.success || "#10B981" }}>
+                                  + ₹{pAmt.toLocaleString("en-IN")}
+                                </Text>
+                              </View>
+                            );
+                          })
+                        ) : paidAmt > 0 ? (
+                          <View style={{ flexDirection: "row", justifyContent: "space-between", alignItems: "center", paddingVertical: 4 }}>
+                            <View>
+                              <Text style={{ fontSize: 11.5, fontWeight: "700", color: colors.text.primary }}>
+                                Advance / Invoiced Payment ({paymentMode})
+                              </Text>
+                              <Text style={{ fontSize: 10, color: colors.text.muted }}>
+                                Recorded at time of order creation
+                              </Text>
+                            </View>
+                            <Text style={{ fontSize: 12.5, fontWeight: "800", color: colors.accent.success || "#10B981" }}>
+                              + ₹{paidAmt.toLocaleString("en-IN")}
+                            </Text>
+                          </View>
+                        ) : (
+                          <View style={{ paddingVertical: 6, alignItems: "center" }}>
+                            <Text style={{ fontSize: 11, color: colors.text.muted, fontStyle: "italic" }}>
+                              No payments recorded yet for this order.
+                            </Text>
+                          </View>
+                        )}
+                      </View>
+
+                      {/* Action Buttons for this Order */}
+                      <View style={{ flexDirection: "row", gap: 8 }}>
+                        {orderDue > 0 && (
+                          <Pressable
+                            style={({ pressed }) => [{
+                              flex: 1,
+                              flexDirection: "row",
+                              alignItems: "center",
+                              justifyContent: "center",
+                              gap: 5,
+                              backgroundColor: `${colors.accent.success || "#10B981"}18`,
+                              borderColor: `${colors.accent.success || "#10B981"}45`,
+                              borderWidth: 1,
+                              paddingVertical: 9,
+                              borderRadius: 10,
+                            }, pressed && { opacity: 0.8, transform: [{ scale: 0.98 }] }]}
+                            onPress={() => {
+                              setIsActivityProfileModalOpen(false);
+                              const cust = selectedActivityProfile.matchedCustomer || (customers || []).find((c: any) => c.id === actItem.customerId) || {
+                                id: actItem.customerId || rawOrder.customerId,
+                                name: actItem.title,
+                                phone: selectedActivityProfile.phone,
+                              };
+                              setSelectedCustomer(cust);
+                              setPaymentAmount(String(orderDue));
+                              setPaymentDiscount("");
+                              setPaymentNotes(orderId ? `Payment for Order #${orderId.slice(-6).toUpperCase()}` : "");
+                              setPaymentStep(2);
+                              setIsPaymentModalOpen(true);
+                            }}
+                          >
+                            <MaterialIcons name="payments" size={15} color={colors.accent.success || "#10B981"} />
+                            <Text style={{ fontSize: 12, fontWeight: "800", color: colors.accent.success || "#10B981" }}>
+                              + Collect ₹{orderDue.toLocaleString("en-IN")}
+                            </Text>
+                          </Pressable>
+                        )}
+
+                        <Pressable
+                          style={({ pressed }) => [{
+                            flex: 1,
+                            flexDirection: "row",
+                            alignItems: "center",
+                            justifyContent: "center",
+                            gap: 5,
+                            backgroundColor: colors.accent.primary + "15",
+                            borderColor: colors.accent.primary + "35",
+                            borderWidth: 1,
+                            paddingVertical: 9,
+                            borderRadius: 10,
+                          }, pressed && { opacity: 0.8, transform: [{ scale: 0.98 }] }]}
+                          onPress={() => {
+                            setIsActivityProfileModalOpen(false);
+                            router.push({
+                              pathname: "/orders" as any,
+                              params: { orderId },
+                            });
+                          }}
+                        >
+                          <MaterialIcons name="receipt" size={15} color={colors.accent.primary} />
+                          <Text style={{ fontSize: 12, fontWeight: "800", color: colors.accent.primary }}>
+                            View Order Invoice ↗
+                          </Text>
+                        </Pressable>
+                      </View>
                     </View>
-                  </Pressable>
-                )}
+                  );
+                })()}
 
                 {/* Action Buttons */}
                 <View style={{ gap: 10, marginTop: 4 }}>

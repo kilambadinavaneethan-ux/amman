@@ -73,6 +73,7 @@ export default function Customers() {
   const [customFormMarking, setCustomFormMarking] = useState("");
 
   const [searchTerm, setSearchTerm] = useState("");
+  const [debouncedSearch, setDebouncedSearch] = useState("");
   const [typeFilter, setTypeFilter] = useState<"All" | "customer" | "worker" | "supplier" | "delivery_partner">("All");
   const [balanceFilter, setBalanceFilter] = useState("All"); // "All" | "Pending" | "Zero"
   const [collectorFilter, setCollectorFilter] = useState("All"); // "All" | "Unassigned" | "<collector_id>"
@@ -80,6 +81,14 @@ export default function Customers() {
   const [isSaving, setIsSaving] = useState(false);
   const [contactsVisible, setContactsVisible] = useState(false);
   const [showAddForm, setShowAddForm] = useState(false);
+
+  // Debounce search term to avoid laggy typing
+  useEffect(() => {
+    const timer = setTimeout(() => {
+      setDebouncedSearch(searchTerm);
+    }, 150);
+    return () => clearTimeout(timer);
+  }, [searchTerm]);
 
   // Due Date Modal states
   const [isDueModalOpen, setIsDueModalOpen] = useState(false);
@@ -630,13 +639,14 @@ setContactsVisible(true);
         return false;
       }
 
-      // 1. Search filter
+      // 1. Search filter (debounced)
+      const q = debouncedSearch.trim().toLowerCase();
       const matchesSearch =
-        !searchTerm ||
-        (customer.name || "").toLowerCase().includes(searchTerm.toLowerCase()) ||
-        (customer.phone || "").toLowerCase().includes(searchTerm.toLowerCase()) ||
-        (customer.address || "").toLowerCase().includes(searchTerm.toLowerCase()) ||
-        (customer.profileMarkings && customer.profileMarkings.some((m: string) => m.toLowerCase().includes(searchTerm.toLowerCase())));
+        !q ||
+        (customer.name || "").toLowerCase().includes(q) ||
+        (customer.phone || "").toLowerCase().includes(q) ||
+        (customer.address || "").toLowerCase().includes(q) ||
+        (customer.profileMarkings && customer.profileMarkings.some((m: string) => m.toLowerCase().includes(q)));
 
       // 2. Balance & Status filter
       const pendingBalance = Number(customer.displayBalance || 0);
@@ -692,7 +702,17 @@ setContactsVisible(true);
       // Tier 4 (Balance 0): Alphabetical order by name
       return (a.name || "").localeCompare(b.name || "");
     });
-  }, [unifiedCustomers, typeFilter, searchTerm, balanceFilter, collectorFilter, markingFilter]);
+  }, [unifiedCustomers, typeFilter, debouncedSearch, balanceFilter, collectorFilter, markingFilter]);
+
+  // Windowed list rendering for smooth 60fps performance
+  const [displayLimit, setDisplayLimit] = useState(35);
+  useEffect(() => {
+    setDisplayLimit(35);
+  }, [debouncedSearch, typeFilter, balanceFilter, collectorFilter, markingFilter]);
+
+  const displayedCustomers = useMemo(() => {
+    return (filteredCustomers || []).slice(0, displayLimit);
+  }, [filteredCustomers, displayLimit]);
 
   return (
     <AnimatedPage>
@@ -1190,7 +1210,7 @@ setContactsVisible(true);
               <Text style={styles.emptyText}>No customer matches found for &quot;{searchTerm}&quot;.</Text>
             </View>
           ) : (
-            filteredCustomers.map((customer: any) => {
+            displayedCustomers.map((customer: any) => {
               const avatarColor = getAvatarColor(customer.name || "Client");
               const initial = (customer.name || "C").substring(0, 1).toUpperCase();
 
@@ -1377,6 +1397,34 @@ setContactsVisible(true);
                 </View>
               );
             })
+          )}
+
+          {/* Incremental Load More Windowing */}
+          {filteredCustomers.length > displayLimit && (
+            <Pressable
+              style={({ pressed }) => [
+                {
+                  flexDirection: "row",
+                  alignItems: "center",
+                  justifyContent: "center",
+                  backgroundColor: colors.bg.card,
+                  borderColor: colors.border.subtle,
+                  borderWidth: 1,
+                  borderRadius: 12,
+                  paddingVertical: 12,
+                  marginTop: 10,
+                  marginBottom: 16,
+                  gap: 6,
+                },
+                pressed && { opacity: 0.75 },
+              ]}
+              onPress={() => setDisplayLimit((prev) => prev + 35)}
+            >
+              <MaterialIcons name="expand-more" size={20} color={colors.accent.primary} />
+              <Text style={{ fontSize: 13, fontWeight: "700", color: colors.accent.primary }}>
+                Load More Clients ({displayedCustomers.length} of {filteredCustomers.length})
+              </Text>
+            </Pressable>
           )}
         </View>
       </ScrollView>

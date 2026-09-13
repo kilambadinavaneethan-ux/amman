@@ -1,4 +1,4 @@
-import { useContext, useMemo } from "react";
+import React, { useContext, useMemo } from "react";
 import { View, Text, StyleSheet, Image, Pressable } from "react-native";
 import { useRouter, usePathname } from "expo-router";
 import { MaterialIcons } from "@expo/vector-icons";
@@ -201,4 +201,5 @@ const getStyles = (theme, insets, showBanner) => StyleSheet.create({
   },
 });
 
-export default Navbar;
+export default React.memo(Navbar);
+

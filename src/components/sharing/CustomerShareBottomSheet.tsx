@@ -57,6 +57,7 @@ export function CustomerShareBottomSheet({
   const [includeLedger, setIncludeLedger] = useState(true);
   const [salutation, setSalutation] = useState<'None' | 'Mr.' | 'Mrs.' | 'Ms.' | 'M/s' | 'Dr.'>('None');
   const [useAvargal, setUseAvargal] = useState<boolean>(false);
+  const [editableCustomerName, setEditableCustomerName] = useState<string>('');
 
   const viewShotRef = useRef<View>(null);
 
@@ -69,6 +70,9 @@ export function CustomerShareBottomSheet({
       loadSettings();
 
       const origName = customerData?.customer?.name || '';
+      const clean = origName.replace(/^(Mr\.|Mrs\.|Ms\.|M\/s|Dr\.)\s+/i, '').replace(/\s+அவர்கள்$/i, '').trim();
+      setEditableCustomerName(clean);
+
       if (/^Mr\.\s+/i.test(origName)) setSalutation('Mr.');
       else if (/^Mrs\.\s+/i.test(origName)) setSalutation('Mrs.');
       else if (/^Ms\.\s+/i.test(origName)) setSalutation('Ms.');
@@ -208,7 +212,9 @@ export function CustomerShareBottomSheet({
     const totalPaid = sortedLedger.reduce((sum, l) => sum + (l.paid || 0), 0);
 
     const origName = customerData.customer?.name || '';
-    let cleanName = origName.replace(/^(Mr\.|Mrs\.|Ms\.|M\/s|Dr\.)\s+/i, '').replace(/\s+அவர்கள்$/i, '').trim();
+    const origClean = origName.replace(/^(Mr\.|Mrs\.|Ms\.|M\/s|Dr\.)\s+/i, '').replace(/\s+அவர்கள்$/i, '').trim();
+    const effectiveBaseName = editableCustomerName !== undefined && editableCustomerName !== null ? editableCustomerName : origClean;
+    const cleanName = effectiveBaseName.trim() || origClean || 'Customer';
 
     let formattedCustomerName = cleanName;
     if (salutation && salutation !== 'None') {
@@ -240,7 +246,14 @@ export function CustomerShareBottomSheet({
         includeLedger,
       },
     };
-  }, [customerData, dateFilter, customDays, orderCountFilter, customOrderCount, sortOrder, includeProfileInfo, includeDueDates, includeSummary, includeLedger, salutation, useAvargal]);
+  }, [customerData, dateFilter, customDays, orderCountFilter, customOrderCount, sortOrder, includeProfileInfo, includeDueDates, includeSummary, includeLedger, salutation, useAvargal, editableCustomerName]);
+
+  const origCleanName = useMemo(() => {
+    const orig = customerData?.customer?.name || '';
+    return orig.replace(/^(Mr\.|Mrs\.|Ms\.|M\/s|Dr\.)\s+/i, '').replace(/\s+அவர்கள்$/i, '').trim();
+  }, [customerData]);
+
+  const isNameModified = editableCustomerName.trim() !== origCleanName;
 
   useEffect(() => {
     if (visible && settings) {
@@ -273,7 +286,7 @@ export function CustomerShareBottomSheet({
       if (await Sharing.isAvailableAsync()) {
         await Sharing.shareAsync(uri, {
           mimeType: 'image/png',
-          dialogTitle: `Statement - ${customerData.customer.name}`,
+          dialogTitle: `Statement - ${processedData.customer.name}`,
         });
       } else {
         Alert.alert('Image Saved', `Statement image saved to:\n${uri}`);
@@ -572,6 +585,79 @@ export function CustomerShareBottomSheet({
                     </Pressable>
                   ))}
                 </ScrollView>
+              </View>
+
+              {/* Customer Name Changeable Bar */}
+              <View style={{ marginBottom: 8 }}>
+                <View style={{ flexDirection: 'row', alignItems: 'center', justifyContent: 'space-between', marginBottom: 4 }}>
+                  <View style={{ flexDirection: 'row', alignItems: 'center', gap: 4 }}>
+                    <MaterialIcons name="badge" size={13} color={accentColor} />
+                    <Text style={{ fontSize: 10, fontWeight: '800', color: subTextColor }}>
+                      CUSTOMER NAME (STATEMENT DISPLAY):
+                    </Text>
+                  </View>
+                  {isNameModified ? (
+                    <Pressable
+                      onPress={() => setEditableCustomerName(origCleanName)}
+                      style={{
+                        flexDirection: 'row',
+                        alignItems: 'center',
+                        gap: 3,
+                        paddingHorizontal: 6,
+                        paddingVertical: 2,
+                        borderRadius: 6,
+                        backgroundColor: accentColor + '18',
+                      }}
+                      hitSlop={6}
+                    >
+                      <MaterialIcons name="restore" size={12} color={accentColor} />
+                      <Text style={{ fontSize: 10, fontWeight: '700', color: accentColor }}>Reset Original</Text>
+                    </Pressable>
+                  ) : null}
+                </View>
+                <View
+                  style={{
+                    flexDirection: 'row',
+                    alignItems: 'center',
+                    borderWidth: 1,
+                    borderColor: isNameModified ? accentColor : borderColor,
+                    borderRadius: 10,
+                    backgroundColor: isDark ? '#0F172A' : '#F8FAFC',
+                    paddingHorizontal: 10,
+                    height: 38,
+                  }}
+                >
+                  <MaterialIcons
+                    name="edit"
+                    size={16}
+                    color={isNameModified ? accentColor : subTextColor}
+                    style={{ marginRight: 6 }}
+                  />
+                  <TextInput
+                    value={editableCustomerName}
+                    onChangeText={setEditableCustomerName}
+                    placeholder="Enter customer name for statement"
+                    placeholderTextColor={subTextColor}
+                    style={{
+                      flex: 1,
+                      color: textColor,
+                      fontSize: 13,
+                      fontWeight: '700',
+                      paddingVertical: 0,
+                    }}
+                    returnKeyType="done"
+                    selectTextOnFocus
+                  />
+                  {editableCustomerName ? (
+                    <Pressable
+                      onPress={() => setEditableCustomerName('')}
+                      hitSlop={8}
+                      style={{ padding: 4 }}
+                    >
+                      <MaterialIcons name="close" size={16} color={subTextColor} />
+                    </Pressable>
+                  ) : null}
+                </View>
               </View>
 
               {/* Client Title / Salutation (Mr. / Mrs.) & Suffix (அவர்கள்) Bar */}

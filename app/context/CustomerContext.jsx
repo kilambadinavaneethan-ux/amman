@@ -8,7 +8,7 @@ import {
     updateDoc,
     writeBatch,
 } from "firebase/firestore";
-import { createContext, useEffect, useState, useMemo, useCallback } from "react";
+import { createContext, useEffect, useState, useMemo, useCallback, useRef } from "react";
 import { db } from "../../src/config/firebase";
 import { getDocsOfflineSafe } from "../../src/utils/offlineHelpers";
 
@@ -16,6 +16,10 @@ export const CustomerContext = createContext(null);
 
 export function CustomerProvider({ children }) {
   const [customers, setCustomers] = useState([]);
+  const customersRef = useRef(customers);
+  useEffect(() => {
+    customersRef.current = customers;
+  }, [customers]);
 
   useEffect(() => {
     const customersCollection = collection(db, "customers");
@@ -61,7 +65,7 @@ export function CustomerProvider({ children }) {
     const trimmedPhone = (customer.phone || "").trim();
     if (trimmedPhone) {
       const p1 = trimmedPhone.replace(/[^\d]/g, "");
-      const duplicate = customers.find((c) => {
+      const duplicate = (customersRef.current || []).find((c) => {
         const p2 = (c.phone || "").replace(/[^\d]/g, "");
         if (!p1 || !p2) return false;
         if (p1 === p2) return true;
@@ -92,7 +96,7 @@ export function CustomerProvider({ children }) {
     } catch (error) {
       return false;
     }
-  }, [customers]);
+  }, []);
 
   const updateCustomerBalance = useCallback(async (id, newBalance) => {
     setCustomers((prevCustomers) =>
