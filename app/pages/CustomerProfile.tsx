@@ -1,4 +1,4 @@
-import React, { useContext, useState, useMemo, useCallback } from "react";
+import React, { useContext, useState, useMemo, useCallback, useEffect, useRef } from "react";
 import {
   View,
   Text,
@@ -13,8 +13,9 @@ import {
   Modal,
   KeyboardAvoidingView,
   Platform,
+  BackHandler,
 } from "react-native";
-import { useLocalSearchParams, useRouter } from "expo-router";
+import { useLocalSearchParams, useRouter, useNavigation } from "expo-router";
 import { MaterialIcons } from "@expo/vector-icons";
 import { CustomerContext } from "../context/CustomerContext";
 import { ItemContext } from "../context/ItemContext";
@@ -35,6 +36,7 @@ import { CustomerShareBottomSheet } from "../../src/components/sharing/CustomerS
 import { adaptToTransactionData } from "../../src/utils/transactionAdapter";
 import { TransactionData, CustomerShareData } from "../../src/types/sharing";
 import { PRESET_MARKINGS, getMarkingConfig, normalizeMarkings, useCustomMarkings } from "../../src/utils/markingUtils";
+import { normalizeDateValue } from "../../src/config/firebase";
 
 const PAYMENT_METHODS = ["Cash", "UPI", "Bank Transfer", "Cheque", "Card", "Online", "Wallet", "Other"];
 
@@ -43,6 +45,7 @@ export default function CustomerProfile() {
   const { colors, spacing, radius, shadows } = theme;
   const styles = useMemo(() => getStyles(theme), [theme]);
   const router = useRouter();
+  const navigation = useNavigation();
   const { id } = useLocalSearchParams();
 
   const { customers, updateCustomerDueDates, updateCustomerDueAlerts, updateCustomerCollector, toggleFavoriteCustomer, updateCustomerDetails } = useContext(CustomerContext) as any;
@@ -85,6 +88,235 @@ export default function CustomerProfile() {
   const [shareBottomSheetVisible, setShareBottomSheetVisible] = useState(false);
   const [sharingTransactionData, setSharingTransactionData] = useState<TransactionData | null>(null);
   const [customerShareModalVisible, setCustomerShareModalVisible] = useState(false);
+
+  // Customer View Lock Mode State
+  const [isLocked, setIsLocked] = useState(false);
+  const [showUnlockModal, setShowUnlockModal] = useState(false);
+  const [unlockPin, setUnlockPin] = useState("");
+  const [pinError, setPinError] = useState("");
+  const [holdProgress, setHoldProgress] = useState(0);
+  const holdIntervalRef = useRef<any>(null);
+
+  // Block hardware back button on Android when screen is locked
+  useEffect(() => {
+    if (!isLocked) return;
+
+    const onBackPress = () => {
+      Alert.alert(
+        "🔒 Screen Locked",
+        "Customer View Mode is active. Back navigation is disabled.",
+        [
+          { text: "Keep Locked", style: "cancel" },
+        ]
+      );
+      return true;
+    };
+
+    const sub = BackHandler.addEventListener("hardwareBackPress", onBackPress);
+    return () => sub.remove();
+  }, [isLocked]);
+
+  // Block Expo Router / React Navigation pop & swipe-back gestures when locked
+  useEffect(() => {
+    if (!isLocked) return;
+
+    const unsubscribe = navigation.addListener("beforeRemove", (e: any) => {
+      e.preventDefault();
+      Alert.alert(
+        "🔒 Screen Locked",
+        "Customer View Mode is active. Back navigation is disabled.",
+        [
+          { text: "Keep Locked", style: "cancel" },
+        ]
+      );
+    });
+
+    return unsubscribe;
+  }, [isLocked, navigation]);
+
+  const handleLockScreen = () => {
+    setIsLocked(true);
+    Alert.alert(
+      "🔒 Customer View Mode Active",
+      "Screen is now locked. Back navigation and editing are disabled so you can safely show your phone to the customer.\n\nTap 'Unlock' when you get your phone back."
+    );
+  };
+
+  const handleCompleteUnlock = () => {
+    if (holdIntervalRef.current) {
+      clearInterval(holdIntervalRef.current);
+      holdIntervalRef.current = null;
+    }
+    setHoldProgress(0);
+    setIsLocked(false);
+    setShowUnlockModal(false);
+    setUnlockPin("");
+    setPinError("");
+  };
+
+  const startHoldUnlock = () => {
+    setHoldProgress(0);
+    if (holdIntervalRef.current) clearInterval(holdIntervalRef.current);
+
+    const startTime = Date.now();
+    const duration = 1500; // 1.5 seconds
+
+    holdIntervalRef.current = setInterval(() => {
+      const elapsed = Date.now() - startTime;
+      const pct = Math.min(100, (elapsed / duration) * 100);
+      setHoldProgress(pct);
+
+      if (elapsed >= duration) {
+        clearInterval(holdIntervalRef.current);
+        holdIntervalRef.current = null;
+        handleCompleteUnlock();
+      }
+    }, 30);
+  };
+
+  const cancelHoldUnlock = () => {
+    if (holdIntervalRef.current) {
+      clearInterval(holdIntervalRef.current);
+      holdIntervalRef.current = null;
+    }
+    setHoldProgress(0);
+  };
+
+  const handlePinUnlock = () => {
+    if (unlockPin === "1234" || unlockPin === "0000" || unlockPin === "") {
+      handleCompleteUnlock();
+    } else {
+      setPinError("Incorrect PIN (Default is 1234 or 0000)");
+    }
+  };
+
+  const renderUnlockModal = () => {
+    return (
+      <Modal
+        visible={showUnlockModal}
+        transparent={true}
+        animationType="fade"
+        onRequestClose={() => setShowUnlockModal(false)}
+      >
+        <KeyboardAvoidingView
+          behavior={Platform.OS === "ios" ? "padding" : "height"}
+          style={styles.modalBackdrop}
+        >
+          <Pressable style={styles.modalOverlay} onPress={() => setShowUnlockModal(false)} />
+          <View style={[styles.modalContent, { maxWidth: 420, padding: 22 }]}>
+            <View style={{ alignItems: "center", marginBottom: 16 }}>
+              <View style={{
+                width: 56,
+                height: 56,
+                borderRadius: 28,
+                backgroundColor: colors.accent.primary + "18",
+                alignItems: "center",
+                justifyContent: "center",
+                marginBottom: 10,
+              }}>
+                <MaterialIcons name="lock" size={30} color={colors.accent.primary} />
+              </View>
+              <Text style={{ fontSize: 18, fontWeight: "800", color: colors.text.primary, textAlign: "center" }}>
+                Unlock Customer View
+              </Text>
+              <Text style={{ fontSize: 12, color: colors.text.muted, textAlign: "center", marginTop: 4 }}>
+                Hold the button below for 1.5s or enter PIN to exit locked view.
+              </Text>
+            </View>
+
+            {/* Option 1: Hold to Unlock Button */}
+            <View style={{ marginBottom: 18 }}>
+              <Pressable
+                onPressIn={startHoldUnlock}
+                onPressOut={cancelHoldUnlock}
+                style={{
+                  backgroundColor: colors.accent.primary,
+                  height: 50,
+                  borderRadius: 12,
+                  justifyContent: "center",
+                  alignItems: "center",
+                  position: "relative",
+                  overflow: "hidden",
+                }}
+              >
+                <View
+                  style={{
+                    position: "absolute",
+                    left: 0,
+                    top: 0,
+                    bottom: 0,
+                    width: `${holdProgress}%`,
+                    backgroundColor: colors.accent.success,
+                  }}
+                />
+                <View style={{ flexDirection: "row", alignItems: "center", gap: 8, zIndex: 1 }}>
+                  <MaterialIcons name="touch-app" size={20} color="#FFFFFF" />
+                  <Text style={{ fontSize: 14, fontWeight: "800", color: "#FFFFFF" }}>
+                    {holdProgress > 0 ? `Holding... ${Math.min(100, Math.round(holdProgress))}%` : "Press & Hold (1.5s) to Unlock"}
+                  </Text>
+                </View>
+              </Pressable>
+              <Text style={{ fontSize: 10, color: colors.text.muted, textAlign: "center", marginTop: 5 }}>
+                Press & keep holding until green bar completes
+              </Text>
+            </View>
+
+            {/* Divider */}
+            <View style={{ flexDirection: "row", alignItems: "center", gap: 10, marginBottom: 16 }}>
+              <View style={{ flex: 1, height: 1, backgroundColor: colors.border.subtle }} />
+              <Text style={{ fontSize: 11, fontWeight: "700", color: colors.text.muted }}>OR ENTER PIN</Text>
+              <View style={{ flex: 1, height: 1, backgroundColor: colors.border.subtle }} />
+            </View>
+
+            {/* Option 2: Quick PIN */}
+            <View style={{ marginBottom: 16 }}>
+              <TextInput
+                style={[
+                  styles.input,
+                  { textAlign: "center", letterSpacing: 8, fontSize: 20, fontWeight: "800", height: 48 },
+                  !!pinError && { borderColor: colors.accent.danger }
+                ]}
+                value={unlockPin}
+                onChangeText={(t) => {
+                  setUnlockPin(t);
+                  setPinError("");
+                }}
+                keyboardType="numeric"
+                maxLength={6}
+                secureTextEntry={true}
+                placeholder="••••"
+                placeholderTextColor={colors.text.muted}
+              />
+              {!!pinError && (
+                <Text style={{ fontSize: 11, color: colors.accent.danger, textAlign: "center", marginTop: 4 }}>
+                  {pinError}
+                </Text>
+              )}
+              <Text style={{ fontSize: 10.5, color: colors.text.muted, textAlign: "center", marginTop: 4 }}>
+                Default PIN is 1234 or 0000
+              </Text>
+              <Pressable
+                style={[styles.saveBtn, { marginTop: 10, backgroundColor: colors.accent.primary, height: 44, justifyContent: "center", alignItems: "center" }]}
+                onPress={handlePinUnlock}
+              >
+                <Text style={styles.saveBtnText}>Unlock with PIN</Text>
+              </Pressable>
+            </View>
+
+            {/* Cancel Button */}
+            <Pressable
+              style={{ paddingVertical: 10, alignItems: "center" }}
+              onPress={() => setShowUnlockModal(false)}
+            >
+              <Text style={{ fontSize: 13, fontWeight: "700", color: colors.text.muted }}>
+                Keep Screen Locked
+              </Text>
+            </Pressable>
+          </View>
+        </KeyboardAvoidingView>
+      </Modal>
+    );
+  };
 
   const { allPresets: allMarkingPresets, addCustomMarking, removeCustomMarking } = useCustomMarkings(customers);
 
@@ -240,15 +472,12 @@ export default function CustomerProfile() {
 
     customerOrders.forEach((order: any) => {
       const isCancelled = order.status === "cancelled";
-      const orderDateObj = order.orderedDate
-        ? (order.orderedDate instanceof Date ? order.orderedDate : new Date(order.orderedDate))
-        : (order.createdAt instanceof Date ? order.createdAt : new Date(order.createdAt));
+      const orderDateObj = normalizeDateValue(order.orderedDate || order.createdAt);
       let deliveryDateObj = null;
       if (order.deliveryDate) {
-        deliveryDateObj = order.deliveryDate instanceof Date ? order.deliveryDate : new Date(order.deliveryDate);
+        deliveryDateObj = normalizeDateValue(order.deliveryDate);
       } else if (order.status === "completed") {
-        const upDate = order.updatedAt || order.createdAt;
-        deliveryDateObj = upDate instanceof Date ? upDate : (upDate?.toDate ? upDate.toDate() : new Date(upDate));
+        deliveryDateObj = normalizeDateValue(order.updatedAt || order.createdAt);
       }
 
       // Look up delivery partner name in O(1) time
@@ -264,6 +493,13 @@ export default function CustomerProfile() {
 
       // 1. Original Order entry
       const isCompleted = order.status === "completed";
+      const orderPaid = Number(order.paidAmount || 0);
+      const orderTotal = Number(order.total || 0);
+      const orderExcess = Math.max(0, orderPaid - orderTotal);
+      const balChange = isCompleted
+        ? (orderExcess > 0 ? -orderExcess : Number(order.balanceDue || 0))
+        : (orderExcess > 0 ? -orderExcess : 0);
+
       entries.push({
         id: order.id,
         date: orderDateObj,
@@ -273,7 +509,7 @@ export default function CustomerProfile() {
         description: isCancelled ? `[CANCELLED] ${itemDescription}` : itemDescription,
         orderAmount: order.total || 0,
         paymentReceived: order.paidAmount || 0,
-        balanceChange: isCompleted ? (order.balanceDue || 0) : 0,
+        balanceChange: balChange,
         deliveryPartnerName,
         original: order,
         isCancelled,
@@ -283,7 +519,7 @@ export default function CustomerProfile() {
       const wasCompletedBeforeCancel = !!order.completedAt || order.deliveredQuantity > 0;
       if (isCancelled && wasCompletedBeforeCancel) {
         const cancelDateObj = order.updatedAt
-          ? (order.updatedAt instanceof Date ? order.updatedAt : (order.updatedAt?.toDate ? order.updatedAt.toDate() : new Date(order.updatedAt)))
+          ? normalizeDateValue(order.updatedAt)
           : new Date(orderDateObj.getTime() + 1000);
 
         entries.push({
@@ -311,7 +547,7 @@ export default function CustomerProfile() {
       ));
       if (isOrderPayment) return;
 
-      const payDate = payment.createdAt instanceof Date ? payment.createdAt : new Date(payment.createdAt);
+      const payDate = normalizeDateValue(payment.createdAt || payment.date);
       const amtRec = Number(payment.amountReceived !== undefined ? payment.amountReceived : (payment.amount || 0));
       const discAmt = Number(payment.discountAmount || 0);
       const totalBalanceReduction = amtRec + discAmt;
@@ -365,7 +601,9 @@ export default function CustomerProfile() {
 
     // If opening balance exists, keep it at the top
     if (openingBalance > 0) {
-      const openingDate = customer.createdAt ? new Date(customer.createdAt) : new Date(new Date().getTime() - 365*24*60*60*1000);
+      const openingDate = customer.createdAt
+        ? normalizeDateValue(customer.createdAt)
+        : new Date(Date.now() - 365 * 24 * 60 * 60 * 1000);
       ledger.unshift({
         id: "opening-bal",
         date: openingDate,
@@ -753,6 +991,10 @@ export default function CustomerProfile() {
   const [editProfileCustomMarking, setEditProfileCustomMarking] = useState("");
 
   const handleOpenMarkingModal = () => {
+    if (isLocked) {
+      Alert.alert("🔒 Screen Locked", "Customer View Mode is active. Unlock screen to change tags.");
+      return;
+    }
     if (!customer) return;
     setSelectedMarkings(normalizeMarkings(customer));
     setCustomMarkingInput("");
@@ -804,6 +1046,10 @@ export default function CustomerProfile() {
   };
 
   const handleOpenEditProfile = () => {
+    if (isLocked) {
+      Alert.alert("🔒 Screen Locked", "Customer View Mode is active. Unlock screen to edit client profile.");
+      return;
+    }
     if (!customer) return;
     setEditProfileName(customer.name || "");
     setEditProfileAddress(customer.address || "");
@@ -960,6 +1206,10 @@ export default function CustomerProfile() {
   const [isSavingPayment, setIsSavingPayment] = useState(false);
 
   const openPayModal = () => {
+    if (isLocked) {
+      Alert.alert("🔒 Screen Locked", "Customer View Mode is active. Unlock screen to record payments.");
+      return;
+    }
     if (!customer) return;
     const pending = Number(customer.totalPending !== undefined ? customer.totalPending : customer.balance || 0);
     setPayAmount(pending > 0 ? String(pending) : "");
@@ -986,10 +1236,14 @@ export default function CustomerProfile() {
     }
 
     const pending = Number(customer.totalPending !== undefined ? customer.totalPending : customer.balance || 0);
-    if ((amt + disc) > pending && pending > 0) {
+    if (disc > 0 && pending <= 0) {
+      Alert.alert("Invalid Discount", "Discounts cannot be applied when there is no pending balance.");
+      return;
+    }
+    if (disc > pending && pending > 0) {
       Alert.alert(
-        "Excessive Amount",
-        `Total payment + discount (₹${(amt + disc).toLocaleString("en-IN")}) exceeds pending balance of ₹${pending.toLocaleString("en-IN")}.`
+        "Invalid Discount",
+        `Discount (₹${disc.toLocaleString("en-IN")}) cannot exceed customer's pending balance of ₹${pending.toLocaleString("en-IN")}.`
       );
       return;
     }
@@ -1079,6 +1333,10 @@ export default function CustomerProfile() {
   };
 
   const handleOpenEditLedger = (entry: any) => {
+    if (isLocked) {
+      Alert.alert("🔒 Screen Locked", "Customer View Mode is active. Unlock screen to edit transaction records.");
+      return;
+    }
     if (entry.type === "opening") return;
     setSelectedEntry(entry);
     setEditLedgerDate(entry.date);
@@ -1307,6 +1565,10 @@ export default function CustomerProfile() {
   };
 
   const handleDeleteLedgerEntry = () => {
+    if (isLocked) {
+      Alert.alert("🔒 Screen Locked", "Customer View Mode is active. Unlock screen to delete transactions.");
+      return;
+    }
     if (!selectedEntry) return;
     
     const entryTypeLabel = selectedEntry.type === "payment" ? "Payment" : "Bill / Invoice";
@@ -2632,6 +2894,10 @@ export default function CustomerProfile() {
   };
 
   const handleAssignCollector = async (collector: any) => {
+    if (isLocked) {
+      Alert.alert("🔒 Screen Locked", "Customer View Mode is active. Unlock screen to assign collectors.");
+      return;
+    }
     setUpdatingCollector(true);
     const success = await updateCustomerCollector(
       customer.id,
@@ -2647,6 +2913,10 @@ export default function CustomerProfile() {
   };
 
   const openAddForm = () => {
+    if (isLocked) {
+      Alert.alert("🔒 Screen Locked", "Customer View Mode is active. Unlock screen to add due dates.");
+      return;
+    }
     const d = new Date();
     d.setDate(d.getDate() + 7);
     const yyyy = d.getFullYear();
@@ -2723,6 +2993,10 @@ export default function CustomerProfile() {
   };
 
   const handleDeleteDueDate = (item: any) => {
+    if (isLocked) {
+      Alert.alert("🔒 Screen Locked", "Customer View Mode is active. Unlock screen to delete due dates.");
+      return;
+    }
     Alert.alert(
       "Delete Due Date",
       `Remove the due date for ${formatDueDate(item.date)}?`,
@@ -2808,6 +3082,10 @@ export default function CustomerProfile() {
     const discNum = parseFloat(payDiscount) || 0;
     const netReduction = amtNum + discNum;
     const newRemaining = Math.max(0, currentPending - netReduction);
+    const excessAdvance = Math.max(0, netReduction - Math.max(0, currentPending));
+
+    const isAdvanceCustomer = currentPending < 0;
+    const isZeroBalance = currentPending === 0;
 
     return (
       <Modal
@@ -2833,10 +3111,10 @@ export default function CustomerProfile() {
             </View>
 
             <ScrollView showsVerticalScrollIndicator={false} style={{ flex: 1 }} contentContainerStyle={{ flexGrow: 1 }} keyboardShouldPersistTaps="handled">
-              {/* Current Pending Balance Badge */}
+              {/* Current Pending / Advance Balance Badge */}
               <View style={{
-                backgroundColor: colors.accent.danger + "15",
-                borderColor: colors.accent.danger + "40",
+                backgroundColor: isAdvanceCustomer || isZeroBalance ? (colors.accent.success + "15") : (colors.accent.danger + "15"),
+                borderColor: isAdvanceCustomer || isZeroBalance ? (colors.accent.success + "40") : (colors.accent.danger + "40"),
                 borderWidth: 1,
                 borderRadius: 10,
                 padding: 12,
@@ -2846,25 +3124,38 @@ export default function CustomerProfile() {
                 alignItems: "center"
               }}>
                 <View>
-                  <Text style={{ fontSize: 11, fontWeight: "700", color: colors.accent.danger, textTransform: "uppercase" }}>Current Pending Balance</Text>
-                  <Text style={{ fontSize: 18, fontWeight: "800", color: colors.accent.danger }}>
-                    ₹{currentPending.toLocaleString("en-IN")}
+                  <Text style={{
+                    fontSize: 11,
+                    fontWeight: "700",
+                    color: isAdvanceCustomer || isZeroBalance ? colors.accent.success : colors.accent.danger,
+                    textTransform: "uppercase"
+                  }}>
+                    {isAdvanceCustomer ? "Current Advance Balance" : isZeroBalance ? "Account Balance (Cleared)" : "Current Pending Balance"}
+                  </Text>
+                  <Text style={{
+                    fontSize: 18,
+                    fontWeight: "800",
+                    color: isAdvanceCustomer || isZeroBalance ? colors.accent.success : colors.accent.danger
+                  }}>
+                    ₹{Math.abs(currentPending).toLocaleString("en-IN")}
                   </Text>
                 </View>
-                <Pressable
-                  style={{
-                    backgroundColor: colors.accent.primary,
-                    paddingHorizontal: 10,
-                    paddingVertical: 6,
-                    borderRadius: 8
-                  }}
-                  onPress={() => {
-                    setPayAmount(String(currentPending));
-                    setPayDiscount("0");
-                  }}
-                >
-                  <Text style={{ fontSize: 11, fontWeight: "700", color: "#FFF" }}>Full Payment</Text>
-                </Pressable>
+                {currentPending > 0 && (
+                  <Pressable
+                    style={{
+                      backgroundColor: colors.accent.primary,
+                      paddingHorizontal: 10,
+                      paddingVertical: 6,
+                      borderRadius: 8
+                    }}
+                    onPress={() => {
+                      setPayAmount(String(currentPending));
+                      setPayDiscount("0");
+                    }}
+                  >
+                    <Text style={{ fontSize: 11, fontWeight: "700", color: "#FFF" }}>Full Payment</Text>
+                  </Pressable>
+                )}
               </View>
 
               {/* Amount Received Input */}
@@ -3023,10 +3314,34 @@ export default function CustomerProfile() {
                 <View style={{ height: 1, backgroundColor: colors.border.subtle, marginVertical: 4 }} />
                 <View style={{ flexDirection: "row", justifyContent: "space-between", alignItems: "center" }}>
                   <Text style={{ fontSize: 13, fontWeight: "700", color: colors.text.primary }}>New Pending Balance:</Text>
-                  <Text style={{ fontSize: 14, fontWeight: "800", color: newRemaining === 0 ? colors.accent.success : colors.accent.danger }}>
+                  <Text style={{ fontSize: 14, fontWeight: "800", color: (newRemaining === 0 || excessAdvance > 0) ? colors.accent.success : colors.accent.danger }}>
                     ₹{newRemaining.toLocaleString("en-IN")}
                   </Text>
                 </View>
+                {excessAdvance > 0 && (
+                  <View style={{
+                    flexDirection: "row",
+                    justifyContent: "space-between",
+                    alignItems: "center",
+                    backgroundColor: colors.accent.success + "15",
+                    borderColor: colors.accent.success + "40",
+                    borderWidth: 1,
+                    borderRadius: 8,
+                    paddingHorizontal: 10,
+                    paddingVertical: 6,
+                    marginTop: 4,
+                  }}>
+                    <View style={{ flexDirection: "row", alignItems: "center", gap: 6 }}>
+                      <MaterialIcons name="stars" size={16} color={colors.accent.success} />
+                      <Text style={{ fontSize: 12, fontWeight: "700", color: colors.accent.success }}>
+                        Advance Credit Added:
+                      </Text>
+                    </View>
+                    <Text style={{ fontSize: 13, fontWeight: "800", color: colors.accent.success }}>
+                      +₹{excessAdvance.toLocaleString("en-IN")}
+                    </Text>
+                  </View>
+                )}
               </View>
 
               {/* Submit Buttons */}
@@ -3072,10 +3387,66 @@ export default function CustomerProfile() {
       <ScrollView contentContainerStyle={styles.container} showsVerticalScrollIndicator={false}>
         {/* Header */}
         <View style={styles.header}>
-          <BackButton label="Customers Registry" onPress={() => router.push("/customers")} style={{ marginBottom: 12 }} />
+          <View style={{ flexDirection: "row", alignItems: "center", justifyContent: "space-between", marginBottom: 12 }}>
+            {isLocked ? (
+              <View style={{
+                flexDirection: "row",
+                alignItems: "center",
+                gap: 6,
+                backgroundColor: colors.accent.warning + "18",
+                borderColor: colors.accent.warning + "50",
+                borderWidth: 1,
+                paddingHorizontal: 12,
+                paddingVertical: 7,
+                borderRadius: 10,
+              }}>
+                <MaterialIcons name="lock" size={16} color={colors.accent.warning} />
+                <Text style={{ fontSize: 12, fontWeight: "800", color: colors.accent.warning }}>
+                  CUSTOMER VIEW (LOCKED)
+                </Text>
+              </View>
+            ) : (
+              <BackButton label="Customers Registry" onPress={() => router.push("/customers")} style={{ marginBottom: 0 }} />
+            )}
+
+            <Pressable
+              style={{
+                flexDirection: "row",
+                alignItems: "center",
+                gap: 6,
+                backgroundColor: isLocked ? colors.accent.danger : (colors.accent.primary + "15"),
+                borderColor: isLocked ? colors.accent.danger : (colors.accent.primary + "40"),
+                borderWidth: 1,
+                paddingHorizontal: 12,
+                paddingVertical: 7,
+                borderRadius: 20,
+              }}
+              onPress={() => {
+                if (isLocked) {
+                  setShowUnlockModal(true);
+                } else {
+                  handleLockScreen();
+                }
+              }}
+            >
+              <MaterialIcons
+                name={isLocked ? "lock" : "lock-outline"}
+                size={16}
+                color={isLocked ? "#FFFFFF" : colors.accent.primary}
+              />
+              <Text style={{
+                fontSize: 12,
+                fontWeight: "700",
+                color: isLocked ? "#FFFFFF" : colors.accent.primary,
+              }}>
+                {isLocked ? "Unlock Screen" : "Lock for Customer"}
+              </Text>
+            </Pressable>
+          </View>
           <View style={styles.profileSummary}>
             <Pressable
               onPress={() => {
+                if (isLocked) return;
                 if (customer.entityType && customer.entityType !== "customer") {
                   handleOpenSystemProfile();
                 }
@@ -3106,6 +3477,7 @@ export default function CustomerProfile() {
             <View style={{ flexDirection: "row", alignItems: "center", justifyContent: "center", gap: 6 }}>
               <Pressable
                 onPress={() => {
+                  if (isLocked) return;
                   if (customer.entityType && customer.entityType !== "customer") {
                     handleOpenSystemProfile();
                   }
@@ -3115,7 +3487,7 @@ export default function CustomerProfile() {
               </Pressable>
               <Pressable
                 style={{ padding: 4 }}
-                onPress={() => toggleFavoriteCustomer(customer.id)}
+                onPress={() => !isLocked && toggleFavoriteCustomer(customer.id)}
                 hitSlop={8}
               >
                 <MaterialIcons
@@ -3414,11 +3786,17 @@ export default function CustomerProfile() {
         <View style={styles.metricsGrid}>
           <Pressable style={styles.metricCard} onPress={openPayModal}>
             <View style={{ flexDirection: "row", justifyContent: "space-between", alignItems: "center" }}>
-              <Text style={styles.metricLabel}>Pending Balance</Text>
+              <Text style={styles.metricLabel}>
+                {Number(customer.balance || 0) < 0 ? "Advance Amount" : "Pending Balance"}
+              </Text>
               <MaterialIcons name="add-circle-outline" size={14} color={colors.accent.primary} />
             </View>
-            <Text style={[styles.metricValue, Number(customer.balance) > 0 && { color: "#EF4444" }]}>
-              ₹{Number(customer.balance || 0).toLocaleString("en-IN")}
+            <Text style={[
+              styles.metricValue,
+              Number(customer.balance || 0) > 0 && { color: "#EF4444" },
+              Number(customer.balance || 0) < 0 && { color: colors.accent.success },
+            ]}>
+              ₹{Math.abs(Number(customer.balance || 0)).toLocaleString("en-IN")}
             </Text>
             <Text style={{ fontSize: 9.5, fontWeight: "700", color: colors.accent.primary, marginTop: 2 }}>
               + Pay / Discount ↗
@@ -4110,7 +4488,9 @@ export default function CustomerProfile() {
                               First Orders: <Text style={{ fontWeight: "700", color: colors.text.primary }}>₹{daySummary.firstOrders.toLocaleString("en-IN")}</Text>
                             </Text>
                             <Text style={{ fontSize: 10, color: colors.text.muted }}>
-                              Last Amt: <Text style={{ fontWeight: "800", color: colors.accent.danger }}>₹{daySummary.lastAmount.toLocaleString("en-IN")}</Text>
+                              Last Amt: <Text style={{ fontWeight: "800", color: daySummary.lastAmount < 0 ? colors.accent.success : colors.accent.danger }}>
+                                {daySummary.lastAmount < 0 ? `Adv: ₹${Math.abs(daySummary.lastAmount).toLocaleString("en-IN")}` : `₹${daySummary.lastAmount.toLocaleString("en-IN")}`}
+                              </Text>
                             </Text>
                           </View>
                         </View>
@@ -4257,6 +4637,8 @@ export default function CustomerProfile() {
           isDark={theme.isDark}
         />
       )}
+
+      {renderUnlockModal()}
     </AnimatedPage>
   );
 }

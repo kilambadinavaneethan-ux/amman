@@ -20,6 +20,7 @@ import { CustomerStatementView } from './CustomerStatementView';
 import { shareSettingsService } from '../../services/sharing/shareSettingsService';
 import { invoiceTemplateService } from '../../services/sharing/invoiceTemplateService';
 import { ShareSettingsModal } from './ShareSettingsModal';
+import { normalizeDateValue } from '../../config/firebase';
 
 interface CustomerShareBottomSheetProps {
   visible: boolean;
@@ -50,7 +51,7 @@ export function CustomerShareBottomSheet({
   const [customDays, setCustomDays] = useState<number>(7);
   const [orderCountFilter, setOrderCountFilter] = useState<'all' | '1' | '3' | '5' | '10' | '15' | '20' | 'custom'>('all');
   const [customOrderCount, setCustomOrderCount] = useState<number>(5);
-  const [sortOrder, setSortOrder] = useState<'desc' | 'asc'>('desc');
+  const [sortOrder, setSortOrder] = useState<'desc' | 'asc'>('asc');
   const [includeProfileInfo, setIncludeProfileInfo] = useState(true);
   const [includeDueDates, setIncludeDueDates] = useState(false);
   const [includeSummary, setIncludeSummary] = useState(true);
@@ -64,6 +65,7 @@ export function CustomerShareBottomSheet({
   useEffect(() => {
     if (visible) {
       setActiveTab('IMAGE');
+      setSortOrder('asc');
       setIncludeDueDates(false);
       setOrderCountFilter('all');
       setCustomOrderCount(5);
@@ -106,7 +108,7 @@ export function CustomerShareBottomSheet({
     if (dateFilter !== 'all') {
       const now = new Date();
       filteredLedger = filteredLedger.filter((item) => {
-        const d = item.date instanceof Date ? item.date : new Date(item.date);
+        const d = normalizeDateValue(item.date);
         if (isNaN(d.getTime())) return true;
 
         if (dateFilter === 'today') {
@@ -156,21 +158,21 @@ export function CustomerShareBottomSheet({
       if (countLimit > 0) {
         const orderEntries = filteredLedger.filter((item) => item.type === 'order');
         const sortedOrderEntries = [...orderEntries].sort((a, b) => {
-          const da = a.date instanceof Date ? a.date : new Date(a.date);
-          const db = b.date instanceof Date ? b.date : new Date(b.date);
+          const da = normalizeDateValue(a.date);
+          const db = normalizeDateValue(b.date);
           return db.getTime() - da.getTime();
         });
         const topOrders = sortedOrderEntries.slice(0, countLimit);
         const topOrderIds = new Set(topOrders.map((o) => o.id));
         const earliestOrderTime = topOrders.length > 0
-          ? Math.min(...topOrders.map((o) => (o.date instanceof Date ? o.date.getTime() : new Date(o.date).getTime())))
+          ? Math.min(...topOrders.map((o) => normalizeDateValue(o.date).getTime()))
           : 0;
 
         filteredLedger = filteredLedger.filter((item) => {
           if (item.type === 'opening') return true;
           if (item.type === 'order') return topOrderIds.has(item.id);
           if (item.type === 'payment') {
-            const d = item.date instanceof Date ? item.date : new Date(item.date);
+            const d = normalizeDateValue(item.date);
             return !isNaN(d.getTime()) && d.getTime() >= earliestOrderTime;
           }
           return true;
@@ -179,32 +181,36 @@ export function CustomerShareBottomSheet({
     }
 
     // Apply Sort Order to Ledger
-    let sortedLedger = [...filteredLedger];
-    const opening = sortedLedger.find((e: any) => e.type === 'opening');
-    const rest = sortedLedger.filter((e: any) => e.type !== 'opening');
+    const opening = filteredLedger.find((e: any) => e.type === 'opening');
+    const nonOpening = filteredLedger
+      .filter((e: any) => e.type !== 'opening')
+      .map((item: any, index: number) => ({ ...item, _origIdx: index }));
 
-    rest.sort((a, b) => {
-      const da = a.date instanceof Date ? a.date : new Date(a.date);
-      const db = b.date instanceof Date ? b.date : new Date(b.date);
+    nonOpening.sort((a: any, b: any) => {
+      const da = normalizeDateValue(a.date);
+      const db = normalizeDateValue(b.date);
       const diff = da.getTime() - db.getTime();
 
       if (sortOrder === 'desc') {
         if (diff !== 0) return db.getTime() - da.getTime();
-        if (a.type === 'order' && b.type === 'payment') return -1;
-        if (a.type === 'payment' && b.type === 'order') return 1;
-        return 0;
+        // For desc (newest first), payment happens after order so payment comes before order
+        if (a.type === 'payment' && b.type === 'order') return -1;
+        if (a.type === 'order' && b.type === 'payment') return 1;
+        return b._origIdx - a._origIdx;
       } else {
         if (diff !== 0) return da.getTime() - db.getTime();
+        // For asc (oldest first), order happens before payment so order comes before payment
         if (a.type === 'order' && b.type === 'payment') return -1;
         if (a.type === 'payment' && b.type === 'order') return 1;
-        return 0;
+        return a._origIdx - b._origIdx;
       }
     });
 
+    let sortedLedger: any[];
     if (sortOrder === 'desc') {
-      sortedLedger = opening ? [...rest, opening] : rest;
+      sortedLedger = opening ? [...nonOpening, opening] : nonOpening;
     } else {
-      sortedLedger = opening ? [opening, ...rest] : rest;
+      sortedLedger = opening ? [opening, ...nonOpening] : nonOpening;
     }
 
     const totalOrders = sortedLedger.filter((l) => l.type === 'order').length;
@@ -332,7 +338,7 @@ export function CustomerShareBottomSheet({
                       {processedData.customer.name.replace(/\s+அவர்கள்$/, '')}{' '}
                       <Text style={{ fontSize: 9.5, fontWeight: '600' }}>அவர்கள்</Text>
                     </>
-                  ) : processedData.customer.name} • Net Due: ₹{processedData.summary.netBalanceDue.toLocaleString('en-IN')}
+                  ) : processedData.customer.name} • {processedData.summary.netBalanceDue < 0 ? `Advance Credit: ₹${Math.abs(processedData.summary.netBalanceDue).toLocaleString('en-IN')}` : `Net Due: ₹${processedData.summary.netBalanceDue.toLocaleString('en-IN')}`}
                 </Text>
               </View>
               <View style={{ flexDirection: 'row', alignItems: 'center', gap: 6 }}>
@@ -566,8 +572,8 @@ export function CustomerShareBottomSheet({
                 <Text style={{ fontSize: 10, fontWeight: '800', color: subTextColor }}>SORT LEDGER:</Text>
                 <ScrollView horizontal showsHorizontalScrollIndicator={false} contentContainerStyle={{ gap: 6 }}>
                   {[
+                    { id: 'asc', label: 'Oldest First (Standard) ⬇' },
                     { id: 'desc', label: 'Newest First ⬆' },
-                    { id: 'asc', label: 'Oldest First ⬇' },
                   ].map((s) => (
                     <Pressable
                       key={s.id}

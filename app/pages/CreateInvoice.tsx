@@ -21,7 +21,7 @@ import { DeliveryPartnerContext } from "../context/DeliveryPartnerContext";
 import { CollectorContext } from "../context/CollectorContext";
 import { WorkerContext } from "../context/WorkerContext";
 import { RawMaterialSupplierContext } from "../context/RawMaterialSupplierContext";
-import { addDoc, collection } from "firebase/firestore";
+import { addDoc, collection, doc, getDoc, updateDoc } from "firebase/firestore";
 import { db } from "../../src/config/firebase";
 import AnimatedPage from "../components/AnimatedPage";
 import ContactsModal from "../components/ContactsModal";
@@ -619,14 +619,22 @@ export default function CreateInvoice() {
       let finalCustomerName = "";
 
       // 2. Add customer to database if new
+      let initExcessAdv = 0;
+      const paidAmountNum = Number(paidAmount) || 0;
+      if (paidAmountNum > calculatedTotal) {
+        initExcessAdv = paidAmountNum - calculatedTotal;
+      }
+
       if (isNewCustomer) {
         const customerPayload = {
           name: newCustomerName.trim(),
           phone: newCustomerPhone.trim(),
           address: newCustomerAddress.trim(),
           notes: newCustomerNotes.trim(),
-          balance: 0,
-          totalPending: 0,
+          balance: -initExcessAdv,
+          totalPending: -initExcessAdv,
+          advanceAmount: initExcessAdv,
+          totalPaid: paidAmountNum,
           createdAt: orderDate.toLocaleString(),
         };
 
@@ -709,6 +717,71 @@ export default function CreateInvoice() {
 
       const orderId = await addOrder(orderPayload);
       if (orderId) {
+        // Update existing customer balance & advance in Firestore if excess or payment was made
+        const totalToSettle = Math.max(0, calculatedTotal + previousBalanceVal);
+        const excessAdvanceVal = Math.max(0, paidAmountNum - totalToSettle);
+
+        if (!isNewCustomer && finalCustomerId && finalCustomerType === "customer") {
+          try {
+            const customerRef = doc(db, "customers", finalCustomerId);
+            const customerSnap = await getDoc(customerRef);
+            if (customerSnap.exists()) {
+              const cData = customerSnap.data();
+              const curBal = Number(cData.totalPending !== undefined ? cData.totalPending : (cData.balance || 0));
+              const curPaid = Number(cData.totalPaid || 0);
+
+              let newBal = curBal;
+              if (curBal < 0) {
+                // Customer already had advance credit
+                const netOrderPayable = Math.max(0, calculatedTotal + curBal);
+                const excessAdv = Math.max(0, paidAmountNum - netOrderPayable);
+                newBal = -excessAdv;
+              } else {
+                // Customer had 0 or positive balance (dues)
+                const excessOverBill = paidAmountNum - calculatedTotal;
+                if (excessOverBill > 0) {
+                  newBal = curBal - excessOverBill;
+                }
+              }
+
+              const newAdvance = newBal < 0 ? Math.abs(newBal) : 0;
+              await updateDoc(customerRef, {
+                balance: newBal,
+                totalPending: newBal,
+                advanceAmount: newAdvance,
+                totalPaid: curPaid + paidAmountNum,
+                lastTransactionDate: new Date(),
+              });
+            }
+          } catch (cErr) {
+            console.error("Failed to update customer advance balance:", cErr);
+          }
+        }
+
+        // Log transaction to payments collection for full accounting audit
+        if (paidAmountNum > 0 && finalCustomerId) {
+          try {
+            await addDoc(collection(db, "payments"), {
+              customerId: finalCustomerId,
+              customerName: finalCustomerName,
+              amountReceived: paidAmountNum,
+              discountAmount: 0,
+              paymentMethod: paymentMethod || "Cash",
+              paymentMode: paymentMethod || "Cash",
+              paymentType: paymentMethod || "Cash",
+              notes: excessAdvanceVal > 0
+                ? `Bill payment (incl. ₹${excessAdvanceVal.toLocaleString("en-IN")} advance credit)`
+                : `Payment for Bill #${orderId.slice(-6).toUpperCase()}`,
+              orderId: orderId,
+              createdAt: orderDate,
+              date: orderDate,
+              paymentDate: orderDate,
+            });
+          } catch (pErr) {
+            console.error("Failed to log payment entry:", pErr);
+          }
+        }
+
         const createdInvoice = { id: orderId, ...orderPayload };
         if (shouldShare) {
           const transaction = adaptToTransactionData(createdInvoice, "invoice", userProfile);
@@ -1556,7 +1629,9 @@ export default function CreateInvoice() {
             const advanceVal = Math.abs(effectiveDueOwedByClient);
 
             const totalWithOldDues = Math.max(0, calculatedTotal + effectiveDueOwedByClient);
-            const totalNetUnpaid = Math.max(0, effectiveDueOwedByClient + calculatedBalanceDue);
+            const paidAmountNum = Number(paidAmount) || 0;
+            const excessAdvance = Math.max(0, paidAmountNum - totalWithOldDues);
+            const totalNetUnpaid = Math.max(0, totalWithOldDues - paidAmountNum);
 
             return (
               <>
@@ -1734,10 +1809,36 @@ export default function CreateInvoice() {
 
                 <View style={styles.calcRow}>
                   <Text style={styles.calcLabelBold}>Total Balance Unpaid:</Text>
-                  <Text style={[styles.calcValueBold, totalNetUnpaid > 0 && { color: colors.accent.danger }]}>
+                  <Text style={[styles.calcValueBold, totalNetUnpaid > 0 ? { color: colors.accent.danger } : { color: colors.accent.success }]}>
                     ₹{totalNetUnpaid.toLocaleString("en-IN")}
                   </Text>
                 </View>
+
+                {excessAdvance > 0 && (
+                  <View
+                    style={{
+                      flexDirection: "row",
+                      alignItems: "center",
+                      justifyContent: "space-between",
+                      backgroundColor: colors.accent.success + "15",
+                      padding: 10,
+                      borderRadius: 8,
+                      borderWidth: 1,
+                      borderColor: colors.accent.success + "40",
+                      marginTop: 8,
+                    }}
+                  >
+                    <View style={{ flexDirection: "row", alignItems: "center", gap: 6 }}>
+                      <MaterialIcons name="arrow-circle-up" size={16} color={colors.accent.success} />
+                      <Text style={{ fontSize: 12, fontWeight: "700", color: colors.accent.success }}>
+                        Advance Credit Added:
+                      </Text>
+                    </View>
+                    <Text style={{ fontSize: 13, fontWeight: "800", color: colors.accent.success }}>
+                      +₹{excessAdvance.toLocaleString("en-IN")}
+                    </Text>
+                  </View>
+                )}
               </>
             );
           })()}

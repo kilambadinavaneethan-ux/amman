@@ -68,7 +68,10 @@
           "savePhotosPermission": "Allow Hollow Brick Accounting to save invoice PDFs and receipt images to your device storage.",
           "isAccessMediaLocationEnabled": true
         }
-      ]
+      ],
+      "expo-image",
+      "expo-sharing",
+      "expo-web-browser"
     ],
     "experiments": {
       "typedRoutes": true,

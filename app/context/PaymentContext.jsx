@@ -83,6 +83,7 @@ export function PaymentProvider({ children }) {
 
       const pendingAfter = pendingBefore - totalBalanceReduction;
       const totalPaidAfter = totalPaidBefore + amtRec;
+      const advanceAmount = pendingAfter < 0 ? Math.abs(pendingAfter) : 0;
 
       // Batch write (queued offline, synced when back online)
       const batch = writeBatch(db);
@@ -94,6 +95,7 @@ export function PaymentProvider({ children }) {
       batch.update(customerRef, {
         balance: pendingAfter,
         totalPending: pendingAfter,
+        advanceAmount: advanceAmount,
         totalPaid: totalPaidAfter,
         lastTransactionDate: new Date(),
       });
@@ -124,6 +126,7 @@ export function PaymentProvider({ children }) {
         amountReceived: amtRec,
         discountAmount: discAmt,
         pendingAfter,
+        advanceAmount: advanceAmount,
         paymentMethod: paymentMethod || "Cash",
         notes: notes || "",
         createdAt: paymentDate,
@@ -174,10 +177,12 @@ export function PaymentProvider({ children }) {
 
           const pendingAfter = pendingBefore + totalBalanceReduction;
           const totalPaidAfter = Math.max(0, totalPaidBefore - amtRec);
+          const advanceAmount = pendingAfter < 0 ? Math.abs(pendingAfter) : 0;
 
           batch.update(customerRef, {
             balance: pendingAfter,
             totalPending: pendingAfter,
+            advanceAmount: advanceAmount,
             totalPaid: totalPaidAfter,
             lastTransactionDate: new Date(),
           });
@@ -203,6 +208,8 @@ export function PaymentProvider({ children }) {
       const customerId = oldData.customerId || updatedData.customerId;
 
       const batch = writeBatch(db);
+      let finalPendingAfter = null;
+      let finalAdvanceAmount = null;
 
       // Read customer doc (serves from cache when offline)
       if (customerId && typeof customerId === "string" && customerId.trim() !== "") {
@@ -224,10 +231,14 @@ export function PaymentProvider({ children }) {
           const pendingAfter = pendingBefore - diffPending;
           const diffPaid = Number(newAmount || 0) - Number(oldAmount);
           const totalPaidAfter = Math.max(0, totalPaidBefore + diffPaid);
+          const advanceAmount = pendingAfter < 0 ? Math.abs(pendingAfter) : 0;
+          finalPendingAfter = pendingAfter;
+          finalAdvanceAmount = advanceAmount;
 
           batch.update(customerRef, {
             balance: pendingAfter,
             totalPending: pendingAfter,
+            advanceAmount: advanceAmount,
             totalPaid: totalPaidAfter,
             lastTransactionDate: new Date(),
           });
@@ -266,7 +277,7 @@ export function PaymentProvider({ children }) {
         }
       }
 
-      batch.update(paymentRef, {
+      const paymentUpdateData = {
         amountReceived: Number(newAmount || 0),
         discountAmount: Number(newDiscount || 0),
         paymentMethod: paymentMethod || "Cash",
@@ -276,7 +287,13 @@ export function PaymentProvider({ children }) {
         paymentDate: editPayDate,
         collectorId: updatedData.collectorId !== undefined ? updatedData.collectorId : (oldData.collectorId || null),
         collectorName: updatedData.collectorName !== undefined ? updatedData.collectorName : (oldData.collectorName || null),
-      });
+      };
+      if (finalPendingAfter !== null) {
+        paymentUpdateData.pendingAfter = finalPendingAfter;
+        paymentUpdateData.advanceAmount = finalAdvanceAmount;
+      }
+
+      batch.update(paymentRef, paymentUpdateData);
 
       await batch.commit();
       return true;

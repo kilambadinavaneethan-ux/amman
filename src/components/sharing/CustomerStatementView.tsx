@@ -287,18 +287,18 @@ const CustomerStatementViewComponent: React.ForwardRefRenderFunction<View, Custo
               {/* Row: NET BALANCE DUE */}
               <View style={[styles.calcRow, { paddingVertical: 6 }]}>
                 <Text style={[styles.calcLabel, { color: netDue > 0 ? '#EF4444' : '#10B981', fontWeight: '900', fontSize: 13 }]}>
-                  {netDue > 0 ? '💰 Total Balance Due' : '✅ Fully Paid'}
+                  {netDue > 0 ? '💰 Total Balance Due' : netDue < 0 ? '⭐ Customer Advance Credit' : '✅ Fully Paid'}
                 </Text>
                 <Text style={[styles.calcValue, { color: netDue > 0 ? '#EF4444' : '#10B981', fontWeight: '900', fontSize: 16 }]}>
-                  {formatCurrency(Math.abs(netDue))}
+                  {netDue < 0 ? `+${formatCurrency(Math.abs(netDue))}` : formatCurrency(Math.abs(netDue))}
                 </Text>
               </View>
 
               {/* Status Badge */}
               <View style={[styles.statusBadge, { backgroundColor: isPaid ? '#10B98120' : '#EF444420' }]}>
-                <MaterialIcons name={isPaid ? 'check-circle' : 'pending'} size={14} color={isPaid ? '#10B981' : '#EF4444'} />
+                <MaterialIcons name={isPaid ? (netDue < 0 ? 'stars' : 'check-circle') : 'pending'} size={14} color={isPaid ? '#10B981' : '#EF4444'} />
                 <Text style={{ fontSize: 10, fontWeight: '800', color: isPaid ? '#10B981' : '#EF4444' }}>
-                  {isPaid ? 'ACCOUNT FULLY SETTLED' : 'PAYMENT PENDING'}
+                  {netDue < 0 ? 'ACCOUNT IN ADVANCE CREDIT' : isPaid ? 'ACCOUNT FULLY SETTLED' : 'PAYMENT PENDING'}
                 </Text>
               </View>
             </View>
@@ -429,7 +429,7 @@ const CustomerStatementViewComponent: React.ForwardRefRenderFunction<View, Custo
                         }
                       ]}
                     >
-                      {formatCurrency(item.balance)}
+                      {item.balance < 0 ? `Adv: ${formatCurrency(Math.abs(item.balance))}` : formatCurrency(item.balance)}
                     </Text>
                   </View>
                 );
@@ -446,7 +446,7 @@ const CustomerStatementViewComponent: React.ForwardRefRenderFunction<View, Custo
                   {formatCurrency(ledgerTotalCredit)}
                 </Text>
                 <Text style={[styles.td, { flex: 1.3, textAlign: 'right', fontWeight: '900', color: netDue > 0 ? '#EF4444' : '#10B981', fontSize: 11 }]}>
-                  {formatCurrency(netDue)}
+                  {netDue < 0 ? `Adv: ${formatCurrency(Math.abs(netDue))}` : formatCurrency(netDue)}
                 </Text>
               </View>
             </View>

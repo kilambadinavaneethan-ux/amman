@@ -204,10 +204,14 @@ export default function Customers() {
         : (selectedCustomer as any).balance || 0
     );
     const totalReduction = amountNum + discountNum;
-    if (totalReduction > customerPending && customerPending > 0) {
+    if (discountNum > 0 && customerPending <= 0) {
+      Alert.alert("Invalid Discount", "Discounts cannot be applied when there is no pending balance.");
+      return;
+    }
+    if (discountNum > customerPending && customerPending > 0) {
       Alert.alert(
-        "Excessive Amount",
-        `Total payment + discount (₹${totalReduction.toLocaleString("en-IN")}) cannot exceed customer's pending balance of ₹${customerPending.toLocaleString("en-IN")}.`
+        "Invalid Discount",
+        `Discount (₹${discountNum.toLocaleString("en-IN")}) cannot exceed customer's pending balance of ₹${customerPending.toLocaleString("en-IN")}.`
       );
       return;
     }
@@ -1358,26 +1362,29 @@ setContactsVisible(true);
 
                   <View style={styles.cardFooter}>
                     <View style={styles.balanceCol}>
-                      <Text style={styles.footerLabel}>Balance Due:</Text>
+                      <Text style={styles.footerLabel}>
+                        {Number(customer.balance) < 0 ? "Advance Amount:" : "Balance Due:"}
+                      </Text>
                       <Text
                         style={[
                           styles.footerValue,
                           Number(customer.balance) > 0 && { color: colors.accent.danger },
+                          Number(customer.balance) < 0 && { color: colors.accent.success },
                         ]}
                       >
-                        ₹{Number(customer.balance || 0).toLocaleString("en-IN")}
+                        ₹{Math.abs(Number(customer.balance || 0)).toLocaleString("en-IN")}
                       </Text>
                     </View>
                     <View style={styles.actionButtonsRow}>
-                      {Number(customer.balance) > 0 && (
-                        <Pressable
-                          style={styles.payDueCardBtn}
-                          onPress={() => openPayModal(customer)}
-                        >
-                          <MaterialIcons name="payments" size={14} color={colors.accent.success} />
-                          <Text style={styles.payDueCardBtnText}>Pay</Text>
-                        </Pressable>
-                      )}
+                      <Pressable
+                        style={styles.payDueCardBtn}
+                        onPress={() => openPayModal(customer)}
+                      >
+                        <MaterialIcons name="payments" size={14} color={colors.accent.success} />
+                        <Text style={styles.payDueCardBtnText}>
+                          {Number(customer.balance) < 0 ? "Advance" : "Pay"}
+                        </Text>
+                      </Pressable>
                       <Pressable
                         style={styles.addDueCardBtn}
                         onPress={() => openDueModal(customer)}
@@ -1637,6 +1644,103 @@ setContactsVisible(true);
                 placeholder="Reference logs, notes, etc."
                 placeholderTextColor={colors.text.muted}
               />
+
+              {/* Live Settlement Calculation Summary Box */}
+              {selectedCustomer && (() => {
+                const customerPending = Number(
+                  (selectedCustomer as any).totalPending !== undefined
+                    ? (selectedCustomer as any).totalPending
+                    : (selectedCustomer as any).balance || 0
+                );
+                const amtNum = parseFloat(payAmount) || 0;
+                const discNum = parseFloat(payDiscount) || 0;
+                const totalRed = amtNum + discNum;
+                const remaining = Math.max(0, customerPending - totalRed);
+                const excessAdvance = Math.max(0, totalRed - Math.max(0, customerPending));
+                const isFullySettled = customerPending > 0 && remaining === 0;
+
+                return (
+                  <View style={{
+                    backgroundColor: colors.bg.primary,
+                    borderRadius: 10,
+                    padding: 12,
+                    marginVertical: 14,
+                    borderWidth: 1,
+                    borderColor: colors.border.subtle,
+                    gap: 6
+                  }}>
+                    <Text style={{ fontSize: 11, fontWeight: "700", color: colors.text.muted, textTransform: "uppercase" }}>
+                      Settlement Summary
+                    </Text>
+                    <View style={{ flexDirection: "row", justifyContent: "space-between" }}>
+                      <Text style={{ fontSize: 12, color: colors.text.secondary }}>
+                        {customerPending < 0 ? "Current Advance Balance:" : "Pending Balance:"}
+                      </Text>
+                      <Text style={{ fontSize: 12, fontWeight: "600", color: customerPending < 0 ? colors.accent.success : colors.text.primary }}>
+                        ₹{Math.abs(customerPending).toLocaleString("en-IN")}
+                      </Text>
+                    </View>
+                    {amtNum > 0 && (
+                      <View style={{ flexDirection: "row", justifyContent: "space-between" }}>
+                        <Text style={{ fontSize: 12, color: colors.text.secondary }}>(-) Payment Received:</Text>
+                        <Text style={{ fontSize: 12, fontWeight: "600", color: colors.accent.primary }}>
+                          -₹{amtNum.toLocaleString("en-IN")}
+                        </Text>
+                      </View>
+                    )}
+                    {discNum > 0 && (
+                      <View style={{ flexDirection: "row", justifyContent: "space-between" }}>
+                        <Text style={{ fontSize: 12, color: colors.text.secondary }}>(-) Balance Discount:</Text>
+                        <Text style={{ fontSize: 12, fontWeight: "600", color: colors.accent.success }}>
+                          -₹{discNum.toLocaleString("en-IN")}
+                        </Text>
+                      </View>
+                    )}
+                    <View style={{ height: 1, backgroundColor: colors.border.subtle, marginVertical: 4 }} />
+                    <View style={{ flexDirection: "row", justifyContent: "space-between", alignItems: "center" }}>
+                      <Text style={{ fontSize: 13, fontWeight: "700", color: colors.text.primary }}>New Balance:</Text>
+                      <View style={{ flexDirection: "row", alignItems: "center", gap: 6 }}>
+                        <Text style={{
+                          fontSize: 14,
+                          fontWeight: "800",
+                          color: (remaining === 0 || excessAdvance > 0) ? colors.accent.success : colors.accent.danger,
+                        }}>
+                          ₹{remaining.toLocaleString("en-IN")}
+                        </Text>
+                        {isFullySettled && excessAdvance === 0 && (
+                          <View style={{ backgroundColor: colors.accent.success + "20", paddingHorizontal: 6, paddingVertical: 2, borderRadius: 4 }}>
+                            <Text style={{ fontSize: 10, fontWeight: "800", color: colors.accent.success }}>CLEARED</Text>
+                          </View>
+                        )}
+                      </View>
+                    </View>
+                    {excessAdvance > 0 && (
+                      <View style={{
+                        flexDirection: "row",
+                        justifyContent: "space-between",
+                        alignItems: "center",
+                        backgroundColor: colors.accent.success + "15",
+                        borderColor: colors.accent.success + "40",
+                        borderWidth: 1,
+                        borderRadius: 8,
+                        paddingHorizontal: 10,
+                        paddingVertical: 6,
+                        marginTop: 4,
+                      }}>
+                        <View style={{ flexDirection: "row", alignItems: "center", gap: 6 }}>
+                          <MaterialIcons name="stars" size={16} color={colors.accent.success} />
+                          <Text style={{ fontSize: 12, fontWeight: "700", color: colors.accent.success }}>
+                            Advance Credit Added:
+                          </Text>
+                        </View>
+                        <Text style={{ fontSize: 13, fontWeight: "800", color: colors.accent.success }}>
+                          +₹{excessAdvance.toLocaleString("en-IN")}
+                        </Text>
+                      </View>
+                    )}
+                  </View>
+                );
+              })()}
 
               <View style={styles.modalFormActions}>
                 <Pressable 

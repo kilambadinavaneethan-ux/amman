@@ -37,8 +37,15 @@ export const customerShareService = {
       ? `upi://pay?pa=${targetUpi}&pn=${payeeName}&cu=INR&tn=${txNote}`
       : isPaid ? '✅ Account Fully Settled' : `UPI ID: ${targetUpi || 'Not set'}`;
 
-    // Format top 5 ledger entries
-    const ledgerLines = (data.ledger || []).slice(0, 5).map((l) => {
+    // Format top 5 most recent ledger entries for message summary
+    const rawLedger = data.ledger || [];
+    const recentLedger = [...rawLedger].sort((a, b) => {
+      const da = a.date instanceof Date ? a.date : new Date(a.date);
+      const db = b.date instanceof Date ? b.date : new Date(b.date);
+      return db.getTime() - da.getTime();
+    }).slice(0, 5);
+
+    const ledgerLines = recentLedger.map((l) => {
       const icon = l.type === 'order' ? '🛒' : l.type === 'payment' ? '💳' : '📌';
       const noteStr = l.notes ? ` (Note: ${l.notes})` : '';
       return `${icon} ${formatDate(l.date)} - ${l.description}${noteStr}: ${l.type === 'payment' ? '-' : '+'}${formatCurrency(l.amount || l.paid || 0)}`;
@@ -66,7 +73,7 @@ export const customerShareService = {
       .replace(/\{total_paid\}/g, formatCurrency(data.summary.totalPaidAmount))
       .replace(/\{old_balance\}/g, formatCurrency(oldBal))
       .replace(/\{grand_total\}/g, formatCurrency(grandTotal))
-      .replace(/\{net_balance_due\}/g, isPaid ? `${formatCurrency(0)} (Fully Settled ✅)` : formatCurrency(netDue))
+      .replace(/\{net_balance_due\}/g, netDue < 0 ? `+${formatCurrency(Math.abs(netDue))} (Advance Credit ⭐)` : isPaid ? `${formatCurrency(0)} (Fully Settled ✅)` : formatCurrency(netDue))
       .replace(/\{due_dates\}/g, dueDatesLines || 'No scheduled due dates')
       .replace(/\{ledger_summary\}/g, ledgerLines || 'No recent ledger records');
 
@@ -196,7 +203,7 @@ export const customerShareService = {
           </td>
           <td style="padding: 10px; border-bottom: 1px solid #E2E8F0; font-size: 12px; text-align: right; color: #0F172A;">${debitVal > 0 ? formatCurrency(debitVal) : '-'}</td>
           <td style="padding: 10px; border-bottom: 1px solid #E2E8F0; font-size: 12px; text-align: right; font-weight: 700; color: #059669;">${creditVal > 0 ? formatCurrency(creditVal) : '-'}</td>
-          <td style="padding: 10px; border-bottom: 1px solid #E2E8F0; font-size: 12px; text-align: right; font-weight: 700; color: ${l.balance > 0 ? '#DC2626' : '#059669'};">${formatCurrency(l.balance)}</td>
+          <td style="padding: 10px; border-bottom: 1px solid #E2E8F0; font-size: 12px; text-align: right; font-weight: 700; color: ${l.balance > 0 ? '#DC2626' : '#059669'};">${l.balance < 0 ? `Adv: ${formatCurrency(Math.abs(l.balance))}` : formatCurrency(l.balance)}</td>
         </tr>
       `;
     }).join('');
@@ -312,8 +319,8 @@ export const customerShareService = {
                 <td style="padding: 6px 0; font-size: 13px; font-weight: 800; text-align: right; color: #059669;">− ${formatCurrency(data.summary.totalPaidAmount)}</td>
               </tr>
               <tr style="border-bottom: 3px solid ${netDue > 0 ? '#DC2626' : '#059669'};">
-                <td style="padding: 10px 0; font-size: 15px; font-weight: 900; color: ${netDue > 0 ? '#DC2626' : '#059669'};">${netDue > 0 ? '💰 Total Balance Due' : '✅ Account Fully Settled'}</td>
-                <td style="padding: 10px 0; font-size: 18px; font-weight: 900; text-align: right; color: ${netDue > 0 ? '#DC2626' : '#059669'};">${formatCurrency(Math.abs(netDue))}</td>
+                <td style="padding: 10px 0; font-size: 15px; font-weight: 900; color: ${netDue > 0 ? '#DC2626' : '#059669'};">${netDue > 0 ? '💰 Total Balance Due' : netDue < 0 ? '⭐ Customer Advance Credit' : '✅ Account Fully Settled'}</td>
+                <td style="padding: 10px 0; font-size: 18px; font-weight: 900; text-align: right; color: ${netDue > 0 ? '#DC2626' : '#059669'};">${netDue < 0 ? `+ ${formatCurrency(Math.abs(netDue))}` : formatCurrency(Math.abs(netDue))}</td>
               </tr>
             </table>
           </div>
@@ -340,7 +347,7 @@ export const customerShareService = {
                 <td colspan="3" style="padding: 10px; font-size: 12px; color: ${accentColor}; font-weight: 900;">TOTALS</td>
                 <td style="padding: 10px; font-size: 12px; text-align: right; color: #0F172A;">${formatCurrency((data.ledger || []).filter(l => l.type === 'order' || l.type === 'opening').reduce((s, l) => s + (l.amount || 0), 0))}</td>
                 <td style="padding: 10px; font-size: 12px; text-align: right; color: #059669;">${formatCurrency((data.ledger || []).reduce((s, l) => s + (l.paid || 0), 0))}</td>
-                <td style="padding: 10px; font-size: 13px; text-align: right; color: ${netDue > 0 ? '#DC2626' : '#059669'}; font-weight: 900;">${formatCurrency(netDue)}</td>
+                <td style="padding: 10px; font-size: 13px; text-align: right; color: ${netDue > 0 ? '#DC2626' : '#059669'}; font-weight: 900;">${netDue < 0 ? `Adv: ${formatCurrency(Math.abs(netDue))}` : formatCurrency(netDue)}</td>
               </tr>
             </tfoot>
           </table>

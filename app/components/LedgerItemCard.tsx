@@ -107,6 +107,11 @@ const LedgerItemCardComponent: React.FC<LedgerItemCardProps> = ({
         )}
         {entry.type === "payment" && (
           <View style={{ marginTop: 2 }}>
+            {(entry.original?.advanceAmount > 0 || (entry.paymentReceived > 0 && Number(entry.runningBalance || 0) < 0)) && (
+              <Text style={{ fontSize: 9, color: colors.accent.success, fontWeight: "700" }}>
+                ⭐ Adv: ₹{(entry.original?.advanceAmount ? Number(entry.original.advanceAmount) : Math.abs(Number(entry.runningBalance || 0))).toLocaleString("en-IN")}
+              </Text>
+            )}
             {(entry.discountAmount > 0 || entry.original?.discountAmount > 0) && (
               <Text style={{ fontSize: 9, color: colors.accent.success, fontWeight: "600" }}>
                 🏷️ Discount: ₹{(entry.discountAmount || entry.original?.discountAmount).toLocaleString("en-IN")}
@@ -156,13 +161,15 @@ const LedgerItemCardComponent: React.FC<LedgerItemCardProps> = ({
             flex: 1.5,
             textAlign: "right",
             fontWeight: "700",
-            color: colors.accent.danger,
+            color: Number(entry.runningBalance || 0) < 0 ? colors.accent.success : colors.accent.danger,
           },
         ]}
         numberOfLines={1}
         adjustsFontSizeToFit
       >
-        ₹{(entry.runningBalance || 0).toLocaleString("en-IN")}
+        {Number(entry.runningBalance || 0) < 0
+          ? `Adv: ₹${Math.abs(Number(entry.runningBalance || 0)).toLocaleString("en-IN")}`
+          : `₹${(entry.runningBalance || 0).toLocaleString("en-IN")}`}
       </Text>
     </Pressable>
   );
