@@ -139,10 +139,12 @@ export function DeliveryPartnerShareModal({
       totalOrderItemsCount += qty;
     });
 
-    // If 'all' and partner has global totalPending, we can respect that or calculate dynamic
-    const netPending = selectedPeriod === 'all' && partner?.totalPending !== undefined
-      ? Number(partner.totalPending)
-      : totalPayable - totalPaid;
+    // Net delivery wages: Trip earnings + Bonuses - Total paid
+    const netDeliveryPending = totalPayable + totalBonuses - totalPaid;
+    // Deduct product order balance due if included
+    const netPending = includePurchasedOrders
+      ? netDeliveryPending - totalOrderDue
+      : netDeliveryPending;
 
     const shareData: DeliveryPartnerShareData = {
       partner: {
@@ -167,6 +169,7 @@ export function DeliveryPartnerShareModal({
         totalBonuses,
         totalPaid,
         netPending,
+        netDeliveryPending,
         totalOrdersPurchased: selPurchasedOrders.length,
         totalOrderValue: totalOrderVal,
         totalOrderPaid,
@@ -456,6 +459,14 @@ export function DeliveryPartnerShareModal({
                         ₹{filteredData.summary.totalPayable.toLocaleString('en-IN')}
                       </Text>
                     </View>
+                    {filteredData.summary.totalBonuses > 0 && (
+                      <View style={styles.summaryMiniCard}>
+                        <Text style={styles.summaryMiniLabel}>BONUS</Text>
+                        <Text style={[styles.summaryMiniVal, { color: '#8B5CF6' }]}>
+                          +₹{filteredData.summary.totalBonuses.toLocaleString('en-IN')}
+                        </Text>
+                      </View>
+                    )}
                     <View style={styles.summaryMiniCard}>
                       <Text style={styles.summaryMiniLabel}>PAID</Text>
                       <Text style={styles.summaryMiniVal}>
@@ -643,6 +654,14 @@ export function DeliveryPartnerShareModal({
                         ₹{filteredData.summary.totalPayable.toLocaleString('en-IN')}
                       </Text>
                     </View>
+                    {filteredData.summary.totalBonuses > 0 && (
+                      <View style={styles.imageCardMetric}>
+                        <Text style={styles.imageCardMetricLabel}>BONUS</Text>
+                        <Text style={[styles.imageCardMetricVal, { color: '#8B5CF6' }]}>
+                          +₹{filteredData.summary.totalBonuses.toLocaleString('en-IN')}
+                        </Text>
+                      </View>
+                    )}
                     <View style={styles.imageCardMetric}>
                       <Text style={styles.imageCardMetricLabel}>PAID</Text>
                       <Text style={styles.imageCardMetricVal}>
@@ -659,7 +678,11 @@ export function DeliveryPartnerShareModal({
                     ]}
                   >
                     <Text style={[styles.imageCardBalanceLabel, { color: isAdvance ? '#047857' : '#B91C1C' }]}>
-                      {isAdvance ? 'ADVANCE PAID TO PARTNER' : 'NET DELIVERY DUE TO PARTNER'}
+                      {isAdvance
+                        ? 'ADVANCE CREDIT WITH PARTNER'
+                        : (filteredData.summary.totalOrderDue || 0) > 0 && includePurchasedOrders
+                        ? 'NET SETTLEMENT DUE TO PARTNER'
+                        : 'NET DELIVERY DUE TO PARTNER'}
                     </Text>
                     <Text style={[styles.imageCardBalanceVal, { color: isAdvance ? '#059669' : '#DC2626' }]}>
                       ₹{Math.abs(filteredData.summary.netPending).toLocaleString('en-IN', { minimumFractionDigits: 2 })}

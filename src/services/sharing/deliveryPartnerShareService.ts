@@ -50,6 +50,7 @@ export interface PartnerSummary {
   totalBonuses: number;
   totalPaid: number;
   netPending: number;
+  netDeliveryPending?: number;
   // Product purchases by partner
   totalOrdersPurchased?: number;
   totalOrderValue?: number;
@@ -131,12 +132,18 @@ export class DeliveryPartnerShareService {
     const s = data.summary;
     const companyName = company?.businessName || company?.fullName || company?.name || 'Our Business';
     const companyPhone = company?.mobile || company?.phone || '';
-    const isAdvance = s.netPending < 0;
+    
+    // Net delivery earnings minus payouts: Trips + Bonuses - Paid
+    const netDeliveryBal = (s.totalPayable || 0) + (s.totalBonuses || 0) - (s.totalPaid || 0);
+    const hasOrderDue = Boolean((s.totalOrderDue || 0) > 0 && data.options?.includePurchasedOrders !== false);
+    const finalSettlement = s.netPending !== undefined ? s.netPending : (hasOrderDue ? netDeliveryBal - (s.totalOrderDue || 0) : netDeliveryBal);
+
+    const isAdvance = finalSettlement < 0;
     const balanceStatusStr = isAdvance
-      ? `🟢 Advance Paid: ${formatCurrency(Math.abs(s.netPending))}`
-      : s.netPending === 0
+      ? `🟢 Advance Paid: ${formatCurrency(Math.abs(finalSettlement))}`
+      : finalSettlement === 0
       ? `✅ Fully Settled (₹0.00 Due)`
-      : `🔴 Balance Due to Partner: ${formatCurrency(s.netPending)}`;
+      : `🔴 Balance Due to Partner: ${formatCurrency(finalSettlement)}`;
 
     let msg = `🚚 *DELIVERY PARTNER ACCOUNT STATEMENT*\n`;
     msg += `🏢 *${companyName}*\n`;
@@ -156,7 +163,10 @@ export class DeliveryPartnerShareService {
       msg += `• *Bonus Rewards ⭐:* ${formatCurrency(s.totalBonuses)}\n`;
     }
     msg += `• *Total Amount Paid:* ${formatCurrency(s.totalPaid)}\n`;
-    msg += `• *NET DELIVERY BALANCE:* ${balanceStatusStr}\n`;
+    msg += `• *Net Delivery Wages Due:* ${netDeliveryBal < 0 ? `🟢 Advance ${formatCurrency(Math.abs(netDeliveryBal))}` : formatCurrency(netDeliveryBal)}\n`;
+    if (!hasOrderDue) {
+      msg += `• *NET DELIVERY BALANCE:* ${balanceStatusStr}\n`;
+    }
     msg += `----------------------------------------\n`;
 
     // Product Orders Purchased by Partner
@@ -168,9 +178,12 @@ export class DeliveryPartnerShareService {
       msg += `🛒 *PRODUCT ORDERS PURCHASED (${data.purchasedOrders.length})*\n`;
       msg += `• *Total Orders Value:* ${formatCurrency(s.totalOrderValue || 0)}\n`;
       msg += `• *Total Paid for Orders:* ${formatCurrency(s.totalOrderPaid || 0)}\n`;
-      msg += `• *Order Balance Due:* ${formatCurrency(s.totalOrderDue || 0)}\n`;
+      msg += `• *Order Balance Due (Offset):* ${formatCurrency(s.totalOrderDue || 0)}\n`;
       if ((s.totalOrderItemsCount || 0) > 0) {
         msg += `• *Total Bricks / Items:* ${(s.totalOrderItemsCount || 0).toLocaleString('en-IN')}\n`;
+      }
+      if (hasOrderDue) {
+        msg += `• *FINAL NET SETTLEMENT DUE:* ${balanceStatusStr}\n`;
       }
       msg += `----------------------------------------\n`;
       data.purchasedOrders.slice(0, 4).forEach((ord, idx) => {
@@ -526,7 +539,7 @@ export class DeliveryPartnerShareService {
             <div class="summary-val" style="color: #0F172A;">${formatCurrency(s.totalPaid)}</div>
           </div>
           <div class="summary-card" style="background: ${isAdvance ? '#ECFDF5' : '#FEF2F2'}; border-color: ${isAdvance ? '#A7F3D0' : '#FECACA'};">
-            <div class="summary-label" style="color: ${isAdvance ? '#047857' : '#B91C1C'};">${isAdvance ? 'Advance Paid' : 'Net Delivery Due'}</div>
+            <div class="summary-label" style="color: ${isAdvance ? '#047857' : '#B91C1C'};">${isAdvance ? 'Advance Credit' : ((s.totalOrderDue || 0) > 0 ? 'Net Settlement' : 'Net Delivery Due')}</div>
             <div class="summary-val" style="color: ${isAdvance ? '#059669' : '#DC2626'};">${formatCurrency(Math.abs(s.netPending))}</div>
           </div>
         </div>
@@ -538,12 +551,13 @@ export class DeliveryPartnerShareService {
               <strong style="color: #0369A1; font-size: 12px;">🛒 Product Orders Purchased as Client (${data.purchasedOrders.length} Orders):</strong>
               <div style="font-size: 11px; color: #0284C7; margin-top: 2px;">
                 Total Orders Value: <strong>${formatCurrency(s.totalOrderValue || 0)}</strong> | Paid: <strong>${formatCurrency(s.totalOrderPaid || 0)}</strong>
+                ${s.netDeliveryPending !== undefined ? ` | Delivery Wages Due: <strong>${formatCurrency(s.netDeliveryPending)}</strong>` : ''}
               </div>
             </div>
             <div style="text-align: right;">
-              <span style="font-size: 10px; font-weight: 800; text-transform: uppercase; color: #0369A1;">Order Balance Due</span>
+              <span style="font-size: 10px; font-weight: 800; text-transform: uppercase; color: #0369A1;">Order Balance Due (Offset)</span>
               <div style="font-size: 14px; font-weight: 800; color: ${(s.totalOrderDue || 0) > 0 ? '#DC2626' : '#059669'};">
-                ${(s.totalOrderDue || 0) > 0 ? formatCurrency(s.totalOrderDue || 0) : 'Fully Settled ✓'}
+                ${(s.totalOrderDue || 0) > 0 ? `-${formatCurrency(s.totalOrderDue || 0)}` : 'Fully Settled ✓'}
               </div>
             </div>
           </div>

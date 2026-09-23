@@ -86,6 +86,7 @@ function PartnerDetailsScreen() {
     logPartnerBonus,
     updatePartnerBonus,
     deletePartnerBonus,
+    reconcilePartnerBalance,
     toggleFavoritePartner,
   } = useContext(DeliveryPartnerContext);
 
@@ -101,6 +102,8 @@ function PartnerDetailsScreen() {
   const [optionsMenuVisible, setOptionsMenuVisible] = useState(false);
   const [deleteModalVisible, setDeleteModalVisible] = useState(false);
   const [deleting, setDeleting] = useState(false);
+  const [breakdownModalVisible, setBreakdownModalVisible] = useState(false);
+  const [reconciling, setReconciling] = useState(false);
 
   // Active Tab: 'activity' | 'trips' | 'payments' | 'bonuses' | 'orders'
   const [activeTab, setActiveTab] = useState("activity");
@@ -401,8 +404,8 @@ function PartnerDetailsScreen() {
     return () => unsubscribe();
   }, [partner?.id]);
 
-  // Filtered trips for partner
-  const partnerTrips = useMemo(() => {
+  // Combined manual trips with order trips for this partner (All Time)
+  const allCombinedTrips = useMemo(() => {
     if (!partner?.id) return [];
     const existingTripOrderIds = new Set(trips.map((t) => t.orderId).filter(Boolean));
     const orderByIdMap = new Map((orders || []).map((o) => [o.id, o]));
@@ -460,37 +463,46 @@ function PartnerDetailsScreen() {
         };
       });
 
-    const allCombined = [...trips.filter((t) => t.partnerId === partner.id), ...orderTrips];
-    return allCombined
-      .map((t) => {
-        const linkedOrder = t.orderId ? orderByIdMap.get(t.orderId) : null;
-        const itemText = formatItemString(t) || (linkedOrder ? formatItemString(linkedOrder) : "");
-        return {
-          ...t,
-          deliveredItem: itemText,
-        };
-      })
-      .filter((t) => isDateInSelectedFilter(t.createdAt));
-  }, [trips, partner?.id, partner?.name, orders, isDateInSelectedFilter]);
+    const combined = [...trips.filter((t) => t.partnerId === partner.id), ...orderTrips];
+    return combined.map((t) => {
+      const linkedOrder = t.orderId ? orderByIdMap.get(t.orderId) : null;
+      const itemText = formatItemString(t) || (linkedOrder ? formatItemString(linkedOrder) : "");
+      return {
+        ...t,
+        deliveredItem: itemText,
+      };
+    });
+  }, [trips, partner?.id, partner?.name, orders]);
+
+  // Filtered trips for partner by active dateFilter
+  const partnerTrips = useMemo(() => {
+    return allCombinedTrips.filter((t) => isDateInSelectedFilter(t.createdAt));
+  }, [allCombinedTrips, isDateInSelectedFilter]);
+
+  // All payments for partner (All Time)
+  const allPartnerPayments = useMemo(() => {
+    if (!partner?.id) return [];
+    return payments.filter((p) => p.partnerId === partner.id);
+  }, [payments, partner?.id]);
 
   // Filtered payments for partner
   const partnerPayments = useMemo(() => {
+    return allPartnerPayments.filter((p) => isDateInSelectedFilter(p.createdAt));
+  }, [allPartnerPayments, isDateInSelectedFilter]);
+
+  // All bonuses for partner (All Time)
+  const allPartnerBonuses = useMemo(() => {
     if (!partner?.id) return [];
-    return payments
-      .filter((p) => p.partnerId === partner.id)
-      .filter((p) => isDateInSelectedFilter(p.createdAt));
-  }, [payments, partner?.id, isDateInSelectedFilter]);
+    return bonuses.filter((b) => b.partnerId === partner.id);
+  }, [bonuses, partner?.id]);
 
   // Filtered bonuses for partner
   const partnerBonuses = useMemo(() => {
-    if (!partner?.id) return [];
-    return bonuses
-      .filter((b) => b.partnerId === partner.id)
-      .filter((b) => isDateInSelectedFilter(b.createdAt));
-  }, [bonuses, partner?.id, isDateInSelectedFilter]);
+    return allPartnerBonuses.filter((b) => isDateInSelectedFilter(b.createdAt));
+  }, [allPartnerBonuses, isDateInSelectedFilter]);
 
-  // Orders Purchased by Delivery Partner as Customer
-  const partnerCustomerOrders = useMemo(() => {
+  // Orders Purchased by Delivery Partner as Customer (All Time)
+  const allPartnerCustomerOrders = useMemo(() => {
     if (!partner?.id) return [];
     return (orders || []).filter(
       (o) =>
@@ -500,23 +512,30 @@ function PartnerDetailsScreen() {
     );
   }, [orders, partner?.id]);
 
+  const partnerCustomerOrders = allPartnerCustomerOrders;
+
   const filteredPartnerCustomerOrders = useMemo(() => {
-    return partnerCustomerOrders.filter((o) => {
+    return allPartnerCustomerOrders.filter((o) => {
       const dt = o.createdAt instanceof Date ? o.createdAt : o.createdAt?.toDate ? o.createdAt.toDate() : new Date(o.createdAt);
       return isDateInSelectedFilter(dt);
     });
-  }, [partnerCustomerOrders, isDateInSelectedFilter]);
+  }, [allPartnerCustomerOrders, isDateInSelectedFilter]);
 
-  // Customer Payments Paid by Partner for Product Invoices
-  const partnerCustomerPayments = useMemo(() => {
+  // Customer Payments Paid by Partner for Product Invoices (All Time)
+  const allPartnerCustomerPayments = useMemo(() => {
     if (!partner?.id) return [];
     return (generalCustomerPayments || []).filter(
       (p) =>
         p.customerId === partner.id ||
         p.customerId === `partner_${partner.id}` ||
         p.customerId === `dp_${partner.id}`
-    ).filter((p) => isDateInSelectedFilter(p.createdAt));
-  }, [generalCustomerPayments, partner?.id, isDateInSelectedFilter]);
+    );
+  }, [generalCustomerPayments, partner?.id]);
+
+  // Filtered Customer Payments
+  const partnerCustomerPayments = useMemo(() => {
+    return allPartnerCustomerPayments.filter((p) => isDateInSelectedFilter(p.createdAt));
+  }, [allPartnerCustomerPayments, isDateInSelectedFilter]);
 
   const partnerOrderSummary = useMemo(() => {
     let totalOrderValue = 0;
@@ -799,30 +818,161 @@ function PartnerDetailsScreen() {
     };
   }, [activityLedger]);
 
-  // Financial Totals
-  const totalTripEarnings = useMemo(() => {
+  // Current Period Label
+  const currentPeriodLabel = useMemo(() => {
+    if (dateFilter === "all") return "All Time";
+    if (dateFilter === "today") return "Today";
+    if (dateFilter === "week") return "This Week";
+    if (dateFilter === "month") return "This Month";
+    if (dateFilter === "year") return "This Year";
+    if (dateFilter === "custom") {
+      const s = customStart ? customStart.toLocaleDateString("en-IN") : "...";
+      const e = customEnd ? customEnd.toLocaleDateString("en-IN") : "...";
+      return `${s} - ${e}`;
+    }
+    return "Selected Period";
+  }, [dateFilter, customStart, customEnd]);
+
+  // 1. Period-level computed numbers
+  const periodTripEarnings = useMemo(() => {
     return partnerTrips.reduce((sum, t) => sum + Number(t.deliveryCharge || 0), 0);
   }, [partnerTrips]);
 
-  const totalBonusEarned = useMemo(() => {
+  const periodBonusEarned = useMemo(() => {
     return partnerBonuses.reduce((sum, b) => sum + Number(b.amount || 0), 0);
   }, [partnerBonuses]);
 
-  const liveTotalPayable = useMemo(() => {
-    return dateFilter === "all" ? Number(partner?.totalPayable || 0) : totalTripEarnings;
-  }, [dateFilter, partner?.totalPayable, totalTripEarnings]);
+  const periodPaymentBreakdown = useMemo(() => {
+    let grossDisbursed = 0;
+    let grossRepaid = 0;
+    partnerPayments.forEach((p) => {
+      const rawAmt = Number(p.amount || 0);
+      const isRepay = p.isRepayment || rawAmt < 0;
+      const absAmt = Math.abs(rawAmt);
+      if (isRepay) {
+        grossRepaid += absAmt;
+      } else {
+        grossDisbursed += absAmt;
+      }
+    });
+    return {
+      grossDisbursed,
+      grossRepaid,
+      netPaid: grossDisbursed - grossRepaid,
+    };
+  }, [partnerPayments]);
 
-  const liveTotalPaid = useMemo(() => {
-    return dateFilter === "all"
-      ? Number(partner?.totalPaid || 0)
-      : partnerPayments.reduce((sum, p) => sum + Number(p.amount || 0), 0);
-  }, [dateFilter, partner?.totalPaid, partnerPayments]);
+  const periodNetDeliveryWage = useMemo(() => {
+    return periodTripEarnings + periodBonusEarned - periodPaymentBreakdown.netPaid;
+  }, [periodTripEarnings, periodBonusEarned, periodPaymentBreakdown.netPaid]);
 
-  const liveNetPending = useMemo(() => {
-    return dateFilter === "all"
-      ? Number(partner?.totalPending || 0)
-      : liveTotalPayable + totalBonusEarned - liveTotalPaid;
-  }, [dateFilter, partner?.totalPending, liveTotalPayable, totalBonusEarned, liveTotalPaid]);
+  const periodProductOrderDue = useMemo(() => {
+    return filteredPartnerCustomerOrders.reduce((sum, o) => sum + Number(o.balanceDue || 0), 0);
+  }, [filteredPartnerCustomerOrders]);
+
+  const periodFinalSettlementDue = useMemo(() => {
+    return periodNetDeliveryWage - periodProductOrderDue;
+  }, [periodNetDeliveryWage, periodProductOrderDue]);
+
+  // 2. All-Time computed numbers (True Source of Truth directly from ledger documents)
+  const allTimeComputed = useMemo(() => {
+    const tripEarnings = allCombinedTrips.reduce((sum, t) => sum + Number(t.deliveryCharge || 0), 0);
+    const bonusEarned = allPartnerBonuses.reduce((sum, b) => sum + Number(b.amount || 0), 0);
+    
+    let grossDisbursed = 0;
+    let grossRepaid = 0;
+    allPartnerPayments.forEach((p) => {
+      const rawAmt = Number(p.amount || 0);
+      const isRepay = p.isRepayment || rawAmt < 0;
+      const absAmt = Math.abs(rawAmt);
+      if (isRepay) {
+        grossRepaid += absAmt;
+      } else {
+        grossDisbursed += absAmt;
+      }
+    });
+    const netPaid = grossDisbursed - grossRepaid;
+    const netDeliveryWage = tripEarnings + bonusEarned - netPaid;
+    const productOrderDue = allPartnerCustomerOrders.reduce((sum, o) => sum + Number(o.balanceDue || 0), 0);
+    const finalSettlement = netDeliveryWage - productOrderDue;
+
+    return {
+      tripEarnings,
+      bonusEarned,
+      grossDisbursed,
+      grossRepaid,
+      netPaid,
+      totalPayable: tripEarnings + bonusEarned,
+      netDeliveryWage,
+      productOrderDue,
+      finalSettlement,
+    };
+  }, [allCombinedTrips, allPartnerBonuses, allPartnerPayments, allPartnerCustomerOrders]);
+
+  // Is Firestore partner document desynchronized from the actual ledger?
+  const isBalanceDesynced = useMemo(() => {
+    if (!partner) return false;
+    const storedPayable = Math.round(Number(partner.totalPayable || 0));
+    const storedPaid = Math.round(Number(partner.totalPaid || 0));
+    const storedPending = Math.round(Number(partner.totalPending || 0));
+
+    const truePayable = Math.round(allTimeComputed.totalPayable);
+    const truePaid = Math.round(allTimeComputed.netPaid);
+    const truePending = Math.round(allTimeComputed.finalSettlement);
+
+    return storedPayable !== truePayable || storedPaid !== truePaid || storedPending !== truePending;
+  }, [partner, allTimeComputed]);
+
+  // Live figures displayed in UI based on selected dateFilter
+  const liveTripEarnings = dateFilter === "all" ? allTimeComputed.tripEarnings : periodTripEarnings;
+  const liveBonusEarned = dateFilter === "all" ? allTimeComputed.bonusEarned : periodBonusEarned;
+  const totalTripEarnings = liveTripEarnings;
+  const totalBonusEarned = liveBonusEarned;
+  const liveTotalPayable = liveTripEarnings;
+  const liveTotalPaid = dateFilter === "all" ? allTimeComputed.netPaid : periodPaymentBreakdown.netPaid;
+  const liveNetDeliveryWage = dateFilter === "all" ? allTimeComputed.netDeliveryWage : periodNetDeliveryWage;
+  const liveOrderDue = dateFilter === "all" ? allTimeComputed.productOrderDue : periodProductOrderDue;
+  const liveFinalSettlement = dateFilter === "all" ? allTimeComputed.finalSettlement : periodFinalSettlementDue;
+
+  // Live Net Pending displayed on hero card and modals
+  const liveNetPending = liveFinalSettlement;
+
+  // Reconcile partner balance in Firestore
+  const handleReconcileBalance = useCallback(
+    async (isSilent = false) => {
+      if (!partner?.id) return;
+      setReconciling(true);
+      try {
+        await reconcilePartnerBalance(partner.id, {
+          totalPayable: allTimeComputed.totalPayable,
+          totalPaid: allTimeComputed.netPaid,
+          totalPending: allTimeComputed.finalSettlement,
+        });
+        if (!isSilent) {
+          Alert.alert(
+            "Balance Reconciled ✅",
+            `Financial balance for "${partner.name}" has been recalculated and synchronized with all ledger records.\n\n` +
+            `• Trip Freight: ₹${allTimeComputed.tripEarnings.toLocaleString("en-IN")}\n` +
+            `• Bonuses Earned: ₹${allTimeComputed.bonusEarned.toLocaleString("en-IN")}\n` +
+            `• Gross Earnings: ₹${allTimeComputed.totalPayable.toLocaleString("en-IN")}\n` +
+            `• Net Paid (Payouts - Repayments): ₹${allTimeComputed.netPaid.toLocaleString("en-IN")}\n` +
+            (allTimeComputed.productOrderDue > 0
+              ? `• Product Orders Offset: -₹${allTimeComputed.productOrderDue.toLocaleString("en-IN")}\n`
+              : "") +
+            `• Net Pending Balance: ₹${allTimeComputed.finalSettlement.toLocaleString("en-IN")}`
+          );
+        }
+      } catch (err) {
+        console.error("Failed to reconcile partner balance:", err);
+        if (!isSilent) {
+          Alert.alert("Error", "Failed to reconcile balance with Firestore.");
+        }
+      } finally {
+        setReconciling(false);
+      }
+    },
+    [partner?.id, partner?.name, allTimeComputed, reconcilePartnerBalance]
+  );
 
   // Helpers
   const formatRateInfo = (type, rate, minRate) => {
@@ -1162,6 +1312,16 @@ function PartnerDetailsScreen() {
 
         const partnerRef = doc(db, "deliveryPartners", partner.id);
         if (tripStatus === "Paid") {
+          // Log corresponding payment document so ledger is 100% complete
+          await addDoc(collection(db, "deliveryPayments"), {
+            partnerId: partner.id,
+            partnerName: partner.name,
+            amount: chargeNum,
+            paymentMethod: "Cash",
+            notes: `Direct trip freight payment for ${custName}`,
+            createdAt: tripDate,
+          });
+
           await updateDoc(partnerRef, {
             totalPayable: increment(chargeNum),
             totalPaid: increment(chargeNum),
@@ -1769,15 +1929,49 @@ function PartnerDetailsScreen() {
 
           {/* Financial Summary Card with Pay Driver & Repay Advance Buttons */}
           <View style={styles.balanceHeroCard}>
+            {/* Desynced Balance Warning Banner */}
+            {isBalanceDesynced && (
+              <View style={styles.desyncBanner}>
+                <View style={{ flexDirection: "row", alignItems: "center", gap: 6, flex: 1 }}>
+                  <MaterialIcons name="sync-problem" size={16} color="#d97706" />
+                  <Text style={styles.desyncBannerText} numberOfLines={1}>
+                    Stored profile balance is out of sync with ledger records.
+                  </Text>
+                </View>
+                <Pressable
+                  style={({ pressed }) => [styles.desyncSyncBtn, pressed && styles.buttonPressed]}
+                  onPress={() => handleReconcileBalance(false)}
+                  disabled={reconciling}
+                >
+                  {reconciling ? (
+                    <ActivityIndicator size="small" color="#ffffff" />
+                  ) : (
+                    <>
+                      <MaterialIcons name="sync" size={13} color="#ffffff" />
+                      <Text style={styles.desyncSyncBtnText}>Reconcile</Text>
+                    </>
+                  )}
+                </Pressable>
+              </View>
+            )}
+
             <View style={styles.balanceMainRow}>
               <View style={styles.balanceLeftCol}>
-                <Text style={styles.balanceSubheader}>
-                  {liveNetPending > 0
-                    ? "Net Payable to Partner"
-                    : liveNetPending < 0
-                    ? "Advance Paid to Partner"
-                    : "Account Balance"}
-                </Text>
+                <View style={{ flexDirection: "row", alignItems: "center", gap: 6, marginBottom: 2 }}>
+                  <Text style={styles.balanceSubheader}>
+                    {liveNetPending > 0
+                      ? liveOrderDue > 0
+                        ? "Net Settlement Due"
+                        : "Net Payable to Partner"
+                      : liveNetPending < 0
+                      ? "Advance Paid to Partner"
+                      : "Account Balance"}
+                  </Text>
+                  <View style={styles.periodBadgeSmall}>
+                    <Text style={styles.periodBadgeSmallText}>{currentPeriodLabel}</Text>
+                  </View>
+                </View>
+
                 <Text
                   style={[
                     styles.balanceBigNumber,
@@ -1793,13 +1987,33 @@ function PartnerDetailsScreen() {
                 >
                   ₹{Math.abs(liveNetPending).toLocaleString("en-IN")}
                 </Text>
-                <Text style={styles.balanceStatusNote}>
-                  {liveNetPending > 0
-                    ? "⚠️ Pending settlement"
-                    : liveNetPending < 0
-                    ? "✨ Driver holds advance credit"
-                    : "✅ Fully settled"}
-                </Text>
+
+                <View style={{ flexDirection: "row", alignItems: "center", gap: 8, marginTop: 4, flexWrap: "wrap" }}>
+                  <Text style={styles.balanceStatusNote}>
+                    {liveNetPending > 0
+                      ? "⚠️ Pending settlement"
+                      : liveNetPending < 0
+                      ? "✨ Driver holds advance credit"
+                      : "✅ Fully settled"}
+                  </Text>
+                  <Pressable
+                    style={styles.calcBreakdownLink}
+                    onPress={() => setBreakdownModalVisible(true)}
+                    hitSlop={6}
+                  >
+                    <MaterialIcons name="calculate" size={13} color={colors.accent.primary} />
+                    <Text style={styles.calcBreakdownLinkText}>Breakdown</Text>
+                  </Pressable>
+                </View>
+
+                {liveOrderDue > 0 && (
+                  <View style={styles.orderOffsetHeroRow}>
+                    <MaterialIcons name="shopping-bag" size={12} color="#0284C7" />
+                    <Text style={styles.orderOffsetHeroText}>
+                      Product purchases offset: -₹{liveOrderDue.toLocaleString("en-IN")} applied
+                    </Text>
+                  </View>
+                )}
               </View>
 
               {/* Side-by-side action buttons: Pay Driver & Repay Advance */}
@@ -1834,7 +2048,7 @@ function PartnerDetailsScreen() {
                   <Text style={styles.metricLabel}>Trips Earned</Text>
                 </View>
                 <Text style={[styles.metricValue, { color: "#2563eb" }]}>
-                  ₹{liveTotalPayable.toLocaleString("en-IN")}
+                  ₹{liveTripEarnings.toLocaleString("en-IN")}
                 </Text>
                 <Text style={styles.metricCountText}>{partnerTrips.length} trips</Text>
               </View>
@@ -1845,7 +2059,7 @@ function PartnerDetailsScreen() {
                   <Text style={styles.metricLabel}>Bonuses</Text>
                 </View>
                 <Text style={[styles.metricValue, { color: "#8b5cf6" }]}>
-                  ₹{totalBonusEarned.toLocaleString("en-IN")}
+                  ₹{liveBonusEarned.toLocaleString("en-IN")}
                 </Text>
                 <Text style={styles.metricCountText}>{partnerBonuses.length} rewards</Text>
               </View>
@@ -1858,7 +2072,7 @@ function PartnerDetailsScreen() {
                 <Text style={[styles.metricValue, { color: "#16a34a" }]}>
                   ₹{liveTotalPaid.toLocaleString("en-IN")}
                 </Text>
-                <Text style={styles.metricCountText}>{partnerPayments.length} payouts</Text>
+                <Text style={styles.metricCountText}>{partnerPayments.length} records</Text>
               </View>
             </View>
           </View>
@@ -3612,6 +3826,30 @@ function PartnerDetailsScreen() {
                 style={styles.optionMenuItem}
                 onPress={() => {
                   setOptionsMenuVisible(false);
+                  setBreakdownModalVisible(true);
+                }}
+              >
+                <MaterialIcons name="calculate" size={20} color={colors.accent.primary} />
+                <Text style={styles.optionMenuText}>View Calculation Breakdown</Text>
+              </Pressable>
+
+              <Pressable
+                style={styles.optionMenuItem}
+                onPress={() => {
+                  setOptionsMenuVisible(false);
+                  handleReconcileBalance(false);
+                }}
+              >
+                <MaterialIcons name="sync" size={20} color="#16a34a" />
+                <Text style={[styles.optionMenuText, { color: "#16a34a", fontWeight: "700" }]}>
+                  Reconcile Balance (Fix Sync)
+                </Text>
+              </Pressable>
+
+              <Pressable
+                style={styles.optionMenuItem}
+                onPress={() => {
+                  setOptionsMenuVisible(false);
                   handleOpenRepayModal();
                 }}
               >
@@ -3710,13 +3948,163 @@ function PartnerDetailsScreen() {
           visible={shareModalVisible}
           onClose={() => setShareModalVisible(false)}
           partner={partner}
-          trips={partnerTrips}
-          payments={partnerPayments}
-          bonuses={partnerBonuses}
-          purchasedOrders={partnerCustomerOrders}
+          trips={allCombinedTrips}
+          payments={allPartnerPayments}
+          bonuses={allPartnerBonuses}
+          purchasedOrders={allPartnerCustomerOrders}
           company={companyProfile}
           initialDateFilter={dateFilter}
         />
+
+        {/* ========== MODAL: CALCULATION BREAKDOWN & AUDIT ========== */}
+        <Modal visible={breakdownModalVisible} transparent animationType="fade">
+          <KeyboardAvoidingView
+            behavior={Platform.OS === "ios" ? "padding" : "height"}
+            style={styles.modalBg}
+          >
+            <View style={[styles.modalContent, { maxWidth: 440 }]}>
+              <View style={styles.modalHeaderRow}>
+                <View style={{ flexDirection: "row", alignItems: "center", gap: 8 }}>
+                  <View style={[styles.modalIconBadge, { backgroundColor: "#2563eb18" }]}>
+                    <MaterialIcons name="calculate" size={20} color="#2563eb" />
+                  </View>
+                  <View>
+                    <Text style={styles.modalTitle}>Calculation Breakdown</Text>
+                    <Text style={styles.modalSubtitle}>Period: {currentPeriodLabel}</Text>
+                  </View>
+                </View>
+
+                <Pressable onPress={() => setBreakdownModalVisible(false)} hitSlop={8}>
+                  <MaterialIcons name="close" size={22} color={colors.text.muted} />
+                </Pressable>
+              </View>
+
+              <ScrollView showsVerticalScrollIndicator={false} style={{ maxHeight: 420 }}>
+                <View style={styles.breakdownCard}>
+                  {/* Step 1: Trip Earnings */}
+                  <View style={styles.breakdownRow}>
+                    <View style={styles.breakdownRowLeft}>
+                      <MaterialIcons name="local-shipping" size={16} color="#2563eb" />
+                      <Text style={styles.breakdownRowLabel}>Trip Freight Earnings</Text>
+                      <Text style={styles.breakdownRowCount}>({partnerTrips.length} trips)</Text>
+                    </View>
+                    <Text style={[styles.breakdownRowVal, { color: "#2563eb" }]}>
+                      +₹{liveTripEarnings.toLocaleString("en-IN")}
+                    </Text>
+                  </View>
+
+                  {/* Step 2: Bonuses */}
+                  <View style={styles.breakdownRow}>
+                    <View style={styles.breakdownRowLeft}>
+                      <MaterialIcons name="stars" size={16} color="#8b5cf6" />
+                      <Text style={styles.breakdownRowLabel}>Performance Bonuses</Text>
+                      <Text style={styles.breakdownRowCount}>({partnerBonuses.length} rewards)</Text>
+                    </View>
+                    <Text style={[styles.breakdownRowVal, { color: "#8b5cf6" }]}>
+                      +₹{liveBonusEarned.toLocaleString("en-IN")}
+                    </Text>
+                  </View>
+
+                  {/* Subtotal: Gross Earnings */}
+                  <View style={[styles.breakdownRow, styles.breakdownSubtotalRow]}>
+                    <Text style={styles.breakdownSubtotalLabel}>∑ Total Gross Earnings</Text>
+                    <Text style={styles.breakdownSubtotalVal}>
+                      ₹{(liveTripEarnings + liveBonusEarned).toLocaleString("en-IN")}
+                    </Text>
+                  </View>
+
+                  <View style={styles.breakdownDivider} />
+
+                  {/* Step 3: Payouts */}
+                  <View style={styles.breakdownRow}>
+                    <View style={styles.breakdownRowLeft}>
+                      <MaterialIcons name="payment" size={16} color="#dc2626" />
+                      <Text style={styles.breakdownRowLabel}>Driver Payouts Disbursed</Text>
+                    </View>
+                    <Text style={[styles.breakdownRowVal, { color: "#dc2626" }]}>
+                      -₹{dateFilter === "all" ? allTimeComputed.grossDisbursed.toLocaleString("en-IN") : periodPaymentBreakdown.grossDisbursed.toLocaleString("en-IN")}
+                    </Text>
+                  </View>
+
+                  {/* Step 4: Advance Repaid */}
+                  {(dateFilter === "all" ? allTimeComputed.grossRepaid : periodPaymentBreakdown.grossRepaid) > 0 && (
+                    <View style={styles.breakdownRow}>
+                      <View style={styles.breakdownRowLeft}>
+                        <MaterialIcons name="replay" size={16} color="#0d9488" />
+                        <Text style={styles.breakdownRowLabel}>Advance Repaid by Driver</Text>
+                      </View>
+                      <Text style={[styles.breakdownRowVal, { color: "#0d9488" }]}>
+                        +₹{dateFilter === "all" ? allTimeComputed.grossRepaid.toLocaleString("en-IN") : periodPaymentBreakdown.grossRepaid.toLocaleString("en-IN")}
+                      </Text>
+                    </View>
+                  )}
+
+                  {/* Subtotal: Net Delivery Wages */}
+                  <View style={[styles.breakdownRow, styles.breakdownSubtotalRow]}>
+                    <Text style={styles.breakdownSubtotalLabel}>= Net Delivery Wages Due</Text>
+                    <Text style={[styles.breakdownSubtotalVal, { color: liveNetDeliveryWage >= 0 ? "#16a34a" : "#dc2626" }]}>
+                      {liveNetDeliveryWage < 0 ? "-" : ""}₹{Math.abs(liveNetDeliveryWage).toLocaleString("en-IN")}
+                    </Text>
+                  </View>
+
+                  {/* Step 5: Product Orders Offset (if any) */}
+                  {liveOrderDue > 0 && (
+                    <>
+                      <View style={styles.breakdownDivider} />
+                      <View style={styles.breakdownRow}>
+                        <View style={styles.breakdownRowLeft}>
+                          <MaterialIcons name="shopping-bag" size={16} color="#ea580c" />
+                          <Text style={styles.breakdownRowLabel}>Product Orders Due Offset</Text>
+                          <Text style={styles.breakdownRowCount}>({filteredPartnerCustomerOrders.length} purchases)</Text>
+                        </View>
+                        <Text style={[styles.breakdownRowVal, { color: "#dc2626" }]}>
+                          -₹{liveOrderDue.toLocaleString("en-IN")}
+                        </Text>
+                      </View>
+                    </>
+                  )}
+
+                  {/* FINAL NET SETTLEMENT DUE */}
+                  <View style={styles.breakdownTotalBox}>
+                    <Text style={styles.breakdownTotalLabel}>
+                      {liveFinalSettlement >= 0 ? "FINAL NET SETTLEMENT DUE" : "ADVANCE CREDIT WITH DRIVER"}
+                    </Text>
+                    <Text
+                      style={[
+                        styles.breakdownTotalVal,
+                        { color: liveFinalSettlement >= 0 ? colors.accent.danger : "#16a34a" },
+                      ]}
+                    >
+                      ₹{Math.abs(liveFinalSettlement).toLocaleString("en-IN")}
+                    </Text>
+                    <Text style={styles.breakdownExplanationText}>
+                      {liveFinalSettlement > 0
+                        ? "Business owes this balance to the delivery partner."
+                        : liveFinalSettlement < 0
+                        ? "Partner holds an advance credit / owes this refund to the business."
+                        : "Account is completely settled (₹0.00 due)."}
+                    </Text>
+                  </View>
+                </View>
+
+                {/* Reconcile button inside breakdown */}
+                <Pressable
+                  style={({ pressed }) => [styles.breakdownReconcileBtn, pressed && styles.buttonPressed]}
+                  onPress={() => {
+                    setBreakdownModalVisible(false);
+                    handleReconcileBalance(false);
+                  }}
+                  disabled={reconciling}
+                >
+                  <MaterialIcons name="sync" size={16} color="#2563eb" />
+                  <Text style={styles.breakdownReconcileBtnText}>
+                    {reconciling ? "Reconciling..." : "Reconcile Stored Balance with Ledger"}
+                  </Text>
+                </Pressable>
+              </ScrollView>
+            </View>
+          </KeyboardAvoidingView>
+        </Modal>
       </View>
     </ProtectedRoute>
   );
@@ -4961,6 +5349,184 @@ const getStyles = (theme) => {
       fontWeight: "800",
       color: "#ffffff",
       fontSize: 13,
+    },
+
+    // Calculation Breakdown & Reconcile UI
+    desyncBanner: {
+      flexDirection: "row",
+      alignItems: "center",
+      justifyContent: "space-between",
+      backgroundColor: isDark ? "#451a03" : "#fef3c7",
+      borderWidth: 1,
+      borderColor: isDark ? "#78350f" : "#fde68a",
+      borderRadius: 10,
+      paddingHorizontal: 12,
+      paddingVertical: 8,
+      marginBottom: 12,
+      gap: 8,
+    },
+    desyncBannerText: {
+      fontSize: 12,
+      fontWeight: "600",
+      color: isDark ? "#fef3c7" : "#92400e",
+      flex: 1,
+    },
+    desyncSyncBtn: {
+      flexDirection: "row",
+      alignItems: "center",
+      gap: 4,
+      backgroundColor: "#d97706",
+      paddingHorizontal: 10,
+      paddingVertical: 5,
+      borderRadius: 6,
+    },
+    desyncSyncBtnText: {
+      color: "#ffffff",
+      fontSize: 11,
+      fontWeight: "700",
+    },
+    periodBadgeSmall: {
+      backgroundColor: `${colors.accent.primary}18`,
+      paddingHorizontal: 7,
+      paddingVertical: 2,
+      borderRadius: 6,
+    },
+    periodBadgeSmallText: {
+      fontSize: 11,
+      fontWeight: "700",
+      color: colors.accent.primary,
+    },
+    calcBreakdownLink: {
+      flexDirection: "row",
+      alignItems: "center",
+      gap: 3,
+      backgroundColor: `${colors.accent.primary}14`,
+      paddingHorizontal: 7,
+      paddingVertical: 2,
+      borderRadius: 6,
+    },
+    calcBreakdownLinkText: {
+      fontSize: 11,
+      fontWeight: "700",
+      color: colors.accent.primary,
+    },
+    orderOffsetHeroRow: {
+      flexDirection: "row",
+      alignItems: "center",
+      gap: 5,
+      marginTop: 4,
+      backgroundColor: isDark ? "#082f49" : "#f0f9ff",
+      paddingHorizontal: 8,
+      paddingVertical: 3,
+      borderRadius: 6,
+      borderWidth: 1,
+      borderColor: isDark ? "#0c4a6e" : "#e0f2fe",
+      alignSelf: "flex-start",
+    },
+    orderOffsetHeroText: {
+      fontSize: 11,
+      fontWeight: "600",
+      color: isDark ? "#38bdf8" : "#0369a1",
+    },
+    breakdownCard: {
+      backgroundColor: colors.bg.primary,
+      borderRadius: 14,
+      borderWidth: 1,
+      borderColor: colors.border.subtle,
+      padding: 14,
+      marginTop: 6,
+      marginBottom: 12,
+    },
+    breakdownRow: {
+      flexDirection: "row",
+      alignItems: "center",
+      justifyContent: "space-between",
+      paddingVertical: 7,
+    },
+    breakdownRowLeft: {
+      flexDirection: "row",
+      alignItems: "center",
+      gap: 6,
+      flex: 1,
+    },
+    breakdownRowLabel: {
+      fontSize: 13,
+      fontWeight: "600",
+      color: colors.text.primary,
+    },
+    breakdownRowCount: {
+      fontSize: 11,
+      color: colors.text.muted,
+      fontWeight: "500",
+    },
+    breakdownRowVal: {
+      fontSize: 13,
+      fontWeight: "700",
+    },
+    breakdownSubtotalRow: {
+      backgroundColor: colors.bg.card,
+      paddingHorizontal: 8,
+      borderRadius: 6,
+      marginTop: 2,
+    },
+    breakdownSubtotalLabel: {
+      fontSize: 12,
+      fontWeight: "700",
+      color: colors.text.secondary,
+    },
+    breakdownSubtotalVal: {
+      fontSize: 13,
+      fontWeight: "800",
+      color: colors.text.primary,
+    },
+    breakdownDivider: {
+      height: 1,
+      backgroundColor: colors.border.subtle,
+      marginVertical: 6,
+    },
+    breakdownTotalBox: {
+      backgroundColor: `${colors.accent.primary}0D`,
+      borderWidth: 1,
+      borderColor: `${colors.accent.primary}25`,
+      borderRadius: 10,
+      padding: 12,
+      marginTop: 10,
+      alignItems: "center",
+    },
+    breakdownTotalLabel: {
+      fontSize: 11,
+      fontWeight: "800",
+      letterSpacing: 0.5,
+      color: colors.text.muted,
+      marginBottom: 2,
+    },
+    breakdownTotalVal: {
+      fontSize: 22,
+      fontWeight: "900",
+      marginBottom: 4,
+    },
+    breakdownExplanationText: {
+      fontSize: 11,
+      color: colors.text.muted,
+      textAlign: "center",
+      fontWeight: "500",
+    },
+    breakdownReconcileBtn: {
+      flexDirection: "row",
+      alignItems: "center",
+      justifyContent: "center",
+      gap: 6,
+      paddingVertical: 11,
+      borderRadius: 10,
+      borderWidth: 1,
+      borderColor: colors.accent.primary,
+      backgroundColor: `${colors.accent.primary}12`,
+      marginBottom: 8,
+    },
+    breakdownReconcileBtnText: {
+      fontSize: 12,
+      fontWeight: "700",
+      color: colors.accent.primary,
     },
 
     // Error container
