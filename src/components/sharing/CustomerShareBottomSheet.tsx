@@ -98,6 +98,17 @@ export function CustomerShareBottomSheet({
       ]);
       setSettings(s);
       setTemplate(t);
+
+      const effectiveTamil = Boolean(t?.isTamilLanguage ?? s?.isTamilLanguage);
+      const effectiveBilingual = Boolean(t?.isBilingual ?? s?.isBilingual);
+      const effectiveHonorific = Boolean((t?.showCustomerHonorificTamil ?? s?.showCustomerHonorificTamil) !== false);
+
+      const origName = customerData?.customer?.name || '';
+      if (/\s+அவர்கள்$/i.test(origName) || origName.endsWith('அவர்கள்')) {
+        setUseAvargal(true);
+      } else if ((effectiveTamil || effectiveBilingual) && effectiveHonorific) {
+        setUseAvargal(true);
+      }
     } catch (e) {
       console.error('Error loading customer share settings:', e);
     }
@@ -263,10 +274,10 @@ export function CustomerShareBottomSheet({
 
   useEffect(() => {
     if (visible && settings) {
-      const text = customerShareService.formatCustomerShareText(processedData, company, settings);
+      const text = customerShareService.formatCustomerShareText(processedData, company, settings, undefined, template);
       setCustomMessage(text);
     }
-  }, [processedData, visible, settings]);
+  }, [processedData, visible, settings, template]);
 
   const handleShareText = async (via: 'whatsapp' | 'sms' | 'copy' | 'share') => {
     setSharing(true);

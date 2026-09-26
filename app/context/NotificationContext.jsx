@@ -8,7 +8,7 @@ import {
   updateDoc,
   writeBatch,
 } from "firebase/firestore";
-import { createContext, useContext, useEffect, useState, useMemo, useRef } from "react";
+import { createContext, useContext, useEffect, useState, useMemo, useCallback, useRef } from "react";
 import { db } from "../../src/config/firebase";
 import { ItemContext } from "./ItemContext";
 import { ExpenseContext } from "./ExpenseContext";
@@ -104,6 +104,14 @@ export function NotificationProvider({ children }) {
   const [preferences, setPreferences] = useState(DEFAULT_PREFERENCES);
   const [prefsLoading, setPrefsLoading] = useState(true);
   const [expoPushToken, setExpoPushToken] = useState("");
+  const notificationsRef = useRef(notifications);
+  useEffect(() => {
+    notificationsRef.current = notifications;
+  }, [notifications]);
+  const preferencesRef = useRef(preferences);
+  useEffect(() => {
+    preferencesRef.current = preferences;
+  }, [preferences]);
   const notificationListener = useRef();
   const responseListener = useRef();
 
@@ -328,7 +336,7 @@ export function NotificationProvider({ children }) {
   }, [items, expenses, workers, suppliers, customers, preferences]);
 
   // ─── CRUD Operations ───
-  const addNotification = async (data) => {
+  const addNotification = useCallback(async (data) => {
     try {
       const payload = {
         title: data.title || "",
@@ -343,7 +351,7 @@ export function NotificationProvider({ children }) {
       const docRef = await addDoc(collection(db, "notifications"), payload);
 
       // Trigger actual device local push notification if enabled
-      if (preferences.pushEnabled) {
+      if (preferencesRef.current?.pushEnabled) {
         try {
           await Notifications.scheduleNotificationAsync({
             content: {
@@ -362,72 +370,89 @@ export function NotificationProvider({ children }) {
     } catch (error) {
       return null;
     }
-  };
+  }, []);
 
-  const markAsRead = async (id) => {
+  const markAsRead = useCallback(async (id) => {
     try {
       await updateDoc(doc(db, "notifications", id), { read: true });
     } catch (error) {
     }
-  };
+  }, []);
 
-  const markAllAsRead = async () => {
+  const markAllAsRead = useCallback(async () => {
     try {
       const batch = writeBatch(db);
-      notifications.filter((n) => !n.read).forEach((n) => {
+      (notificationsRef.current || []).filter((n) => !n.read).forEach((n) => {
         batch.update(doc(db, "notifications", n.id), { read: true });
       });
       await batch.commit();
     } catch (error) {
     }
-  };
+  }, []);
 
-  const deleteNotification = async (id) => {
+  const deleteNotification = useCallback(async (id) => {
     try {
       await deleteDoc(doc(db, "notifications", id));
     } catch (error) {
     }
-  };
+  }, []);
 
-  const clearAll = async () => {
+  const clearAll = useCallback(async () => {
     try {
       const batch = writeBatch(db);
-      notifications.forEach((n) => {
+      (notificationsRef.current || []).forEach((n) => {
         batch.delete(doc(db, "notifications", n.id));
       });
       await batch.commit();
     } catch (error) {
     }
-  };
+  }, []);
 
   // ─── Preferences CRUD ───
-  const updatePreferences = async (updates) => {
+  const updatePreferences = useCallback(async (updates) => {
     try {
       const prefsDocRef = doc(db, "notification_settings", "default_user");
-      const merged = { ...preferences, ...updates, updatedAt: new Date() };
+      const merged = { ...preferencesRef.current, ...updates, updatedAt: new Date() };
       await setDoc(prefsDocRef, merged, { merge: true });
     } catch (error) {
     }
-  };
+  }, []);
+
+  const contextValue = useMemo(
+    () => ({
+      notifications,
+      loading,
+      unreadCount,
+      smartAlerts,
+      preferences,
+      prefsLoading,
+      addNotification,
+      markAsRead,
+      markAllAsRead,
+      deleteNotification,
+      clearAll,
+      updatePreferences,
+      expoPushToken,
+    }),
+    [
+      notifications,
+      loading,
+      unreadCount,
+      smartAlerts,
+      preferences,
+      prefsLoading,
+      addNotification,
+      markAsRead,
+      markAllAsRead,
+      deleteNotification,
+      clearAll,
+      updatePreferences,
+      expoPushToken,
+    ]
+  );
 
   return (
-    <NotificationContext.Provider
-      value={{
-        notifications,
-        loading,
-        unreadCount,
-        smartAlerts,
-        preferences,
-        prefsLoading,
-        addNotification,
-        markAsRead,
-        markAllAsRead,
-        deleteNotification,
-        clearAll,
-        updatePreferences,
-        expoPushToken,
-      }}
-    >
+    <NotificationContext.Provider value={contextValue}>
       {children}
     </NotificationContext.Provider>
   );

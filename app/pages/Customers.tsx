@@ -19,14 +19,19 @@ import { MaterialIcons } from "@expo/vector-icons";
 import { CustomerContext } from "../context/CustomerContext";
 import { CollectorContext } from "../context/CollectorContext";
 import { PaymentContext } from "../context/PaymentContext";
+import { OrderContext } from "../context/OrderContext";
 import { WorkerContext } from "../context/WorkerContext";
 import { RawMaterialSupplierContext } from "../context/RawMaterialSupplierContext";
 import { DeliveryPartnerContext } from "../context/DeliveryPartnerContext";
+import { UserContext } from "../context/UserContext";
 import AnimatedPage from "../components/AnimatedPage";
 import ContactsModal from "../components/ContactsModal";
 import EasyCalendarModal from "../components/EasyCalendarModal";
 import { useScrollRestoration } from "../context/ScrollContext";
 import { PRESET_MARKINGS, getMarkingConfig, normalizeMarkings, useCustomMarkings } from "../../src/utils/markingUtils";
+import { CustomerShareBottomSheet } from "../../src/components/sharing/CustomerShareBottomSheet";
+import { CustomerShareData } from "../../src/types/sharing";
+import { buildCustomerShareData } from "../../src/utils/customerStatementHelper";
 
 const AVATAR_COLORS = [
   "#00D68F",
@@ -57,11 +62,44 @@ export default function Customers() {
     toggleFavoriteCustomer,
   } = useContext(CustomerContext) as any;
 
+  const { profile: userProfile } = useContext(UserContext) as any;
   const { collectors } = useContext(CollectorContext) as any;
-  const { addPayment } = useContext(PaymentContext) as any;
+  const { orders } = useContext(OrderContext) as any;
+  const { payments, addPayment } = useContext(PaymentContext) as any;
   const { workers } = useContext(WorkerContext) as any;
   const { suppliers } = useContext(RawMaterialSupplierContext) as any;
   const { partners } = useContext(DeliveryPartnerContext) as any;
+
+  // Statement sharing states
+  const [customerShareModalVisible, setCustomerShareModalVisible] = useState(false);
+  const [selectedShareCustomerData, setSelectedShareCustomerData] = useState<CustomerShareData | null>(null);
+
+  const companyInfo = useMemo(() => {
+    return {
+      name: userProfile?.company?.name || userProfile?.businessName || userProfile?.fullName || 'Company Name',
+      phone: userProfile?.company?.phone || userProfile?.mobile || '',
+      email: userProfile?.company?.email || userProfile?.email || '',
+      address: userProfile?.company?.address || userProfile?.address || '',
+      gstin: userProfile?.company?.gstin || userProfile?.taxId || userProfile?.gstNo || '',
+      logoUrl: userProfile?.company?.logoUrl || userProfile?.photoURL || userProfile?.logoUrl || '',
+      signatureUrl: userProfile?.company?.signatureUrl || userProfile?.signatureUrl || '',
+      bankName: userProfile?.company?.bankName || userProfile?.bankName || '',
+      accountNo: userProfile?.company?.accountNo || userProfile?.accountNo || '',
+      ifscCode: userProfile?.company?.ifscCode || userProfile?.ifscCode || '',
+      upiId: userProfile?.company?.upiId || userProfile?.upiId || '',
+      ...userProfile?.company,
+    };
+  }, [userProfile]);
+
+  const handleShareStatement = (customerItem: any) => {
+    const shareData = buildCustomerShareData(customerItem, orders, payments, partners);
+    if (!shareData) {
+      Alert.alert("Error", "Unable to prepare account statement for this client.");
+      return;
+    }
+    setSelectedShareCustomerData(shareData);
+    setCustomerShareModalVisible(true);
+  };
 
   // Form states
   const [name, setName] = useState("");
@@ -2040,6 +2078,29 @@ setContactsVisible(true);
                             paddingVertical: 4,
                             paddingHorizontal: 8,
                             borderRadius: 6,
+                            backgroundColor: colors.accent.primary + "18",
+                            borderWidth: 1,
+                            borderColor: colors.accent.primary + "40",
+                          }}
+                          onPress={() => {
+                            setIsSummaryModalOpen(false);
+                            handleShareStatement(item);
+                          }}
+                        >
+                          <MaterialIcons name="share" size={12} color={colors.accent.primary} />
+                          <Text style={{ fontSize: 11, fontWeight: "700", color: colors.accent.primary }}>
+                            Statement
+                          </Text>
+                        </Pressable>
+
+                        <Pressable
+                          style={{
+                            flexDirection: "row",
+                            alignItems: "center",
+                            gap: 3,
+                            paddingVertical: 4,
+                            paddingHorizontal: 8,
+                            borderRadius: 6,
                             backgroundColor: colors.accent.success + "18",
                             borderWidth: 1,
                             borderColor: colors.accent.success + "40",
@@ -2063,6 +2124,19 @@ setContactsVisible(true);
           </View>
         </KeyboardAvoidingView>
       </Modal>
+
+      {selectedShareCustomerData && (
+        <CustomerShareBottomSheet
+          visible={customerShareModalVisible}
+          onClose={() => {
+            setCustomerShareModalVisible(false);
+            setSelectedShareCustomerData(null);
+          }}
+          customerData={selectedShareCustomerData}
+          company={companyInfo}
+          isDark={theme.isDark}
+        />
+      )}
 
     </AnimatedPage>
   );
@@ -2442,6 +2516,22 @@ const getStyles = (theme: any) => {
     flexDirection: "row",
     alignItems: "center",
     gap: 8,
+  },
+  shareStatementCardBtn: {
+    flexDirection: "row",
+    alignItems: "center",
+    gap: 4,
+    borderWidth: 1.5,
+    borderColor: `${colors.accent.primary}40`,
+    borderRadius: 8,
+    paddingVertical: 4,
+    paddingHorizontal: 8,
+    backgroundColor: `${colors.accent.primary}18`,
+  },
+  shareStatementCardBtnText: {
+    color: colors.accent.primary,
+    fontWeight: "700",
+    fontSize: 12,
   },
   addDueCardBtn: {
     flexDirection: "row",

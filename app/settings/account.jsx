@@ -1,5 +1,6 @@
 import React, { useContext, useState, useMemo } from "react";
-import { View, Text, StyleSheet, ScrollView, Pressable, Image, ActivityIndicator, Modal, TextInput } from "react-native";
+import { View, Text, StyleSheet, ScrollView, Pressable, ActivityIndicator, Modal, TextInput } from "react-native";
+import { Image } from "expo-image";
 import { useRouter } from "expo-router";
 import { MaterialIcons } from "@expo/vector-icons";
 import { UserContext } from "../context/UserContext";
@@ -154,7 +155,13 @@ function AccountScreen() {
       <View style={styles.profileCard}>
         <View style={styles.avatarContainer}>
           {profile?.photoURL ? (
-            <Image source={{ uri: profile.photoURL }} style={styles.avatar} />
+            <Image
+              source={{ uri: profile.photoURL }}
+              style={styles.avatar}
+              contentFit="cover"
+              cachePolicy="memory-disk"
+              transition={150}
+            />
           ) : (
             <View style={styles.avatarPlaceholder}>
               <Text style={styles.avatarPlaceholderText}>

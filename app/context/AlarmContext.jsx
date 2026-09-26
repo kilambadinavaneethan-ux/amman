@@ -7,7 +7,7 @@ import {
   Timestamp,
   updateDoc,
 } from "firebase/firestore";
-import { createContext, useContext, useEffect, useState } from "react";
+import { createContext, useContext, useEffect, useState, useMemo, useCallback, useRef } from "react";
 import { db } from "../../src/config/firebase";
 import { AuthContext } from "./AuthContext";
 import { Platform } from "react-native";
@@ -43,6 +43,10 @@ export function AlarmProvider({ children }) {
   const [alarms, setAlarms] = useState([]);
   const [loading, setLoading] = useState(true);
   const [permissionStatus, setPermissionStatus] = useState("undetermined");
+  const alarmsRef = useRef(alarms);
+  useEffect(() => {
+    alarmsRef.current = alarms;
+  }, [alarms]);
 
   // Check notification permission status on mount
   useEffect(() => {
@@ -61,7 +65,7 @@ export function AlarmProvider({ children }) {
   }, []);
 
   // Request notification permissions
-  const requestPermissions = async () => {
+  const requestPermissions = useCallback(async () => {
     if (!Notifications) return false;
     try {
       const { status } = await Notifications.requestPermissionsAsync();
@@ -70,7 +74,7 @@ export function AlarmProvider({ children }) {
     } catch (e) {
       return false;
     }
-  };
+  }, []);
 
   // Real-time listener for alarms collection
   useEffect(() => {
@@ -93,7 +97,7 @@ export function AlarmProvider({ children }) {
   }, []);
 
   // Schedule a local notification based on alarm properties
-  const scheduleLocalNotification = async (alarm) => {
+  const scheduleLocalNotification = useCallback(async (alarm) => {
     if (!Notifications) {
       return null;
     }
@@ -173,19 +177,19 @@ export function AlarmProvider({ children }) {
     } catch (e) {
       return null;
     }
-  };
+  }, [requestPermissions]);
 
   // Cancel a scheduled local notification
-  const cancelLocalNotification = async (notificationId) => {
+  const cancelLocalNotification = useCallback(async (notificationId) => {
     if (!Notifications || !notificationId) return;
     try {
       await Notifications.cancelScheduledNotificationAsync(notificationId);
     } catch (e) {
     }
-  };
+  }, []);
 
   // Add a new alarm
-  const addAlarm = async (alarm) => {
+  const addAlarm = useCallback(async (alarm) => {
     try {
       let notificationId = null;
       if (alarm.isActive) {
@@ -200,12 +204,12 @@ export function AlarmProvider({ children }) {
     } catch (e) {
       throw e;
     }
-  };
+  }, [scheduleLocalNotification]);
 
   // Update an existing alarm
-  const updateAlarm = async (id, updates) => {
+  const updateAlarm = useCallback(async (id, updates) => {
     try {
-      const oldAlarm = alarms.find((a) => a.id === id);
+      const oldAlarm = (alarmsRef.current || []).find((a) => a.id === id);
       let notificationId = oldAlarm ? oldAlarm.notificationId : null;
 
       const needsReschedule =
@@ -238,12 +242,12 @@ export function AlarmProvider({ children }) {
     } catch (e) {
       throw e;
     }
-  };
+  }, [cancelLocalNotification, scheduleLocalNotification]);
 
   // Delete an alarm
-  const deleteAlarm = async (id) => {
+  const deleteAlarm = useCallback(async (id) => {
     try {
-      const oldAlarm = alarms.find((a) => a.id === id);
+      const oldAlarm = (alarmsRef.current || []).find((a) => a.id === id);
       if (oldAlarm && oldAlarm.notificationId) {
         await cancelLocalNotification(oldAlarm.notificationId);
       }
@@ -252,10 +256,10 @@ export function AlarmProvider({ children }) {
     } catch (e) {
       throw e;
     }
-  };
+  }, [cancelLocalNotification]);
 
   // Test trigger an alarm notification immediately (5 seconds delay)
-  const testAlarmNotification = async (alarm) => {
+  const testAlarmNotification = useCallback(async (alarm) => {
     if (!Notifications) {
       return false;
     }
@@ -287,21 +291,33 @@ export function AlarmProvider({ children }) {
     } catch (e) {
       return false;
     }
-  };
+  }, [requestPermissions]);
+
+  const contextValue = useMemo(
+    () => ({
+      alarms,
+      loading,
+      permissionStatus,
+      requestPermissions,
+      addAlarm,
+      updateAlarm,
+      deleteAlarm,
+      testAlarmNotification,
+    }),
+    [
+      alarms,
+      loading,
+      permissionStatus,
+      requestPermissions,
+      addAlarm,
+      updateAlarm,
+      deleteAlarm,
+      testAlarmNotification,
+    ]
+  );
 
   return (
-    <AlarmContext.Provider
-      value={{
-        alarms,
-        loading,
-        permissionStatus,
-        requestPermissions,
-        addAlarm,
-        updateAlarm,
-        deleteAlarm,
-        testAlarmNotification,
-      }}
-    >
+    <AlarmContext.Provider value={contextValue}>
       {children}
     </AlarmContext.Provider>
   );

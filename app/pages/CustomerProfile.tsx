@@ -3409,39 +3409,41 @@ export default function CustomerProfile() {
               <BackButton label="Customers Registry" onPress={() => router.push("/customers")} style={{ marginBottom: 0 }} />
             )}
 
-            <Pressable
-              style={{
-                flexDirection: "row",
-                alignItems: "center",
-                gap: 6,
-                backgroundColor: isLocked ? colors.accent.danger : (colors.accent.primary + "15"),
-                borderColor: isLocked ? colors.accent.danger : (colors.accent.primary + "40"),
-                borderWidth: 1,
-                paddingHorizontal: 12,
-                paddingVertical: 7,
-                borderRadius: 20,
-              }}
-              onPress={() => {
-                if (isLocked) {
-                  setShowUnlockModal(true);
-                } else {
-                  handleLockScreen();
-                }
-              }}
-            >
-              <MaterialIcons
-                name={isLocked ? "lock" : "lock-outline"}
-                size={16}
-                color={isLocked ? "#FFFFFF" : colors.accent.primary}
-              />
-              <Text style={{
-                fontSize: 12,
-                fontWeight: "700",
-                color: isLocked ? "#FFFFFF" : colors.accent.primary,
-              }}>
-                {isLocked ? "Unlock Screen" : "Lock for Customer"}
-              </Text>
-            </Pressable>
+            <View style={{ flexDirection: "row", alignItems: "center", gap: 8 }}>
+              <Pressable
+                style={{
+                  flexDirection: "row",
+                  alignItems: "center",
+                  gap: 6,
+                  backgroundColor: isLocked ? colors.accent.danger : (colors.accent.primary + "15"),
+                  borderColor: isLocked ? colors.accent.danger : (colors.accent.primary + "40"),
+                  borderWidth: 1,
+                  paddingHorizontal: 12,
+                  paddingVertical: 7,
+                  borderRadius: 20,
+                }}
+                onPress={() => {
+                  if (isLocked) {
+                    setShowUnlockModal(true);
+                  } else {
+                    handleLockScreen();
+                  }
+                }}
+              >
+                <MaterialIcons
+                  name={isLocked ? "lock" : "lock-outline"}
+                  size={16}
+                  color={isLocked ? "#FFFFFF" : colors.accent.primary}
+                />
+                <Text style={{
+                  fontSize: 12,
+                  fontWeight: "700",
+                  color: isLocked ? "#FFFFFF" : colors.accent.primary,
+                }}>
+                  {isLocked ? "Unlock Screen" : "Lock for Customer"}
+                </Text>
+              </Pressable>
+            </View>
           </View>
           <View style={styles.profileSummary}>
             <Pressable

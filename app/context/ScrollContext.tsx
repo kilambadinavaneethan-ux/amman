@@ -1,4 +1,4 @@
-import React, { createContext, useContext, useRef, useCallback, useEffect } from "react";
+import React, { createContext, useContext, useRef, useCallback, useEffect, useMemo } from "react";
 import { usePathname } from "expo-router";
 
 interface ScrollContextType {
@@ -24,8 +24,13 @@ export const ScrollProvider: React.FC<{ children: React.ReactNode }> = ({ childr
     }
   }, []);
 
+  const contextValue = useMemo(
+    () => ({ getScrollPosition, setScrollPosition }),
+    [getScrollPosition, setScrollPosition]
+  );
+
   return (
-    <ScrollContext.Provider value={{ getScrollPosition, setScrollPosition }}>
+    <ScrollContext.Provider value={contextValue}>
       {children}
     </ScrollContext.Provider>
   );

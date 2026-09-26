@@ -1,5 +1,6 @@
 import React, { useContext, useMemo } from "react";
-import { View, Text, StyleSheet, Image, Pressable } from "react-native";
+import { View, Text, StyleSheet, Pressable } from "react-native";
+import { Image } from "expo-image";
 import { useRouter, usePathname } from "expo-router";
 import { MaterialIcons } from "@expo/vector-icons";
 import { UserContext } from "../context/UserContext";
@@ -85,7 +86,13 @@ function Navbar() {
           onPress={() => router.replace("/settings")}
         >
           {profile?.imageUrl ? (
-            <Image source={{ uri: profile.imageUrl }} style={styles.avatar} />
+            <Image
+              source={{ uri: profile.imageUrl }}
+              style={styles.avatar}
+              contentFit="cover"
+              cachePolicy="memory-disk"
+              transition={150}
+            />
           ) : (
             <View style={styles.avatarPlaceholder}>
               <Text style={styles.avatarText}>{initials}</Text>

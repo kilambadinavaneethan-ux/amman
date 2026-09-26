@@ -6,11 +6,11 @@ import {
   ScrollView,
   TextInput,
   Pressable,
-  Image,
   ActivityIndicator,
   Alert,
   Modal,
 } from "react-native";
+import { Image } from "expo-image";
 import { useRouter } from "expo-router";
 import { MaterialIcons } from "@expo/vector-icons";
 import * as ImagePicker from "expo-image-picker";
@@ -244,7 +244,13 @@ function ProfileSettings() {
             onPress={() => setShowImagePickerModal(true)}
           >
             {currentAvatarUri ? (
-              <Image source={{ uri: currentAvatarUri }} style={styles.avatarImage} />
+              <Image
+                source={{ uri: currentAvatarUri }}
+                style={styles.avatarImage}
+                contentFit="cover"
+                cachePolicy="memory-disk"
+                transition={150}
+              />
             ) : (
               <View style={styles.avatarPlaceholder}>
                 <Text style={styles.avatarInitials}>

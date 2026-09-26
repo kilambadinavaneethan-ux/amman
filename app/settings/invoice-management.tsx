@@ -35,6 +35,12 @@ import {
 import { invoiceTemplateService } from '../../src/services/sharing/invoiceTemplateService';
 import { shareSettingsService } from '../../src/services/sharing/shareSettingsService';
 import { generateInvoiceHtml } from '../../src/services/sharing/pdfGenerator';
+import {
+  TAMIL_INVOICE_LABELS,
+  BRICK_CONSTRUCTION_TAMIL_LABELS,
+  STANDARD_COMMERCE_TAMIL_LABELS,
+  InvoiceLabels,
+} from '../../src/utils/invoiceLocalization';
 import { WebView } from 'react-native-webview';
 
 // ═══════════════════════════════════════════════════════════
@@ -118,6 +124,7 @@ function InvoiceManagementScreen() {
   const [previewHtml, setPreviewHtml] = useState('');
   const [localImagesModalVisible, setLocalImagesModalVisible] = useState(false);
   const [localImagesList, setLocalImagesList] = useState<LocalImageFile[]>([]);
+  const [showTamilCustomizer, setShowTamilCustomizer] = useState(false);
 
   // Bank Accounts state & handlers
   const [bankModalVisible, setBankModalVisible] = useState(false);
@@ -329,16 +336,86 @@ function InvoiceManagementScreen() {
     setHasChanges(true);
   }, []);
 
+  const updateTamilLabel = useCallback((key: keyof InvoiceLabels, val: string) => {
+    setTemplate((prev) => ({
+      ...prev,
+      customTamilLabels: {
+        ...(prev.customTamilLabels || {}),
+        [key]: val,
+      },
+    }));
+    setHasChanges(true);
+  }, []);
+
+  const applyTamilPreset = useCallback((preset: 'brick_construction' | 'standard') => {
+    const presetLabels = preset === 'standard' ? STANDARD_COMMERCE_TAMIL_LABELS : BRICK_CONSTRUCTION_TAMIL_LABELS;
+    setTemplate((prev) => ({
+      ...prev,
+      tamilTerminologyPreset: preset,
+      customTamilLabels: {
+        ...(presetLabels as Record<string, string>),
+      },
+    }));
+    setShareSettings((prev) => ({
+      ...prev,
+      tamilTerminologyPreset: preset,
+      customTamilLabels: {
+        ...(presetLabels as Record<string, string>),
+      },
+    }));
+    setHasChanges(true);
+  }, []);
+
+  const resetTamilLabels = useCallback(() => {
+    Alert.alert(
+      'Reset Tamil Words?',
+      'Restore all Tamil words to their standard defaults (இயல்புநிலைக்கு மீட்டமைக்கவா)?',
+      [
+        { text: 'Cancel', style: 'cancel' },
+        {
+          text: 'Reset',
+          style: 'destructive',
+          onPress: () => {
+            setTemplate((prev) => {
+              const updated = { ...prev };
+              delete updated.customTamilLabels;
+              updated.tamilTerminologyPreset = 'brick_construction';
+              return updated;
+            });
+            setShareSettings((prev) => {
+              const updated = { ...prev };
+              delete updated.customTamilLabels;
+              updated.tamilTerminologyPreset = 'brick_construction';
+              return updated;
+            });
+            setHasChanges(true);
+          },
+        },
+      ]
+    );
+  }, []);
+
   const handleSave = async () => {
     if (saving) return;
     setSaving(true);
     try {
-      const [updatedTpl] = await Promise.all([
+      const [updatedTpl, updatedShare] = await Promise.all([
         invoiceTemplateService.saveTemplate(template),
-        shareSettingsService.saveSettingsSilent({ upiId: shareSettings.upiId }),
+        shareSettingsService.saveSettingsSilent({
+          ...shareSettings,
+          upiId: shareSettings.upiId,
+          isTamilLanguage: template.isTamilLanguage,
+          isBilingual: template.isBilingual,
+          showCustomerHonorificTamil: template.showCustomerHonorificTamil,
+          tamilTerminologyPreset: template.tamilTerminologyPreset,
+          customTamilLabels: template.customTamilLabels,
+        }),
       ]);
       if (updatedTpl) {
         setTemplate(updatedTpl);
+      }
+      if (updatedShare) {
+        setShareSettings(updatedShare);
       }
       setHasChanges(false);
       Alert.alert('Saved ✓', 'Invoice template updated successfully!');
@@ -475,6 +552,62 @@ function InvoiceManagementScreen() {
     </View>
   );
 
+  const TamilLabelField = ({
+    label,
+    hint,
+    fieldKey,
+  }: {
+    label: string;
+    hint: string;
+    fieldKey: keyof InvoiceLabels;
+  }) => {
+    const customValue = template.customTamilLabels?.[fieldKey];
+    const preset = template.tamilTerminologyPreset || 'brick_construction';
+    const presetDict = preset === 'standard' ? STANDARD_COMMERCE_TAMIL_LABELS : BRICK_CONSTRUCTION_TAMIL_LABELS;
+    const defaultValue = presetDict[fieldKey] || TAMIL_INVOICE_LABELS[fieldKey] || '';
+    const isCustomized = customValue !== undefined && customValue !== defaultValue && customValue.trim() !== '';
+
+    return (
+      <View style={{ marginBottom: 10 }}>
+        <View style={{ flexDirection: 'row', justifyContent: 'space-between', alignItems: 'center', marginBottom: 4 }}>
+          <Text style={[styles.inputLabel, { color: subTextColor, marginBottom: 0 }]}>
+            {label}
+          </Text>
+          {isCustomized ? (
+            <Pressable
+              onPress={() => {
+                const nextCustom = { ...(template.customTamilLabels || {}) };
+                delete nextCustom[fieldKey];
+                setTemplate((prev) => ({ ...prev, customTamilLabels: nextCustom }));
+                setHasChanges(true);
+              }}
+              style={{ flexDirection: 'row', alignItems: 'center', gap: 2 }}
+            >
+              <Text style={{ fontSize: 10, fontWeight: '700', color: colors.accent.primary }}>
+                ✓ Custom (Reset)
+              </Text>
+            </Pressable>
+          ) : null}
+        </View>
+        <TextInput
+          style={[
+            styles.input,
+            {
+              backgroundColor: colors.bg.primary,
+              borderColor: isCustomized ? colors.accent.primary : borderColor,
+              color: textColor,
+              height: 40,
+            },
+          ]}
+          value={customValue !== undefined ? customValue : defaultValue}
+          onChangeText={(val) => updateTamilLabel(fieldKey, val)}
+          placeholder={hint}
+          placeholderTextColor={subTextColor}
+        />
+      </View>
+    );
+  };
+
   // ═══════════════════════════════════════════════════════════
   // TABS
   // ═══════════════════════════════════════════════════════════
@@ -568,7 +701,451 @@ function InvoiceManagementScreen() {
             {/* ────────── TAB 1: HEADER & BRANDING ────────── */}
             {activeTab === 'HEADER' && (
               <View style={styles.sectionContainer}>
-                <SectionHeading text="HEADER LAYOUT" />
+                <SectionHeading text="LANGUAGE & LOCALIZATION" />
+                <Card>
+                  <ToggleRow
+                    title="Tamil Version (தமிழ் பதிப்பு)"
+                    subtitle="Render bills, invoice tables, charges & bank details in Tamil"
+                    value={Boolean(template.isTamilLanguage)}
+                    onToggle={(v) => {
+                      updateField('isTamilLanguage', v);
+                      setShareSettings((prev) => ({ ...prev, isTamilLanguage: v }));
+                    }}
+                    isLast={!template.isTamilLanguage}
+                  />
+
+                  {Boolean(template.isTamilLanguage) && (
+                    <View style={{ marginTop: 12, paddingTop: 12, borderTopWidth: 1, borderTopColor: borderColor }}>
+                      {/* Bilingual Mode Toggle */}
+                      <ToggleRow
+                        title="Bilingual Mode (இருமொழி ரசீது - English & தமிழ்)"
+                        subtitle="Display headers and table columns in both English & Tamil (e.g., ITEM / பொருள்)"
+                        value={Boolean(template.isBilingual)}
+                        onToggle={(v) => {
+                          updateField('isBilingual', v);
+                          setShareSettings((prev) => ({ ...prev, isBilingual: v }));
+                        }}
+                      />
+
+                      {/* Customer Honorific Toggle */}
+                      <ToggleRow
+                        title="Customer Honorific (பெயருக்கு பின் 'அவர்கள்' சேர்த்தல்)"
+                        subtitle="Automatically attach 'அவர்கள்' suffix after customer name on bills (e.g. முருகன் அவர்கள்)"
+                        value={Boolean(template.showCustomerHonorificTamil !== false)}
+                        onToggle={(v) => {
+                          updateField('showCustomerHonorificTamil', v);
+                          setShareSettings((prev) => ({ ...prev, showCustomerHonorificTamil: v }));
+                        }}
+                      />
+
+                      {/* Industry Terminology Presets */}
+                      <View style={{ marginVertical: 12 }}>
+                        <Text style={{ fontSize: 12, fontWeight: '700', color: textColor, marginBottom: 4 }}>
+                          ⚡ Terminology Preset (துறை சார்ந்த தமிழ் வழக்கு)
+                        </Text>
+                        <Text style={{ fontSize: 11, color: subTextColor, marginBottom: 8 }}>
+                          Select your industry style to automatically load the most suitable terminology:
+                        </Text>
+                        <View style={{ flexDirection: 'row', gap: 8 }}>
+                          <Pressable
+                            style={{
+                              flex: 1,
+                              padding: 10,
+                              borderRadius: 10,
+                              borderWidth: 1.5,
+                              borderColor: (template.tamilTerminologyPreset || 'brick_construction') === 'brick_construction'
+                                ? colors.accent.primary
+                                : borderColor,
+                              backgroundColor: (template.tamilTerminologyPreset || 'brick_construction') === 'brick_construction'
+                                ? (isDark ? 'rgba(59, 130, 246, 0.15)' : 'rgba(59, 130, 246, 0.08)')
+                                : (isDark ? 'rgba(255,255,255,0.03)' : '#F8FAFC'),
+                            }}
+                            onPress={() => applyTamilPreset('brick_construction')}
+                          >
+                            <View style={{ flexDirection: 'row', alignItems: 'center', gap: 6, marginBottom: 3 }}>
+                              <Text style={{ fontSize: 14 }}>🧱</Text>
+                              <Text style={{ fontSize: 12, fontWeight: '700', color: textColor }}>
+                                செங்கல் & கட்டுமானம்
+                              </Text>
+                            </View>
+                            <Text style={{ fontSize: 10, color: subTextColor, lineHeight: 14 }}>
+                              வண்டி வாடகை, ஏற்றுக்கூலி, இறக்குக்கூலி, பழைய பாக்கி, மீதி பாக்கி
+                            </Text>
+                          </Pressable>
+
+                          <Pressable
+                            style={{
+                              flex: 1,
+                              padding: 10,
+                              borderRadius: 10,
+                              borderWidth: 1.5,
+                              borderColor: template.tamilTerminologyPreset === 'standard'
+                                ? colors.accent.primary
+                                : borderColor,
+                              backgroundColor: template.tamilTerminologyPreset === 'standard'
+                                ? (isDark ? 'rgba(59, 130, 246, 0.15)' : 'rgba(59, 130, 246, 0.08)')
+                                : (isDark ? 'rgba(255,255,255,0.03)' : '#F8FAFC'),
+                            }}
+                            onPress={() => applyTamilPreset('standard')}
+                          >
+                            <View style={{ flexDirection: 'row', alignItems: 'center', gap: 6, marginBottom: 3 }}>
+                              <Text style={{ fontSize: 14 }}>🏢</Text>
+                              <Text style={{ fontSize: 12, fontWeight: '700', color: textColor }}>
+                                பொது வணிக முறை
+                              </Text>
+                            </View>
+                            <Text style={{ fontSize: 10, color: subTextColor, lineHeight: 14 }}>
+                              போக்குவரத்து கட்டணம், துணை மொத்தம், நிலுவை தொகை
+                            </Text>
+                          </Pressable>
+                        </View>
+                      </View>
+
+                      {/* Customize Tamil Words Accordion */}
+                      <Pressable
+                        style={{
+                          flexDirection: 'row',
+                          alignItems: 'center',
+                          justifyContent: 'space-between',
+                          paddingVertical: 10,
+                          paddingHorizontal: 12,
+                          backgroundColor: isDark ? 'rgba(59, 130, 246, 0.12)' : 'rgba(59, 130, 246, 0.08)',
+                          borderRadius: 10,
+                          borderWidth: 1,
+                          borderColor: isDark ? 'rgba(59, 130, 246, 0.3)' : 'rgba(59, 130, 246, 0.2)',
+                          marginTop: 6,
+                        }}
+                        onPress={() => setShowTamilCustomizer((prev) => !prev)}
+                      >
+                        <View style={{ flexDirection: 'row', alignItems: 'center', gap: 8, flex: 1 }}>
+                          <MaterialIcons name="translate" size={18} color={colors.accent.primary} />
+                          <View style={{ flex: 1 }}>
+                            <Text style={{ fontSize: 13, fontWeight: '700', color: textColor }}>
+                              Customize Tamil Words (சொற்களை திருத்து)
+                            </Text>
+                            <Text style={{ fontSize: 11, color: subTextColor }}>
+                              {Object.keys(template.customTamilLabels || {}).length > 0
+                                ? `${Object.keys(template.customTamilLabels || {}).length} words customized`
+                                : 'Using preset terms (Tap to view or edit individual terms)'}
+                            </Text>
+                          </View>
+                        </View>
+                        <MaterialIcons
+                          name={showTamilCustomizer ? 'expand-less' : 'expand-more'}
+                          size={22}
+                          color={colors.accent.primary}
+                        />
+                      </Pressable>
+
+                      {showTamilCustomizer && (
+                        <View style={{ marginTop: 14 }}>
+                          <Text style={{ fontSize: 11, color: subTextColor, marginBottom: 12, lineHeight: 16 }}>
+                            Customize any bill or receipt label below to match your regional terminology. Leaving a field blank or resetting will use the active preset default.
+                          </Text>
+
+                          {/* Category 1: Document Titles */}
+                          <Text style={{ fontSize: 12, fontWeight: '800', color: colors.accent.primary, marginBottom: 8, marginTop: 4 }}>
+                            🏷️ ஆவண தலைப்புகள் (Document & Invoice Titles)
+                          </Text>
+                          <TamilLabelField
+                            label="Invoice Title (விலைப்பட்டியல் / ரசீது தலைப்பு)"
+                            hint="Default: விலைப்பட்டியல்"
+                            fieldKey="invoice"
+                          />
+                          <TamilLabelField
+                            label="Tax Invoice Title (வரி ரசீது)"
+                            hint="Default: வரி விலைப்பட்டியல்"
+                            fieldKey="taxInvoice"
+                          />
+                          <TamilLabelField
+                            label="Bill Title (பில்)"
+                            hint="Default: பில்"
+                            fieldKey="bill"
+                          />
+                          <TamilLabelField
+                            label="Estimate Title (மதிப்பீடு)"
+                            hint="Default: மதிப்பீடு"
+                            fieldKey="estimate"
+                          />
+                          <TamilLabelField
+                            label="Receipt Title (ரசீது)"
+                            hint="Default: ரசீது"
+                            fieldKey="receipt"
+                          />
+
+                          {/* Category 2: Date & Invoice Numbers */}
+                          <Text style={{ fontSize: 12, fontWeight: '800', color: colors.accent.primary, marginBottom: 8, marginTop: 14 }}>
+                            📅 தேதி & எண்கள் (Date, Number & Payment Mode)
+                          </Text>
+                          <TamilLabelField
+                            label="Invoice No (ரசீது எண்)"
+                            hint="Default: ரசீது எண்"
+                            fieldKey="invoiceNo"
+                          />
+                          <TamilLabelField
+                            label="Date (தேதி)"
+                            hint="Default: தேதி"
+                            fieldKey="invoiceDate"
+                          />
+                          <TamilLabelField
+                            label="Due Date (கெடு தேதி)"
+                            hint="Default: கெடு தேதி"
+                            fieldKey="dueDate"
+                          />
+                          <TamilLabelField
+                            label="Payment Mode (கட்டண முறை)"
+                            hint="Default: செலுத்தும் முறை"
+                            fieldKey="paymentMode"
+                          />
+
+                          {/* Category 3: Customer Details */}
+                          <Text style={{ fontSize: 12, fontWeight: '800', color: colors.accent.primary, marginBottom: 8, marginTop: 14 }}>
+                            👤 வாடிக்கையாளர் விவரங்கள் (Customer Details & Honorific)
+                          </Text>
+                          <TamilLabelField
+                            label="Billed To (பெறுநர்)"
+                            hint="Default: பெறுநர்"
+                            fieldKey="billedTo"
+                          />
+                          <TamilLabelField
+                            label="Customer Details (வாடிக்கையாளர் விவரம்)"
+                            hint="Default: வாடிக்கையாளர் விவரம்"
+                            fieldKey="customerDetails"
+                          />
+                          <TamilLabelField
+                            label="Phone (தொலைபேசி)"
+                            hint="Default: தொலைபேசி"
+                            fieldKey="phone"
+                          />
+                          <TamilLabelField
+                            label="Address (முகவரி)"
+                            hint="Default: முகவரி"
+                            fieldKey="address"
+                          />
+                          <TamilLabelField
+                            label="GSTIN (GST எண்)"
+                            hint="Default: GST எண்"
+                            fieldKey="gstin"
+                          />
+                          <TamilLabelField
+                            label="Honorific Suffix (மரியாதை சொல்)"
+                            hint="Default: அவர்கள்"
+                            fieldKey="avargal"
+                          />
+
+                          {/* Category 4: Table Columns */}
+                          <Text style={{ fontSize: 12, fontWeight: '800', color: colors.accent.primary, marginBottom: 8, marginTop: 14 }}>
+                            📋 அட்டவணை தலைப்புகள் (Table Columns)
+                          </Text>
+                          <TamilLabelField
+                            label="Item / Product (பொருள்)"
+                            hint="Default: பொருள்"
+                            fieldKey="item"
+                          />
+                          <TamilLabelField
+                            label="Quantity (அளவு / எண்ணிக்கை)"
+                            hint="Default: அளவு"
+                            fieldKey="qty"
+                          />
+                          <TamilLabelField
+                            label="Rate / Price (விலை)"
+                            hint="Default: விலை"
+                            fieldKey="rate"
+                          />
+                          <TamilLabelField
+                            label="Amount / Total (தொகை)"
+                            hint="Default: மொத்தம்"
+                            fieldKey="total"
+                          />
+                          <TamilLabelField
+                            label="Items & Description (பொருட்கள் மற்றும் விவரம்)"
+                            hint="Default: பொருள் மற்றும் விவரம்"
+                            fieldKey="itemsAndDescription"
+                          />
+
+                          {/* Category 5: Charges & Calculations */}
+                          <Text style={{ fontSize: 12, fontWeight: '800', color: colors.accent.primary, marginBottom: 8, marginTop: 14 }}>
+                            💰 கட்டணம் & கணக்கீடுகள் (Charges, Dues & Calculations)
+                          </Text>
+                          <TamilLabelField
+                            label="Subtotal (துணை மொத்தம் / பொருட்கள் தொகை)"
+                            hint="Default: கூட்டுத்தொகை"
+                            fieldKey="subtotal"
+                          />
+                          <TamilLabelField
+                            label="Delivery / Freight (டெலிவரி / வண்டி வாடகை)"
+                            hint="Default: வண்டி வாடகை"
+                            fieldKey="deliveryCharge"
+                          />
+                          <TamilLabelField
+                            label="Loading Charge (ஏற்று கூலி)"
+                            hint="Default: ஏற்றுக்கூலி"
+                            fieldKey="loadingCharge"
+                          />
+                          <TamilLabelField
+                            label="Unloading Charge (இறக்கு கூலி)"
+                            hint="Default: இறக்குக்கூலி"
+                            fieldKey="unloadingCharge"
+                          />
+                          <TamilLabelField
+                            label="Extra Charges (இதர கட்டணம் / செலவு)"
+                            hint="Default: கூடுதல் கட்டணம்"
+                            fieldKey="extraCharge"
+                          />
+                          <TamilLabelField
+                            label="Tax / GST (வரி)"
+                            hint="Default: வரி / GST"
+                            fieldKey="taxGst"
+                          />
+                          <TamilLabelField
+                            label="Discount (தள்ளுபடி)"
+                            hint="Default: தள்ளுபடி"
+                            fieldKey="discount"
+                          />
+                          <TamilLabelField
+                            label="Current Bill Total (நடப்பு பில் தொகை)"
+                            hint="Default: நடப்பு பில் தொகை"
+                            fieldKey="currentBillTotal"
+                          />
+                          <TamilLabelField
+                            label="Old Balance Due (பழைய பாக்கி)"
+                            hint="Default: பழைய பாக்கி"
+                            fieldKey="oldBalanceDue"
+                          />
+                          <TamilLabelField
+                            label="Total Amount (மொத்த தொகை)"
+                            hint="Default: மொத்த தொகை"
+                            fieldKey="totalAmount"
+                          />
+                          <TamilLabelField
+                            label="Paid Amount (செலுத்திய தொகை)"
+                            hint="Default: செலுத்திய தொகை"
+                            fieldKey="paidAmount"
+                          />
+                          <TamilLabelField
+                            label="Balance Due (மீதி பாக்கி / நிலுவை)"
+                            hint="Default: மீதி பாக்கி"
+                            fieldKey="balanceDue"
+                          />
+                          <TamilLabelField
+                            label="Total Balance Due (மொத்த பாக்கி)"
+                            hint="Default: மொத்த பாக்கி"
+                            fieldKey="totalBalanceDue"
+                          />
+                          <TamilLabelField
+                            label="Grand Total incl Dues (மொத்த தொகை - பாக்கி சேர்த்து)"
+                            hint="Default: மொத்த தொகை (பாக்கி சேர்த்து)"
+                            fieldKey="grandTotalInclDues"
+                          />
+
+                          {/* Category 6: Bank Details */}
+                          <Text style={{ fontSize: 12, fontWeight: '800', color: colors.accent.primary, marginBottom: 8, marginTop: 14 }}>
+                            🏦 வங்கி விவரங்கள் (Bank & Payment Details)
+                          </Text>
+                          <TamilLabelField
+                            label="Bank Details Heading (வங்கி கட்டண விவரங்கள்)"
+                            hint="Default: வங்கி விவரங்கள்"
+                            fieldKey="bankPaymentDetails"
+                          />
+                          <TamilLabelField
+                            label="Bank Name (வங்கி)"
+                            hint="Default: வங்கி"
+                            fieldKey="bankName"
+                          />
+                          <TamilLabelField
+                            label="Account No (கணக்கு எண்)"
+                            hint="Default: கணக்கு எண்"
+                            fieldKey="accountNo"
+                          />
+                          <TamilLabelField
+                            label="IFSC Code (IFSC குறியீடு)"
+                            hint="Default: IFSC குறியீடு"
+                            fieldKey="ifscCode"
+                          />
+                          <TamilLabelField
+                            label="Account Holder Name (கணக்கு பெயர்)"
+                            hint="Default: கணக்கு பெயர்"
+                            fieldKey="accountHolder"
+                          />
+                          <TamilLabelField
+                            label="Scan To Pay (ஸ்கேன் செய்து செலுத்தவும்)"
+                            hint="Default: ஸ்கேன் செய்து செலுத்தவும்"
+                            fieldKey="scanToPay"
+                          />
+
+                          {/* Category 7: Status, Notes & Footer */}
+                          <Text style={{ fontSize: 12, fontWeight: '800', color: colors.accent.primary, marginBottom: 8, marginTop: 14 }}>
+                            🚦 நிலை, அடிக்குறிப்பு & கையொப்பம் (Status, Notes & Signatory)
+                          </Text>
+                          <TamilLabelField
+                            label="Paid Status (செலுத்தப்பட்டது)"
+                            hint="Default: செலுத்தப்பட்டது"
+                            fieldKey="statusPaid"
+                          />
+                          <TamilLabelField
+                            label="Partially Paid Status (பகுதி செலுத்தப்பட்டது)"
+                            hint="Default: பகுதி செலுத்தப்பட்டது"
+                            fieldKey="statusPartiallyPaid"
+                          />
+                          <TamilLabelField
+                            label="Pending Status (நிலுவை)"
+                            hint="Default: நிலுவை"
+                            fieldKey="statusPending"
+                          />
+                          <TamilLabelField
+                            label="Overdue Status (கெடு முடிந்தது)"
+                            hint="Default: கெடு முடிந்தது"
+                            fieldKey="statusOverdue"
+                          />
+                          <TamilLabelField
+                            label="Notes Heading (குறிப்பு)"
+                            hint="Default: குறிப்பு"
+                            fieldKey="notes"
+                          />
+                          <TamilLabelField
+                            label="Terms & Conditions (விதிமுறைகள் மற்றும் நிபந்தனைகள்)"
+                            hint="Default: விதிமுறைகள் & நிபந்தனைகள்"
+                            fieldKey="termsAndConditions"
+                          />
+                          <TamilLabelField
+                            label="Authorized Signatory (அங்கீகரிக்கப்பட்ட கையொப்பம்)"
+                            hint="Default: அங்கீகரிக்கப்பட்ட கையொப்பம்"
+                            fieldKey="authorizedSignatory"
+                          />
+                          <TamilLabelField
+                            label="Thank You Note (நன்றி குறிப்பு)"
+                            hint="Default: தங்களின் மேலான ஆதரவிற்கு மிக்க நன்றி! 🙏"
+                            fieldKey="thankYouNote"
+                          />
+
+                          {/* Reset button */}
+                          <Pressable
+                            style={{
+                              flexDirection: 'row',
+                              alignItems: 'center',
+                              justifyContent: 'center',
+                              gap: 6,
+                              paddingVertical: 10,
+                              borderRadius: 8,
+                              borderWidth: 1,
+                              borderColor: borderColor,
+                              backgroundColor: isDark ? 'rgba(255,255,255,0.05)' : '#F1F5F9',
+                              marginTop: 10,
+                            }}
+                            onPress={resetTamilLabels}
+                          >
+                            <MaterialIcons name="restore" size={16} color={subTextColor} />
+                            <Text style={{ fontSize: 12, fontWeight: '600', color: subTextColor }}>
+                              Reset to Default Terms (இயல்புநிலைக்கு மீட்டமை)
+                            </Text>
+                          </Pressable>
+                        </View>
+                      )}
+                    </View>
+                  )}
+                </Card>
+
+                <SectionHeading text="HEADER LAYOUT" marginTop={20} />
                 <Card>
                   <Text style={[styles.cardTitle, { color: textColor }]}>Layout Style</Text>
                   <Text style={[styles.cardDesc, { color: subTextColor }]}>

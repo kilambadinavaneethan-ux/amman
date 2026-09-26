@@ -39,6 +39,7 @@ export function TransactionShareBottomSheet({
   const [loadingText, setLoadingText] = useState('');
   const [salutation, setSalutation] = useState<'None' | 'Mr.' | 'Mrs.' | 'Ms.' | 'M/s' | 'Dr.'>('None');
   const [useAvargal, setUseAvargal] = useState<boolean>(false);
+  const [isTamil, setIsTamil] = useState<boolean>(false);
 
   const translateY = useRef(new Animated.Value(800)).current;
   const backdropOpacity = useRef(new Animated.Value(0)).current;
@@ -53,6 +54,7 @@ export function TransactionShareBottomSheet({
       ]);
       setSettings(s);
       setTemplate(t);
+      setIsTamil(Boolean(t?.isTamilLanguage ?? s?.isTamilLanguage));
     } catch (e) {
       console.warn('Failed loading share settings or template:', e);
     }
@@ -137,19 +139,25 @@ export function TransactionShareBottomSheet({
 
   if (!visible || !transaction || !processedTransaction) return null;
 
-  const activeSettings = settings || {
-    defaultFormat: 'IMAGE',
-    includeLogo: true,
-    includeSignature: true,
-    includeQrCode: true,
-    includeGst: true,
-    includeCustomerAddress: true,
-    highQualityImage: true,
-    watermarkEnabled: false,
-    watermarkText: 'CONFIDENTIAL',
+  const activeSettings: ShareSettings = {
+    ...(settings || {
+      defaultFormat: 'IMAGE',
+      includeLogo: true,
+      includeSignature: true,
+      includeQrCode: true,
+      includeGst: true,
+      includeCustomerAddress: true,
+      highQualityImage: true,
+      watermarkEnabled: false,
+      watermarkText: 'CONFIDENTIAL',
+    }),
+    isTamilLanguage: isTamil,
   };
 
-  const activeTemplate = template || DEFAULT_INVOICE_TEMPLATE;
+  const activeTemplate: InvoiceTemplate = {
+    ...(template || DEFAULT_INVOICE_TEMPLATE),
+    isTamilLanguage: isTamil,
+  };
 
   const handleShareImage = async () => {
     setLoading(true);
@@ -362,6 +370,24 @@ export function TransactionShareBottomSheet({
                     </Text>
                   </Pressable>
                 ))}
+
+                <View style={[styles.titleDivider, { backgroundColor: borderColor }]} />
+
+                {/* Tamil Language Toggle: தமிழ் */}
+                <Pressable
+                  onPress={() => setIsTamil(!isTamil)}
+                  style={[
+                    styles.avargalChip,
+                    {
+                      borderColor: isTamil ? '#2563EB' : borderColor,
+                      backgroundColor: isTamil ? '#2563EB' : (isDark ? '#334155' : '#F1F5F9'),
+                    },
+                  ]}
+                >
+                  <Text style={[styles.avargalChipText, { color: isTamil ? '#FFF' : textColor }]}>
+                    🌐 தமிழ் {isTamil ? '✓' : ''}
+                  </Text>
+                </Pressable>
 
                 <View style={[styles.titleDivider, { backgroundColor: borderColor }]} />
 

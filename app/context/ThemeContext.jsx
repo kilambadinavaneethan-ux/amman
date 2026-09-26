@@ -75,6 +75,12 @@ export const ThemeContext = createContext({
   setThemeName: async () => {},
 });
 
+const styleCache = new Map();
+
+function clearFontStyleCache() {
+  styleCache.clear();
+}
+
 // ═══════════════════════════════════════════════════════════════════
 // GLOBAL TEXT / TEXTINPUT PATCH
 // ═══════════════════════════════════════════════════════════════════
@@ -105,6 +111,18 @@ function patchGlobalTextComponents() {
     const spacingMode = _letterSpacingMode;
     const heightMode = _lineHeightMode;
 
+    const isDefaultConfig =
+      scale === 1.0 &&
+      !bold &&
+      sid === "Default" &&
+      spacingMode === "normal" &&
+      heightMode === "normal";
+
+    // Ultra-fast path: If defaults are active, skip flattening and object allocation entirely
+    if (isDefaultConfig) {
+      return inputStyle;
+    }
+
     if (!inputStyle) {
       // No style prop — apply custom font family + bold + spacing + scaled size if active
       const res = {};
@@ -119,6 +137,11 @@ function patchGlobalTextComponents() {
         res.fontSize = Math.round(14 * scale);
       }
       return res;
+    }
+
+    // Fast-path lookup for previously computed styles
+    if (styleCache.has(inputStyle)) {
+      return styleCache.get(inputStyle);
     }
 
     const flat = StyleSheet.flatten(inputStyle) || {};
@@ -168,6 +191,12 @@ function patchGlobalTextComponents() {
     if (finalLetterSpacing !== undefined) result.letterSpacing = finalLetterSpacing;
     if (weight !== undefined) result.fontWeight = weight;
     if (family !== undefined) result.fontFamily = family;
+
+    if (styleCache.size > 1500) {
+      styleCache.clear();
+    }
+    styleCache.set(inputStyle, result);
+
     return result;
   }
 
@@ -384,6 +413,7 @@ export function ThemeProvider({ children }) {
     _fontStyleId = activeStyle;
     _letterSpacingMode = letterSpacing;
     _lineHeightMode = lineHeight;
+    clearFontStyleCache();
 
     return {
       ...scaled,

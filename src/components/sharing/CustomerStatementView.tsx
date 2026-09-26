@@ -3,6 +3,7 @@ import { View, Text, StyleSheet } from 'react-native';
 import { Image } from 'expo-image';
 import { MaterialIcons } from '@expo/vector-icons';
 import { CustomerShareData, ShareSettings, InvoiceTemplate, formatCustomerPhonesDisplay } from '../../types/sharing';
+import { getInvoiceLabels } from '../../utils/invoiceLocalization';
 
 interface CustomerStatementViewProps {
   data: CustomerShareData;
@@ -28,6 +29,11 @@ const CustomerStatementViewComponent: React.ForwardRefRenderFunction<View, Custo
   { data, company = {}, settings, template, isDark = false },
   ref
 ) => {
+    const isTamil = Boolean(settings?.isTamilLanguage ?? template?.isTamilLanguage);
+    const isBilingual = Boolean(settings?.isBilingual ?? template?.isBilingual);
+    const customTamil = (settings?.customTamilLabels || template?.customTamilLabels) as any;
+    const labels = getInvoiceLabels(isTamil, customTamil, isBilingual, settings?.tamilTerminologyPreset || template?.tamilTerminologyPreset);
+
     const accentColor = settings?.themeColor || template?.accentColor || '#2563EB';
     const cardBg = isDark ? '#0F172A' : '#FFFFFF';
     const textColor = isDark ? '#F8FAFC' : '#0F172A';
@@ -126,7 +132,7 @@ const CustomerStatementViewComponent: React.ForwardRefRenderFunction<View, Custo
 
               <View style={styles.headerRight}>
                 <View style={[styles.badge, { backgroundColor: accentColor }]}>
-                  <Text style={styles.badgeText}>STATEMENT</Text>
+                  <Text style={styles.badgeText}>{isBilingual ? 'STATEMENT / கணக்கு அறிக்கை' : isTamil ? 'கணக்கு அறிக்கை' : 'STATEMENT'}</Text>
                 </View>
                 <Text style={[styles.dateText, { color: subTextColor }]}>📅 {formatDate(new Date())}</Text>
               </View>
@@ -139,7 +145,7 @@ const CustomerStatementViewComponent: React.ForwardRefRenderFunction<View, Custo
               <View style={{ flexDirection: 'row', alignItems: 'center', justifyContent: 'space-between', marginBottom: 4 }}>
                 <View style={{ flexDirection: 'row', alignItems: 'center', gap: 6 }}>
                   <MaterialIcons name="person" size={16} color={accentColor} />
-                  <Text style={[styles.customerLabel, { color: subTextColor }]}>CLIENT PROFILE DETAILS</Text>
+                  <Text style={[styles.customerLabel, { color: subTextColor }]}>{isTamil ? labels.customerDetails : 'CLIENT PROFILE DETAILS'}</Text>
                 </View>
                 {data.customer.isSpecial ? (
                   <View style={{ flexDirection: 'row', alignItems: 'center', gap: 4, backgroundColor: '#F59E0B20', paddingHorizontal: 6, paddingVertical: 2, borderRadius: 8 }}>
@@ -148,13 +154,24 @@ const CustomerStatementViewComponent: React.ForwardRefRenderFunction<View, Custo
                   </View>
                 ) : null}
               </View>
-              {data.customer.name.endsWith('அவர்கள்') ? (
-                <Text style={[styles.customerName, { color: textColor }]}>
-                  {data.customer.name.replace(/\s+அவர்கள்$/, '')} <Text style={{ fontSize: 11, fontWeight: '600', color: subTextColor }}>அவர்கள்</Text>
-                </Text>
-              ) : (
-                <Text style={[styles.customerName, { color: textColor }]}>{data.customer.name}</Text>
-              )}
+              {(() => {
+                const shouldAddHonorific = (isTamil || isBilingual) && (settings?.showCustomerHonorificTamil ?? template?.showCustomerHonorificTamil) !== false;
+                const rawName = data.customer.name || '';
+                const nameStr = shouldAddHonorific && !rawName.endsWith(labels.avargal || 'அவர்கள்')
+                  ? `${rawName} ${labels.avargal || 'அவர்கள்'}`
+                  : rawName;
+                const suffix = labels.avargal || 'அவர்கள்';
+                const hasSuffix = nameStr.endsWith(suffix);
+                const baseName = hasSuffix ? nameStr.substring(0, nameStr.length - suffix.length).trim() : nameStr;
+
+                return hasSuffix ? (
+                  <Text style={[styles.customerName, { color: textColor }]}>
+                    {baseName} <Text style={{ fontSize: 11, fontWeight: '600', color: subTextColor }}>{suffix}</Text>
+                  </Text>
+                ) : (
+                  <Text style={[styles.customerName, { color: textColor }]}>{nameStr}</Text>
+                );
+              })()}
               {(() => {
                 const custPhones = formatCustomerPhonesDisplay(data.customer.phone, data.customer.phoneNumbers);
                 if (!custPhones) return null;
@@ -198,12 +215,16 @@ const CustomerStatementViewComponent: React.ForwardRefRenderFunction<View, Custo
             <View style={[styles.calcCard, { backgroundColor: innerCardBg, borderColor }]}>
               <View style={{ flexDirection: 'row', alignItems: 'center', gap: 6, marginBottom: 10 }}>
                 <MaterialIcons name="calculate" size={16} color={accentColor} />
-                <Text style={[styles.customerLabel, { color: accentColor }]}>ACCOUNT CALCULATION SUMMARY</Text>
+                <Text style={[styles.customerLabel, { color: accentColor }]}>
+                  {isBilingual ? 'ACCOUNT CALCULATION SUMMARY / கணக்கு கணக்கீட்டு சுருக்கம்' : isTamil ? 'கணக்கு கணக்கீட்டு சுருக்கம்' : 'ACCOUNT CALCULATION SUMMARY'}
+                </Text>
               </View>
 
               {/* Row: Total Orders */}
               <View style={styles.calcRow}>
-                <Text style={[styles.calcLabel, { color: subTextColor }]}>Total Orders</Text>
+                <Text style={[styles.calcLabel, { color: subTextColor }]}>
+                  {isBilingual ? 'Total Orders / மொத்த ஆர்டர்கள்' : isTamil ? 'மொத்த ஆர்டர்கள்' : 'Total Orders'}
+                </Text>
                 <Text style={[styles.calcValue, { color: textColor }]}>{totalOrders}</Text>
               </View>
 
@@ -212,54 +233,60 @@ const CustomerStatementViewComponent: React.ForwardRefRenderFunction<View, Custo
               {/* Row: Old Balance Due */}
               {oldBalance > 0 ? (
                 <View style={styles.calcRow}>
-                  <Text style={[styles.calcLabel, { color: '#EF4444', fontWeight: '700' }]}>Opening / Old Balance Due</Text>
+                  <Text style={[styles.calcLabel, { color: '#EF4444', fontWeight: '700' }]}>
+                    {isTamil ? labels.oldBalanceDue : 'Opening / Old Balance Due'}
+                  </Text>
                   <Text style={[styles.calcValue, { color: '#EF4444', fontWeight: '800' }]}>+{formatCurrency(oldBalance)}</Text>
                 </View>
               ) : null}
 
               {/* Row: Total Sales */}
               <View style={styles.calcRow}>
-                <Text style={[styles.calcLabel, { color: textColor }]}>Total Sales / Orders Subtotal</Text>
+                <Text style={[styles.calcLabel, { color: textColor }]}>
+                  {isBilingual ? 'Total Sales / மொத்த விற்பனை' : isTamil ? 'மொத்த விற்பனை / ஆர்டர்கள்' : 'Total Sales / Orders Subtotal'}
+                </Text>
                 <Text style={[styles.calcValue, { color: textColor }]}>+{formatCurrency(totalSales)}</Text>
               </View>
 
               {/* Aggregated Charges Breakdown Row if present */}
               {hasAggregatedCharges ? (
                 <View style={{ backgroundColor: cardBg, padding: 8, borderRadius: 8, marginVertical: 4, borderWidth: 1, borderColor }}>
-                  <Text style={{ fontSize: 9, fontWeight: '800', color: subTextColor, marginBottom: 4 }}>INCLUDED CHARGES BREAKDOWN:</Text>
+                  <Text style={{ fontSize: 9, fontWeight: '800', color: subTextColor, marginBottom: 4 }}>
+                    {isBilingual ? 'CHARGES BREAKDOWN / கட்டண விவரங்கள்:' : isTamil ? 'உள்ளடக்கிய கட்டண விவரங்கள்:' : 'INCLUDED CHARGES BREAKDOWN:'}
+                  </Text>
                   {totalShipment > 0 ? (
                     <View style={styles.calcRow}>
-                      <Text style={{ fontSize: 10, color: subTextColor }}>🚚 Total Delivery / Freight</Text>
+                      <Text style={{ fontSize: 10, color: subTextColor }}>🚚 {isTamil ? labels.deliveryCharge : 'Total Delivery / Freight'}</Text>
                       <Text style={{ fontSize: 10, fontWeight: '700', color: textColor }}>+{formatCurrency(totalShipment)}</Text>
                     </View>
                   ) : null}
                   {totalLoading > 0 ? (
                     <View style={styles.calcRow}>
-                      <Text style={{ fontSize: 10, color: subTextColor }}>📦 Total Loading Charge</Text>
+                      <Text style={{ fontSize: 10, color: subTextColor }}>📦 {isTamil ? labels.loadingCharge : 'Total Loading Charge'}</Text>
                       <Text style={{ fontSize: 10, fontWeight: '700', color: textColor }}>+{formatCurrency(totalLoading)}</Text>
                     </View>
                   ) : null}
                   {totalUnloading > 0 ? (
                     <View style={styles.calcRow}>
-                      <Text style={{ fontSize: 10, color: subTextColor }}>📦 Total Unloading Charge</Text>
+                      <Text style={{ fontSize: 10, color: subTextColor }}>📦 {isTamil ? labels.unloadingCharge : 'Total Unloading Charge'}</Text>
                       <Text style={{ fontSize: 10, fontWeight: '700', color: textColor }}>+{formatCurrency(totalUnloading)}</Text>
                     </View>
                   ) : null}
                   {totalExtra > 0 ? (
                     <View style={styles.calcRow}>
-                      <Text style={{ fontSize: 10, color: subTextColor }}>➕ Total Extra Charges</Text>
+                      <Text style={{ fontSize: 10, color: subTextColor }}>➕ {isTamil ? labels.extraCharge : 'Total Extra Charges'}</Text>
                       <Text style={{ fontSize: 10, fontWeight: '700', color: textColor }}>+{formatCurrency(totalExtra)}</Text>
                     </View>
                   ) : null}
                   {totalTax > 0 ? (
                     <View style={styles.calcRow}>
-                      <Text style={{ fontSize: 10, color: subTextColor }}>🏷️ Total GST / Tax</Text>
+                      <Text style={{ fontSize: 10, color: subTextColor }}>🏷️ {isTamil ? labels.taxGst : 'Total GST / Tax'}</Text>
                       <Text style={{ fontSize: 10, fontWeight: '700', color: textColor }}>+{formatCurrency(totalTax)}</Text>
                     </View>
                   ) : null}
                   {totalDiscount > 0 ? (
                     <View style={styles.calcRow}>
-                      <Text style={{ fontSize: 10, color: '#10B981' }}>🏷️ Total Discounts Applied</Text>
+                      <Text style={{ fontSize: 10, color: '#10B981' }}>🏷️ {isTamil ? labels.discount : 'Total Discounts Applied'}</Text>
                       <Text style={{ fontSize: 10, fontWeight: '700', color: '#10B981' }}>−{formatCurrency(totalDiscount)}</Text>
                     </View>
                   ) : null}
@@ -270,7 +297,9 @@ const CustomerStatementViewComponent: React.ForwardRefRenderFunction<View, Custo
 
               {/* Row: Grand Total */}
               <View style={styles.calcRow}>
-                <Text style={[styles.calcLabel, { color: accentColor, fontWeight: '800', fontSize: 12 }]}>Grand Total (incl. Dues & Charges)</Text>
+                <Text style={[styles.calcLabel, { color: accentColor, fontWeight: '800', fontSize: 12 }]}>
+                  {isTamil ? labels.grandTotalInclDues : 'Grand Total (incl. Dues & Charges)'}
+                </Text>
                 <Text style={[styles.calcValue, { color: accentColor, fontWeight: '900', fontSize: 14 }]}>{formatCurrency(grandTotal)}</Text>
               </View>
 
@@ -278,7 +307,9 @@ const CustomerStatementViewComponent: React.ForwardRefRenderFunction<View, Custo
 
               {/* Row: Total Paid */}
               <View style={styles.calcRow}>
-                <Text style={[styles.calcLabel, { color: '#10B981', fontWeight: '700' }]}>Total Amount Paid (−)</Text>
+                <Text style={[styles.calcLabel, { color: '#10B981', fontWeight: '700' }]}>
+                  {isTamil ? `${labels.paidAmount} (−)` : 'Total Amount Paid (−)'}
+                </Text>
                 <Text style={[styles.calcValue, { color: '#10B981', fontWeight: '800' }]}>−{formatCurrency(totalPaid)}</Text>
               </View>
 
@@ -287,7 +318,7 @@ const CustomerStatementViewComponent: React.ForwardRefRenderFunction<View, Custo
               {/* Row: NET BALANCE DUE */}
               <View style={[styles.calcRow, { paddingVertical: 6 }]}>
                 <Text style={[styles.calcLabel, { color: netDue > 0 ? '#EF4444' : '#10B981', fontWeight: '900', fontSize: 13 }]}>
-                  {netDue > 0 ? '💰 Total Balance Due' : netDue < 0 ? '⭐ Customer Advance Credit' : '✅ Fully Paid'}
+                  {netDue > 0 ? (isTamil ? `💰 ${labels.totalBalanceDue || labels.balanceDue}` : '💰 Total Balance Due') : netDue < 0 ? (isTamil ? '⭐ வாடிக்கையாளர் முன்பணம்' : '⭐ Customer Advance Credit') : (isTamil ? '✅ முழுமையாக செலுத்தப்பட்டது' : '✅ Fully Paid')}
                 </Text>
                 <Text style={[styles.calcValue, { color: netDue > 0 ? '#EF4444' : '#10B981', fontWeight: '900', fontSize: 16 }]}>
                   {netDue < 0 ? `+${formatCurrency(Math.abs(netDue))}` : formatCurrency(Math.abs(netDue))}
@@ -298,7 +329,7 @@ const CustomerStatementViewComponent: React.ForwardRefRenderFunction<View, Custo
               <View style={[styles.statusBadge, { backgroundColor: isPaid ? '#10B98120' : '#EF444420' }]}>
                 <MaterialIcons name={isPaid ? (netDue < 0 ? 'stars' : 'check-circle') : 'pending'} size={14} color={isPaid ? '#10B981' : '#EF4444'} />
                 <Text style={{ fontSize: 10, fontWeight: '800', color: isPaid ? '#10B981' : '#EF4444' }}>
-                  {netDue < 0 ? 'ACCOUNT IN ADVANCE CREDIT' : isPaid ? 'ACCOUNT FULLY SETTLED' : 'PAYMENT PENDING'}
+                  {netDue < 0 ? (isTamil ? 'முன்பணம் உள்ளது' : 'ACCOUNT IN ADVANCE CREDIT') : isPaid ? (isTamil ? 'கணக்கு முடிக்கப்பட்டது' : 'ACCOUNT FULLY SETTLED') : (isTamil ? 'நிலுவையில் உள்ளது' : 'PAYMENT PENDING')}
                 </Text>
               </View>
             </View>
@@ -309,15 +340,17 @@ const CustomerStatementViewComponent: React.ForwardRefRenderFunction<View, Custo
             <View style={styles.ledgerSection}>
               <View style={{ flexDirection: 'row', alignItems: 'center', gap: 6, marginBottom: 6 }}>
                 <MaterialIcons name="receipt-long" size={14} color={subTextColor} />
-                <Text style={[styles.sectionTitle, { color: subTextColor, marginBottom: 0 }]}>COMPLETE STATEMENT LEDGER ({allLedger.length} entries)</Text>
+                <Text style={[styles.sectionTitle, { color: subTextColor, marginBottom: 0 }]}>
+                  {isBilingual ? `COMPLETE STATEMENT LEDGER / முழு அறிக்கை (${allLedger.length})` : isTamil ? `முழு அறிக்கை விவரங்கள் (${allLedger.length})` : `COMPLETE STATEMENT LEDGER (${allLedger.length} entries)`}
+                </Text>
               </View>
 
               <View style={[styles.tableHeader, { backgroundColor: isDark ? '#1E293B' : '#0F172A' }]}>
-                <Text style={[styles.th, { flex: 1.1, color: '#FFF' }]}>Date</Text>
-                <Text style={[styles.th, { flex: 2.3, color: '#FFF' }]}>Description & Item Rates / Charges</Text>
-                <Text style={[styles.th, { flex: 1.2, textAlign: 'right', color: '#FFF' }]}>Debit (+)</Text>
-                <Text style={[styles.th, { flex: 1.2, textAlign: 'right', color: '#FFF' }]}>Credit (−)</Text>
-                <Text style={[styles.th, { flex: 1.3, textAlign: 'right', color: '#FFF' }]}>Balance</Text>
+                <Text style={[styles.th, { flex: 1.05, color: '#FFF' }]}>{labels.invoiceDate}</Text>
+                <Text style={[styles.th, { flex: 2.2, color: '#FFF' }]}>{isBilingual ? 'Description / விவரம்' : isTamil ? 'விவரம் & கட்டணங்கள்' : 'Description & Item Rates / Charges'}</Text>
+                <Text style={[styles.th, { flex: 1.25, textAlign: 'right', paddingRight: 4, color: '#FFF' }]}>{isBilingual ? 'Debit / பற்று (+)' : isTamil ? 'பற்று (+)' : 'Debit (+)'}</Text>
+                <Text style={[styles.th, { flex: 1.25, textAlign: 'right', paddingRight: 4, color: '#FFF' }]}>{isBilingual ? 'Credit / வரவு (−)' : isTamil ? 'வரவு (−)' : 'Credit (−)'}</Text>
+                <Text style={[styles.th, { flex: 1.45, textAlign: 'right', paddingRight: 2, color: '#FFF' }]}>{labels.balanceDue}</Text>
               </View>
 
               {allLedger.map((item, idx) => {
@@ -346,8 +379,8 @@ const CustomerStatementViewComponent: React.ForwardRefRenderFunction<View, Custo
                       { borderBottomColor: borderColor, backgroundColor: idx % 2 === 0 ? cardBg : innerCardBg }
                     ]}
                   >
-                    <Text style={[styles.td, { flex: 1.1, color: subTextColor, fontSize: 9 }]}>{formatDate(item.date)}</Text>
-                    <View style={{ flex: 2.3, paddingRight: 4 }}>
+                    <Text style={[styles.td, { flex: 1.05, color: subTextColor, fontSize: 9, paddingTop: 1 }]}>{formatDate(item.date)}</Text>
+                    <View style={{ flex: 2.2, paddingRight: 4 }}>
                       <Text style={[styles.td, { color: textColor, fontWeight: '700' }]}>
                         {item.description}
                       </Text>
@@ -379,74 +412,102 @@ const CustomerStatementViewComponent: React.ForwardRefRenderFunction<View, Custo
                         <View style={{ flexDirection: 'row', flexWrap: 'wrap', gap: 4, marginTop: 3 }}>
                           {item.shipmentCharge ? (
                             <Text style={{ fontSize: 8, color: accentColor, backgroundColor: accentColor + '15', paddingHorizontal: 4, paddingVertical: 1, borderRadius: 4, fontWeight: '700' }}>
-                              🚚 Freight: +{formatCurrency(item.shipmentCharge)}
+                              🚚 {isTamil ? `${labels.deliveryCharge}: +` : 'Freight: +'}{formatCurrency(item.shipmentCharge)}
                             </Text>
                           ) : null}
                           {item.loadingCharge ? (
                             <Text style={{ fontSize: 8, color: '#D97706', backgroundColor: '#FEF3C7', paddingHorizontal: 4, paddingVertical: 1, borderRadius: 4, fontWeight: '700' }}>
-                              📦 Loading: +{formatCurrency(item.loadingCharge)}
+                              📦 {isTamil ? `${labels.loadingCharge}: +` : 'Loading: +'}{formatCurrency(item.loadingCharge)}
                             </Text>
                           ) : null}
                           {item.unloadingCharge ? (
                             <Text style={{ fontSize: 8, color: '#D97706', backgroundColor: '#FEF3C7', paddingHorizontal: 4, paddingVertical: 1, borderRadius: 4, fontWeight: '700' }}>
-                              📦 Unload: +{formatCurrency(item.unloadingCharge)}
+                              📦 {isTamil ? `${labels.unloadingCharge}: +` : 'Unload: +'}{formatCurrency(item.unloadingCharge)}
                             </Text>
                           ) : null}
                           {item.extraAmount ? (
                             <Text style={{ fontSize: 8, color: '#6C5CE7', backgroundColor: '#6C5CE715', paddingHorizontal: 4, paddingVertical: 1, borderRadius: 4, fontWeight: '700' }}>
-                              ➕ {item.extraAmountDescription || 'Extra'}: +{formatCurrency(item.extraAmount)}
+                              ➕ {isTamil ? `${labels.extraCharge}: +` : `${item.extraAmountDescription || 'Extra'}: +`}{formatCurrency(item.extraAmount)}
                             </Text>
                           ) : null}
                           {item.taxAmount ? (
                             <Text style={{ fontSize: 8, color: '#2563EB', backgroundColor: '#EFF6FF', paddingHorizontal: 4, paddingVertical: 1, borderRadius: 4, fontWeight: '700' }}>
-                              🏷️ Tax: +{formatCurrency(item.taxAmount)}
+                              🏷️ {isTamil ? `${labels.taxGst}: +` : 'Tax: +'}{formatCurrency(item.taxAmount)}
                             </Text>
                           ) : null}
                           {item.discountAmount ? (
                             <Text style={{ fontSize: 8, color: '#10B981', backgroundColor: '#ECFDF5', paddingHorizontal: 4, paddingVertical: 1, borderRadius: 4, fontWeight: '700' }}>
-                              🏷️ Discount: −{formatCurrency(item.discountAmount)}
+                              🏷️ {isTamil ? `${labels.discount}: −` : 'Discount: −'}{formatCurrency(item.discountAmount)}
                             </Text>
                           ) : null}
                         </View>
                       ) : null}
                     </View>
 
-                    <Text style={[styles.td, { flex: 1.2, textAlign: 'right', fontWeight: '700', color: debitAmount > 0 ? textColor : subTextColor, fontSize: 10 }]}>
+                    <Text
+                      style={[
+                        styles.td,
+                        {
+                          flex: 1.25,
+                          textAlign: debitAmount > 0 ? 'right' : 'center',
+                          paddingRight: debitAmount > 0 ? 4 : 0,
+                          fontWeight: '700',
+                          color: debitAmount > 0 ? textColor : subTextColor,
+                          fontSize: 9.5,
+                          paddingTop: 1,
+                        }
+                      ]}
+                    >
                       {debitAmount > 0 ? formatCurrency(debitAmount) : '—'}
                     </Text>
-                    <Text style={[styles.td, { flex: 1.2, textAlign: 'right', fontWeight: '700', color: creditAmount > 0 ? '#10B981' : subTextColor, fontSize: 10 }]}>
+                    <Text
+                      style={[
+                        styles.td,
+                        {
+                          flex: 1.25,
+                          textAlign: creditAmount > 0 ? 'right' : 'center',
+                          paddingRight: creditAmount > 0 ? 4 : 0,
+                          fontWeight: '700',
+                          color: creditAmount > 0 ? '#10B981' : subTextColor,
+                          fontSize: 9.5,
+                          paddingTop: 1,
+                        }
+                      ]}
+                    >
                       {creditAmount > 0 ? formatCurrency(creditAmount) : '—'}
                     </Text>
                     <Text
                       style={[
                         styles.td,
                         {
-                          flex: 1.3,
+                          flex: 1.45,
                           textAlign: 'right',
+                          paddingRight: 2,
                           fontWeight: '700',
                           color: item.balance > 0 ? '#EF4444' : '#10B981',
-                          fontSize: 10,
+                          fontSize: 9.5,
+                          paddingTop: 1,
                         }
                       ]}
                     >
-                      {item.balance < 0 ? `Adv: ${formatCurrency(Math.abs(item.balance))}` : formatCurrency(item.balance)}
+                      {item.balance < 0 ? `${isTamil ? 'முன்பணம்' : 'Adv'}: ${formatCurrency(Math.abs(item.balance))}` : formatCurrency(item.balance)}
                     </Text>
                   </View>
                 );
               })}
 
               {/* Totals Row */}
-              <View style={[styles.tableRow, { backgroundColor: isDark ? '#1E293B' : '#F1F5F9', borderBottomWidth: 0, borderTopWidth: 2, borderTopColor: accentColor }]}>
-                <Text style={[styles.td, { flex: 1.1, color: accentColor, fontWeight: '900', fontSize: 10 }]}>TOTALS</Text>
-                <Text style={[styles.td, { flex: 2.3, color: textColor, fontWeight: '700', fontSize: 10 }]}>{allLedger.length} transactions</Text>
-                <Text style={[styles.td, { flex: 1.2, textAlign: 'right', fontWeight: '800', color: textColor, fontSize: 10 }]}>
+              <View style={[styles.tableRow, { alignItems: 'center', backgroundColor: isDark ? '#1E293B' : '#F1F5F9', borderBottomWidth: 0, borderTopWidth: 2, borderTopColor: accentColor, paddingVertical: 8 }]}>
+                <Text style={[styles.td, { flex: 1.05, color: accentColor, fontWeight: '900', fontSize: 10 }]}>{isTamil ? labels.total : 'TOTALS'}</Text>
+                <Text style={[styles.td, { flex: 2.2, color: textColor, fontWeight: '700', fontSize: 9.5 }]}>{allLedger.length} {isTamil ? 'பரிவர்த்தனைகள்' : 'transactions'}</Text>
+                <Text style={[styles.td, { flex: 1.25, textAlign: 'right', paddingRight: 4, fontWeight: '800', color: textColor, fontSize: 10 }]}>
                   {formatCurrency(ledgerTotalDebit)}
                 </Text>
-                <Text style={[styles.td, { flex: 1.2, textAlign: 'right', fontWeight: '800', color: '#10B981', fontSize: 10 }]}>
+                <Text style={[styles.td, { flex: 1.25, textAlign: 'right', paddingRight: 4, fontWeight: '800', color: '#10B981', fontSize: 10 }]}>
                   {formatCurrency(ledgerTotalCredit)}
                 </Text>
-                <Text style={[styles.td, { flex: 1.3, textAlign: 'right', fontWeight: '900', color: netDue > 0 ? '#EF4444' : '#10B981', fontSize: 11 }]}>
-                  {netDue < 0 ? `Adv: ${formatCurrency(Math.abs(netDue))}` : formatCurrency(netDue)}
+                <Text style={[styles.td, { flex: 1.45, textAlign: 'right', paddingRight: 2, fontWeight: '900', color: netDue > 0 ? '#EF4444' : '#10B981', fontSize: 10.5 }]}>
+                  {netDue < 0 ? `${isTamil ? 'முன்பணம்' : 'Adv'}: ${formatCurrency(Math.abs(netDue))}` : formatCurrency(netDue)}
                 </Text>
               </View>
             </View>
@@ -456,20 +517,20 @@ const CustomerStatementViewComponent: React.ForwardRefRenderFunction<View, Custo
           <View style={[styles.footerRow, { borderTopColor: borderColor, gap: 12 }]}>
             {/* QR Code Section */}
             {showQr ? (
-              <View style={styles.qrContainer}>
+              <View style={[styles.qrContainer, { backgroundColor: innerCardBg, borderColor }]}>
                 <Image source={{ uri: qrCodeUrl }} style={styles.qrImage} contentFit="contain" />
-                <Text style={[styles.qrCaption, { color: subTextColor }]}>Scan to Pay Balance</Text>
+                <Text style={[styles.qrCaption, { color: subTextColor }]}>{isTamil ? labels.scanToPay : 'Scan to Pay Balance'}</Text>
               </View>
             ) : null}
 
             {/* Bank Account Details Section */}
             {showBank && hasBankInfo ? (
               <View style={[styles.bankContainer, { backgroundColor: innerCardBg, borderColor }]}>
-                <Text style={[styles.bankTitle, { color: accentColor }]}>🏦 BANK ACCOUNT DETAILS</Text>
-                {accountHolderName ? <Text style={[styles.bankText, { color: textColor }]}>Holder: <Text style={{ fontWeight: '700' }}>{accountHolderName}</Text></Text> : null}
-                {bankName ? <Text style={[styles.bankText, { color: textColor }]}>Bank: <Text style={{ fontWeight: '700' }}>{bankName}</Text></Text> : null}
-                {accountNo ? <Text style={[styles.bankText, { color: textColor }]}>A/C No: <Text style={{ fontWeight: '700' }}>{accountNo}</Text></Text> : null}
-                {ifscCode ? <Text style={[styles.bankText, { color: textColor }]}>IFSC: <Text style={{ fontWeight: '700' }}>{ifscCode}</Text></Text> : null}
+                <Text style={[styles.bankTitle, { color: accentColor }]}>🏦 {isTamil ? labels.bankPaymentDetails : 'BANK ACCOUNT DETAILS'}</Text>
+                {accountHolderName ? <Text style={[styles.bankText, { color: textColor }]}>{labels.accountHolder}: <Text style={{ fontWeight: '700' }}>{accountHolderName}</Text></Text> : null}
+                {bankName ? <Text style={[styles.bankText, { color: textColor }]}>{labels.bankName}: <Text style={{ fontWeight: '700' }}>{bankName}</Text></Text> : null}
+                {accountNo ? <Text style={[styles.bankText, { color: textColor }]}>{labels.accountNo}: <Text style={{ fontWeight: '700' }}>{accountNo}</Text></Text> : null}
+                {ifscCode ? <Text style={[styles.bankText, { color: textColor }]}>{labels.ifscCode}: <Text style={{ fontWeight: '700' }}>{ifscCode}</Text></Text> : null}
               </View>
             ) : null}
 
@@ -646,19 +707,21 @@ const styles = StyleSheet.create({
   },
   tableHeader: {
     flexDirection: 'row',
-    padding: 8,
+    paddingHorizontal: 8,
+    paddingVertical: 7,
     borderRadius: 6,
+    alignItems: 'center',
   },
   th: {
-    fontSize: 9,
+    fontSize: 8.5,
     fontWeight: '700',
   },
   tableRow: {
     flexDirection: 'row',
     paddingHorizontal: 8,
-    paddingVertical: 6,
+    paddingVertical: 7,
     borderBottomWidth: 1,
-    alignItems: 'center',
+    alignItems: 'flex-start',
   },
   td: {
     fontSize: 10,
@@ -666,7 +729,7 @@ const styles = StyleSheet.create({
   footerRow: {
     flexDirection: 'row',
     justifyContent: 'space-between',
-    alignItems: 'center',
+    alignItems: 'stretch',
     flexWrap: 'wrap',
     gap: 10,
     borderTopWidth: 1,
@@ -674,6 +737,10 @@ const styles = StyleSheet.create({
   },
   qrContainer: {
     alignItems: 'center',
+    justifyContent: 'center',
+    padding: 8,
+    borderRadius: 8,
+    borderWidth: 1,
   },
   qrImage: {
     width: 76,
@@ -682,9 +749,10 @@ const styles = StyleSheet.create({
     backgroundColor: '#FFF',
   },
   qrCaption: {
-    fontSize: 9,
+    fontSize: 8.5,
     fontWeight: '600',
-    marginTop: 3,
+    marginTop: 4,
+    textAlign: 'center',
   },
   bankContainer: {
     flex: 1,
@@ -692,6 +760,7 @@ const styles = StyleSheet.create({
     padding: 8,
     borderRadius: 8,
     borderWidth: 1,
+    justifyContent: 'center',
   },
   bankTitle: {
     fontSize: 9,

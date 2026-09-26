@@ -5,6 +5,8 @@ import {
     useEffect,
     useRef,
     useState,
+    useMemo,
+    useCallback,
 } from "react";
 import {
     Alert,
@@ -29,7 +31,7 @@ const PopupContext = createContext(null);
 export function PopupProvider({ children }) {
   const { theme } = useTheme();
   const { colors, radius, shadows } = theme;
-  const styles = getStyles(theme);
+  const styles = useMemo(() => getStyles(theme), [theme]);
 
   // Toast State
   const [toast, setToast] = useState(null);
@@ -147,7 +149,7 @@ export function PopupProvider({ children }) {
     };
   }, [colors, theme]);
 
-  const showToast = (message, type = "success", duration = 3000) => {
+  const showToast = useCallback((message, type = "success", duration = 3000) => {
     if (toastTimeoutRef.current) {
       clearTimeout(toastTimeoutRef.current);
     }
@@ -155,9 +157,9 @@ export function PopupProvider({ children }) {
     toastTimeoutRef.current = setTimeout(() => {
       setToast(null);
     }, duration);
-  };
+  }, []);
 
-  const showDialog = (config) => {
+  const showDialog = useCallback((config) => {
     setDialog({
       title: config.title || "Alert",
       message: config.message || "",
@@ -173,7 +175,7 @@ export function PopupProvider({ children }) {
         setDialog(null);
       },
     });
-  };
+  }, []);
 
   // Helper icons
   const getIconName = (type) => {
@@ -206,8 +208,13 @@ export function PopupProvider({ children }) {
     }
   };
 
+  const contextValue = useMemo(
+    () => ({ showToast, showDialog }),
+    [showToast, showDialog]
+  );
+
   return (
-    <PopupContext.Provider value={{ showToast, showDialog }}>
+    <PopupContext.Provider value={contextValue}>
       {children}
 
       {/* Global Toast Notification */}

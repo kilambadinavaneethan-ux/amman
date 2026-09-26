@@ -134,6 +134,51 @@ export function ShareSettingsModal({
             </View>
 
             {/* Toggle Switches */}
+            <Text style={[styles.sectionTitle, { color: subTextColor, marginTop: 16 }]}>LANGUAGE & LOCALIZATION</Text>
+
+            <View style={[styles.toggleRow, { borderBottomColor: borderColor }]}>
+              <View style={styles.toggleTextContainer}>
+                <Text style={[styles.toggleTitle, { color: textColor }]}>Tamil Version (தமிழ் பதிப்பு)</Text>
+                <Text style={[styles.toggleSub, { color: subTextColor }]}>Generate receipts and invoices in Tamil</Text>
+              </View>
+              <Switch
+                value={Boolean(localSettings.isTamilLanguage)}
+                onValueChange={() => toggleSwitch('isTamilLanguage' as any)}
+                trackColor={{ false: '#CBD5E1', true: '#93C5FD' }}
+                thumbColor={localSettings.isTamilLanguage ? accentColor : '#F1F5F9'}
+              />
+            </View>
+
+            {Boolean(localSettings.isTamilLanguage) && (
+              <>
+                <View style={[styles.toggleRow, { borderBottomColor: borderColor, paddingLeft: 12 }]}>
+                  <View style={styles.toggleTextContainer}>
+                    <Text style={[styles.toggleTitle, { color: textColor }]}>Bilingual Mode (இருமொழி)</Text>
+                    <Text style={[styles.toggleSub, { color: subTextColor }]}>Show English & Tamil simultaneously</Text>
+                  </View>
+                  <Switch
+                    value={Boolean(localSettings.isBilingual)}
+                    onValueChange={() => toggleSwitch('isBilingual' as any)}
+                    trackColor={{ false: '#CBD5E1', true: '#93C5FD' }}
+                    thumbColor={localSettings.isBilingual ? accentColor : '#F1F5F9'}
+                  />
+                </View>
+
+                <View style={[styles.toggleRow, { borderBottomColor: borderColor, paddingLeft: 12 }]}>
+                  <View style={styles.toggleTextContainer}>
+                    <Text style={[styles.toggleTitle, { color: textColor }]}>Add 'அவர்கள்' Suffix</Text>
+                    <Text style={[styles.toggleSub, { color: subTextColor }]}>Append honorific to customer name</Text>
+                  </View>
+                  <Switch
+                    value={Boolean(localSettings.showCustomerHonorificTamil !== false)}
+                    onValueChange={() => toggleSwitch('showCustomerHonorificTamil' as any)}
+                    trackColor={{ false: '#CBD5E1', true: '#93C5FD' }}
+                    thumbColor={localSettings.showCustomerHonorificTamil !== false ? accentColor : '#F1F5F9'}
+                  />
+                </View>
+              </>
+            )}
+
             <Text style={[styles.sectionTitle, { color: subTextColor, marginTop: 16 }]}>RECEIPT & INVOICE CONTENT</Text>
 
             <View style={[styles.toggleRow, { borderBottomColor: borderColor }]}>

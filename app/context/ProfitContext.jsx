@@ -7,7 +7,7 @@ import {
   writeBatch,
   Timestamp,
 } from "firebase/firestore";
-import { createContext, useContext, useEffect, useState, useMemo } from "react";
+import { createContext, useContext, useEffect, useState, useMemo, useCallback } from "react";
 import { db } from "../../src/config/firebase";
 import { OrderContext } from "./OrderContext";
 import { ExpenseContext } from "./ExpenseContext";
@@ -309,11 +309,11 @@ export function ProfitProvider({ children }) {
   }, [orders, expenses, finishedProducts, dbTransactions, dbSummaries, loadingOrders, loadingExpenses, loadingItems, loadingTxs, loadingSummaries]);
 
   // 4. Force manual recalculation (for Pull-to-refresh)
-  const forceRecalculate = async () => {
+  const forceRecalculate = useCallback(async () => {
     // Simply sets loaded state to trigger effect
-    setDbTransactions([...dbTransactions]);
-    setDbSummaries([...dbSummaries]);
-  };
+    setDbTransactions((prev) => [...prev]);
+    setDbSummaries((prev) => [...prev]);
+  }, []);
 
   // 5. Dashboard Metrics Computation
   // Computes relative metrics for Today, Week, Month, Year
@@ -403,17 +403,22 @@ export function ProfitProvider({ children }) {
     return metrics;
   }, [dbTransactions, expenses]);
 
+  const profitLoading = loadingTxs || loadingSummaries || loadingOrders || loadingExpenses || loadingItems;
+
+  const contextValue = useMemo(
+    () => ({
+      transactions: dbTransactions,
+      summaries: dbSummaries,
+      loading: profitLoading,
+      syncing,
+      dashboardMetrics,
+      forceRecalculate,
+    }),
+    [dbTransactions, dbSummaries, profitLoading, syncing, dashboardMetrics, forceRecalculate]
+  );
+
   return (
-    <ProfitContext.Provider
-      value={{
-        transactions: dbTransactions,
-        summaries: dbSummaries,
-        loading: loadingTxs || loadingSummaries || loadingOrders || loadingExpenses || loadingItems,
-        syncing,
-        dashboardMetrics,
-        forceRecalculate,
-      }}
-    >
+    <ProfitContext.Provider value={contextValue}>
       {children}
     </ProfitContext.Provider>
   );

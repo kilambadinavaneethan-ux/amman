@@ -1,6 +1,7 @@
 import * as Print from 'expo-print';
 import { ShareSettings, TransactionData, InvoiceTemplate, DEFAULT_INVOICE_TEMPLATE, formatCustomerPhonesDisplay } from '../../types/sharing';
 import { invoiceTemplateService } from './invoiceTemplateService';
+import { getInvoiceLabels, getLocalizedInvoiceTitle } from '../../utils/invoiceLocalization';
 
 function formatDate(dateInput: Date | string | number | undefined): string {
   if (!dateInput) return new Date().toLocaleDateString('en-IN', { day: '2-digit', month: 'short', year: 'numeric' });
@@ -74,7 +75,10 @@ function getHeaderHtml(
   settings: ShareSettings,
   statusBg: string,
   statusLabel: string,
-  invoiceNumber: string
+  invoiceNumber: string,
+  isTamil?: boolean,
+  customTitle?: string,
+  isBilingual?: boolean
 ): string {
   const accentColor = tpl.accentColor || '#2563EB';
 
@@ -92,9 +96,11 @@ function getHeaderHtml(
   if (tpl.showCompanyAddress && company.address) companyInfoParts.push(`<p style="margin: 3px 0; color: #475569; font-size: 11px;">📍 ${company.address}</p>`);
   if (tpl.showCompanyGst && settings.includeGst && companyGst) companyInfoParts.push(`<p style="margin: 3px 0; font-size: 11px; color: #334155;"><strong>GSTIN:</strong> ${companyGst}</p>`);
 
+  const titleText = getLocalizedInvoiceTitle(tpl.invoiceTitleText, isTamil, customTitle, isBilingual);
+
   const titleBoxHtml = `
     <div class="invoice-title-box">
-      <div class="invoice-title">${tpl.invoiceTitleText || 'INVOICE'}</div>
+      <div class="invoice-title">${titleText}</div>
       ${tpl.showPaymentStatus ? `<div class="status-badge" style="background-color: ${statusBg};">${statusLabel}</div>` : ''}
       ${tpl.showInvoiceNumber ? `<div style="font-size: 12px; font-weight: 700; color: #64748B; margin-top: 4px;"># ${invoiceNumber}</div>` : ''}
     </div>
@@ -154,6 +160,11 @@ export function generateInvoiceHtml(
   settings: ShareSettings,
   tpl: InvoiceTemplate
 ): string {
+  const isTamil = Boolean(tpl.isTamilLanguage ?? settings?.isTamilLanguage);
+  const isBilingual = Boolean(tpl.isBilingual ?? settings?.isBilingual);
+  const customTamil = (tpl.customTamilLabels || settings?.customTamilLabels) as any;
+  const labels = getInvoiceLabels(isTamil, customTamil, isBilingual, tpl.tamilTerminologyPreset || settings?.tamilTerminologyPreset);
+
   const company = transaction.company || {};
   const customer = transaction.customer || { name: 'Valued Customer' };
   const items = transaction.items || [];
@@ -162,7 +173,7 @@ export function generateInvoiceHtml(
 
   const accentColor = tpl.accentColor;
   const statusBg = isPaid ? '#10B981' : isPartial ? '#F59E0B' : '#EF4444';
-  const statusLabel = isPaid ? 'PAID' : isPartial ? 'PARTIALLY PAID' : 'PENDING';
+  const statusLabel = isPaid ? labels.statusPaid : isPartial ? labels.statusPartiallyPaid : labels.statusPending;
 
   // Build columns dynamically
   const showIndex = tpl.showItemIndex;
@@ -186,7 +197,7 @@ export function generateInvoiceHtml(
     : `
         <tr>
           <td colspan="${colCount}" style="text-align: center; color: #64748B; padding: 20px;">
-            Transaction Details Record
+            ${labels.transactionSummaryRecord}
           </td>
         </tr>
       `;
@@ -195,24 +206,27 @@ export function generateInvoiceHtml(
     ? `<div class="watermark">${settings.watermarkText || 'CONFIDENTIAL'}</div>`
     : '';
 
-  const headerHtml = getHeaderHtml(tpl, company, settings, statusBg, statusLabel, transaction.invoiceNumber);
+  const headerHtml = getHeaderHtml(tpl, company, settings, statusBg, statusLabel, transaction.invoiceNumber, isTamil, customTamil?.invoice, isBilingual);
 
   // Meta grid
   const metaCols: string[] = [];
-  if (tpl.showInvoiceDate) metaCols.push(`<div class="meta-col"><div class="meta-label">Invoice Date</div><div class="meta-value">${formatDate(transaction.date)}</div></div>`);
-  if (tpl.showDueDate && transaction.dueDate) metaCols.push(`<div class="meta-col"><div class="meta-label">Due Date</div><div class="meta-value">${formatDate(transaction.dueDate)}</div></div>`);
-  if (tpl.showPaymentMethod) metaCols.push(`<div class="meta-col"><div class="meta-label">Payment Method</div><div class="meta-value">${transaction.paymentMethod || 'Cash / Online'}</div></div>`);
+  if (tpl.showInvoiceDate) metaCols.push(`<div class="meta-col"><div class="meta-label">${labels.invoiceDate}</div><div class="meta-value">${formatDate(transaction.date)}</div></div>`);
+  if (tpl.showDueDate && transaction.dueDate) metaCols.push(`<div class="meta-col"><div class="meta-label">${labels.dueDate}</div><div class="meta-value">${formatDate(transaction.dueDate)}</div></div>`);
+  if (tpl.showPaymentMethod) metaCols.push(`<div class="meta-col"><div class="meta-label">${labels.paymentMode}</div><div class="meta-value">${transaction.paymentMethod || 'Cash / Online'}</div></div>`);
   const metaHtml = metaCols.length > 0 ? `<div class="meta-grid">${metaCols.join('')}</div>` : '';
 
   // Customer section
   let customerHtml = '';
   if (tpl.showCustomerSection) {
     const custParts: string[] = [];
-    const nameStr = customer.name || '';
-    const nameHasAvargal = nameStr.endsWith('அவர்கள்');
-    const mainCustomerName = nameHasAvargal ? nameStr.replace(/\s+அவர்கள்$/, '').trim() : nameStr;
+    const rawCustName = customer.name || '';
+    const shouldAddHonorific = (isTamil || isBilingual) && (tpl.showCustomerHonorificTamil ?? settings?.showCustomerHonorificTamil) !== false;
+    const nameStr = shouldAddHonorific && !rawCustName.endsWith('அவர்கள்') ? `${rawCustName} ${labels.avargal || 'அவர்கள்'}` : rawCustName;
+    const nameHasAvargal = nameStr.endsWith(labels.avargal || 'அவர்கள்');
+    const honorificSuffix = labels.avargal || 'அவர்கள்';
+    const mainCustomerName = nameHasAvargal ? nameStr.substring(0, nameStr.length - honorificSuffix.length).trim() : nameStr;
     const displayCustomerName = nameHasAvargal
-      ? `${mainCustomerName} <span style="font-size: 11px; font-weight: 600; color: #64748B; margin-left: 2px;">அவர்கள்</span>`
+      ? `${mainCustomerName} <span style="font-size: 11px; font-weight: 600; color: #64748B; margin-left: 2px;">${honorificSuffix}</span>`
       : mainCustomerName;
     const custPhones = formatCustomerPhonesDisplay(customer.phone, customer.phoneNumbers);
     custParts.push(`<div style="font-size: 14px; font-weight: 700; color: ${tpl.headingColor};">${displayCustomerName}</div>`);
@@ -220,10 +234,12 @@ export function generateInvoiceHtml(
     if (tpl.showCustomerAddress && customer.address) custParts.push(`<p style="margin: 2px 0; color: #475569;">${customer.address}</p>`);
     if (tpl.showCustomerGst && settings.includeGst && customer.gstNo) custParts.push(`<p style="margin: 2px 0;"><strong>GSTIN:</strong> ${customer.gstNo}</p>`);
 
+    const sectionTitleText = (tpl.customerSectionTitle ? (isTamil && tpl.customerSectionTitle === 'Billed To' ? labels.billedTo : tpl.customerSectionTitle) : labels.billedTo).toUpperCase();
+
     customerHtml = `
       <div class="billing-row">
         <div class="billing-card">
-          <div class="card-title">${tpl.customerSectionTitle}</div>
+          <div class="card-title">${sectionTitleText}</div>
           ${custParts.join('')}
         </div>
       </div>
@@ -231,7 +247,7 @@ export function generateInvoiceHtml(
   }
 
   // Signature
-  const sigTitle = settings.signatureTitle || 'Authorized Signature';
+  const sigTitle = settings.signatureTitle || labels.authorizedSignatory;
   const signatureHtml = tpl.showSignature && settings.includeSignature
     ? `
       <div class="signature-box">
@@ -263,28 +279,31 @@ export function generateInvoiceHtml(
   const showQr = settings.includeQrCode !== false && tpl.showQrCode !== false && settings.paymentDisplayMode !== 'NONE' && settings.paymentDisplayMode !== 'BANK';
   const showBank = settings.includeBankDetails !== false && tpl.showBankDetails !== false && settings.paymentDisplayMode !== 'NONE' && settings.paymentDisplayMode !== 'QR';
 
-  const bankNameVal = settings.bankName || company.bankName || tpl.bankName || '';
-  const bankAccVal = settings.accountNo || company.accountNo || tpl.accountNo || '';
-  const bankIfscVal = settings.ifscCode || company.ifscCode || tpl.ifscCode || '';
-  const bankHolderVal = settings.accountHolderName || company.name || '';
+  const bankNameVal = settings.bankName || tpl.bankName || company.bankName || '';
+  const bankAccVal = settings.accountNo || tpl.accountNo || company.accountNo || '';
+  const bankIfscVal = settings.ifscCode || tpl.ifscCode || company.ifscCode || '';
+  const bankHolderVal = settings.accountHolderName || tpl.accountHolderName || company.name || '';
 
   let paymentInfoHtml = '';
   if (showQr) {
     paymentInfoHtml += `
       <div class="qr-box">
         <img src="${qrCodeUrl}" style="width: 76px; height: 76px; border-radius: 6px; border: 1px solid ${tpl.borderColor}; object-fit: contain;" />
-        <p style="margin: 4px 0 0 0; font-size: 10px; color: #64748B;">Scan to Pay / Verify</p>
+        <p style="margin: 4px 0 0 0; font-size: 10px; color: #64748B;">${tpl.useCustomQrCode && tpl.customQrCodeUri ? labels.scanToPayVerify : labels.scanToPay}</p>
       </div>
     `;
   }
   if (showBank && (bankNameVal || bankAccVal)) {
     paymentInfoHtml += `
-      <div style="margin-top: ${showQr ? '8px' : '0'}; padding: 8px; background: #F8FAFC; border-radius: 6px; border: 1px solid ${tpl.borderColor}; font-size: 10px;">
-        <strong style="color: ${tpl.accentColor}; font-size: 10px; display: block; margin-bottom: 2px;">BANK PAYMENT DETAILS</strong>
-        ${bankNameVal ? `<div><strong>Bank:</strong> ${bankNameVal}</div>` : ''}
-        ${bankAccVal ? `<div><strong>A/c:</strong> ${bankAccVal}</div>` : ''}
-        ${bankIfscVal ? `<div><strong>IFSC:</strong> ${bankIfscVal}</div>` : ''}
-        ${bankHolderVal ? `<div style="color: #64748B;"><strong>Holder:</strong> ${bankHolderVal}</div>` : ''}
+      <div style="margin-top: ${showQr ? '8px' : '0'}; padding: 8px 10px; background: #F8FAFC; border-radius: 8px; border: 1px solid ${tpl.borderColor}; font-size: 10px; width: 100%; max-width: 220px;">
+        <div style="display: flex; align-items: center; margin-bottom: 5px; gap: 4px;">
+          <div style="width: 3px; height: 10px; background: ${tpl.accentColor}; border-radius: 2px;"></div>
+          <strong style="color: ${tpl.accentColor}; font-size: 8.5px; letter-spacing: 0.3px;">${labels.bankPaymentDetails.toUpperCase()}</strong>
+        </div>
+        ${bankNameVal ? `<div style="margin-bottom: 3px;"><div style="font-size: 7.5px; color: #64748B; font-weight: 700; text-transform: uppercase;">${labels.bankName}</div><strong style="color: ${tpl.bodyTextColor}; font-size: 9.5px;">${bankNameVal}</strong></div>` : ''}
+        ${bankAccVal ? `<div style="margin-bottom: 3px;"><div style="font-size: 7.5px; color: #64748B; font-weight: 700; text-transform: uppercase;">${labels.accountNo}</div><strong style="color: ${tpl.bodyTextColor}; font-size: 9.5px; letter-spacing: 0.3px;">${bankAccVal}</strong></div>` : ''}
+        ${bankIfscVal ? `<div style="margin-bottom: 3px;"><div style="font-size: 7.5px; color: #64748B; font-weight: 700; text-transform: uppercase;">${labels.ifscCode}</div><strong style="color: ${tpl.bodyTextColor}; font-size: 9.5px;">${bankIfscVal}</strong></div>` : ''}
+        ${bankHolderVal ? `<div><div style="font-size: 7.5px; color: #64748B; font-weight: 700; text-transform: uppercase;">${labels.accountHolder}</div><span style="color: #64748B; font-size: 8.5px;">${bankHolderVal}</span></div>` : ''}
       </div>
     `;
   }
@@ -304,53 +323,55 @@ export function generateInvoiceHtml(
   // Summary rows
   const summaryRows: string[] = [];
   if (tpl.showSubtotal && hasExtraCharges) {
-    summaryRows.push(`<tr><td style="color: #64748B;">Subtotal:</td><td style="text-align: right; font-weight: 600;">${formatCurrency(transaction.subtotal || transaction.totalAmount)}</td></tr>`);
+    summaryRows.push(`<tr><td style="color: #64748B;">${labels.subtotal}:</td><td style="text-align: right; font-weight: 600;">${formatCurrency(transaction.subtotal || transaction.totalAmount)}</td></tr>`);
   }
   if (tpl.showDeliveryCharge !== false && transaction.shipmentCharge) {
-    summaryRows.push(`<tr><td style="color: #64748B;">Delivery / Freight:</td><td style="text-align: right; font-weight: 600;">+ ${formatCurrency(transaction.shipmentCharge)}</td></tr>`);
+    summaryRows.push(`<tr><td style="color: #64748B;">${labels.deliveryCharge}:</td><td style="text-align: right; font-weight: 600;">+ ${formatCurrency(transaction.shipmentCharge)}</td></tr>`);
   }
   if (tpl.showLoadingCharge !== false && transaction.loadingCharge) {
-    summaryRows.push(`<tr><td style="color: #64748B;">Loading Charge:</td><td style="text-align: right; font-weight: 600;">+ ${formatCurrency(transaction.loadingCharge)}</td></tr>`);
+    summaryRows.push(`<tr><td style="color: #64748B;">${labels.loadingCharge}:</td><td style="text-align: right; font-weight: 600;">+ ${formatCurrency(transaction.loadingCharge)}</td></tr>`);
   }
   if (tpl.showUnloadingCharge !== false && transaction.unloadingCharge) {
-    summaryRows.push(`<tr><td style="color: #64748B;">Unloading Charge:</td><td style="text-align: right; font-weight: 600;">+ ${formatCurrency(transaction.unloadingCharge)}</td></tr>`);
+    summaryRows.push(`<tr><td style="color: #64748B;">${labels.unloadingCharge}:</td><td style="text-align: right; font-weight: 600;">+ ${formatCurrency(transaction.unloadingCharge)}</td></tr>`);
   }
   if (tpl.showExtraCharge !== false && transaction.extraAmount) {
-    const extraLabel = transaction.extraAmountDescription ? transaction.extraAmountDescription : 'Extra Charge';
+    const extraLabel = transaction.extraAmountDescription ? transaction.extraAmountDescription : labels.extraCharge;
     summaryRows.push(`<tr><td style="color: #64748B;">${extraLabel}:</td><td style="text-align: right; font-weight: 600;">+ ${formatCurrency(transaction.extraAmount)}</td></tr>`);
   }
   if (Array.isArray(transaction.charges)) {
     transaction.charges.forEach((chg) => {
       if (chg && chg.amount) {
-        summaryRows.push(`<tr><td style="color: #64748B;">${chg.name || 'Additional Charge'}:</td><td style="text-align: right; font-weight: 600;">+ ${formatCurrency(chg.amount)}</td></tr>`);
+        summaryRows.push(`<tr><td style="color: #64748B;">${chg.name || labels.extraCharge}:</td><td style="text-align: right; font-weight: 600;">+ ${formatCurrency(chg.amount)}</td></tr>`);
       }
     });
   }
-  if (tpl.showTax && transaction.taxAmount) summaryRows.push(`<tr><td style="color: #64748B;">Tax / GST:</td><td style="text-align: right; font-weight: 600;">+ ${formatCurrency(transaction.taxAmount)}</td></tr>`);
-  if (tpl.showDiscount && transaction.discountAmount) summaryRows.push(`<tr><td style="color: #10B981;">Discount:</td><td style="text-align: right; font-weight: 600; color: #10B981;">- ${formatCurrency(transaction.discountAmount)}</td></tr>`);
+  if (tpl.showTax && transaction.taxAmount) summaryRows.push(`<tr><td style="color: #64748B;">${labels.taxGst}:</td><td style="text-align: right; font-weight: 600;">+ ${formatCurrency(transaction.taxAmount)}</td></tr>`);
+  if (tpl.showDiscount && transaction.discountAmount) summaryRows.push(`<tr><td style="color: #10B981;">${labels.discount}:</td><td style="text-align: right; font-weight: 600; color: #10B981;">- ${formatCurrency(transaction.discountAmount)}</td></tr>`);
 
   if (hasOldBalance) {
-    const billTotalLabel = hasExtraCharges ? 'Current Invoice Total:' : 'Subtotal:';
+    const billTotalLabel = hasExtraCharges ? labels.currentBillTotal + ':' : labels.subtotal + ':';
     summaryRows.push(`<tr><td style="color: #64748B; font-weight: 600;">${billTotalLabel}</td><td style="text-align: right; font-weight: 600;">${formatCurrency(transaction.totalAmount)}</td></tr>`);
-    summaryRows.push(`<tr><td style="color: #EF4444; font-weight: 600;">Old Balance Due:</td><td style="text-align: right; font-weight: 700; color: #EF4444;">+ ${formatCurrency(oldBalance)}</td></tr>`);
-    summaryRows.push(`<tr class="total-row"><td style="font-size: 11.5px; font-weight: 800;">Grand Total (incl. Dues):</td><td style="text-align: right; color: ${accentColor}; font-weight: 800; font-size: 13px; white-space: nowrap;">${formatCurrency(grandTotalWithOldDues)}</td></tr>`);
+    summaryRows.push(`<tr><td style="color: #EF4444; font-weight: 600;">${labels.oldBalanceDue}:</td><td style="text-align: right; font-weight: 700; color: #EF4444;">+ ${formatCurrency(oldBalance)}</td></tr>`);
+    summaryRows.push(`<tr class="total-row"><td style="font-size: 11.5px; font-weight: 800;">${labels.grandTotalInclDues}:</td><td style="text-align: right; color: ${accentColor}; font-weight: 800; font-size: 13px; white-space: nowrap;">${formatCurrency(grandTotalWithOldDues)}</td></tr>`);
   } else {
-    summaryRows.push(`<tr class="total-row"><td style="font-weight: 800;">Total Amount:</td><td style="text-align: right; color: ${accentColor}; font-weight: 800; white-space: nowrap;">${formatCurrency(transaction.totalAmount)}</td></tr>`);
+    summaryRows.push(`<tr class="total-row"><td style="font-weight: 800;">${labels.totalAmount}:</td><td style="text-align: right; color: ${accentColor}; font-weight: 800; white-space: nowrap;">${formatCurrency(transaction.totalAmount)}</td></tr>`);
   }
 
-  if (tpl.showPaidAmount) summaryRows.push(`<tr><td style="color: #10B981; font-weight: 600;">Paid Amount:</td><td style="text-align: right; font-weight: 700; color: #10B981;">${formatCurrency(transaction.paidAmount)}</td></tr>`);
-  if (tpl.showBalanceDue) summaryRows.push(`<tr><td style="color: #EF4444; font-weight: 600;">${hasOldBalance ? 'Total Balance Due:' : 'Balance Due:'}</td><td style="text-align: right; font-weight: 700; color: #EF4444;">${formatCurrency(hasOldBalance ? netBalanceDue : transaction.pendingAmount)}</td></tr>`);
+  if (tpl.showPaidAmount) summaryRows.push(`<tr><td style="color: #10B981; font-weight: 600;">${labels.paidAmount}:</td><td style="text-align: right; font-weight: 700; color: #10B981;">${formatCurrency(transaction.paidAmount)}</td></tr>`);
+  if (tpl.showBalanceDue) summaryRows.push(`<tr><td style="color: #EF4444; font-weight: 600;">${hasOldBalance ? labels.totalBalanceDue + ':' : labels.balanceDue + ':'}</td><td style="text-align: right; font-weight: 700; color: #EF4444;">${formatCurrency(hasOldBalance ? netBalanceDue : transaction.pendingAmount)}</td></tr>`);
 
   // Footer parts
-  const thankNote = settings.thankYouNote || 'Thank you for your business!';
+  const thankNote = (isTamil && (!settings.thankYouNote || settings.thankYouNote.toLowerCase().includes('thank you')))
+    ? labels.thankYouNote
+    : (settings.thankYouNote || labels.thankYouNote);
   const termsText = settings.termsAndConditions;
 
   let footerNotesHtml = '';
   if (tpl.showNotes && transaction.notes) {
-    footerNotesHtml += `<div style="background: #F1F5F9; border-radius: 6px; padding: 10px; font-size: 11px; color: #475569; margin-bottom: 8px;"><strong>Notes:</strong> ${transaction.notes}</div>`;
+    footerNotesHtml += `<div style="background: #F1F5F9; border-radius: 6px; padding: 10px; font-size: 11px; color: #475569; margin-bottom: 8px;"><strong>${labels.notes}:</strong> ${transaction.notes}</div>`;
   }
   if (tpl.showTerms && termsText) {
-    footerNotesHtml += `<div style="font-size: 10px; color: #64748B; background: #F8FAFC; border-radius: 6px; padding: 8px; border: 1px solid ${tpl.borderColor};"><strong>Terms & Conditions:</strong><br />${termsText.replace(/\n/g, '<br />')}</div>`;
+    footerNotesHtml += `<div style="font-size: 10px; color: #64748B; background: #F8FAFC; border-radius: 6px; padding: 8px; border: 1px solid ${tpl.borderColor};"><strong>${labels.termsAndConditions}:</strong><br />${termsText.replace(/\n/g, '<br />')}</div>`;
   }
 
   const footerHtml = (tpl.showThankYouNote || tpl.showFooterBranding) ? `

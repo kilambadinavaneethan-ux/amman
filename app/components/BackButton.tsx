@@ -20,7 +20,7 @@ export interface BackButtonProps {
   iconColor?: string;
 }
 
-export const BackButton: React.FC<BackButtonProps> = ({
+const BackButtonComponent: React.FC<BackButtonProps> = ({
   label = "Back",
   onPress,
   variant = "pill",
@@ -143,4 +143,5 @@ const styles = StyleSheet.create({
   },
 });
 
+export const BackButton = React.memo(BackButtonComponent);
 export default BackButton;

@@ -56,6 +56,11 @@ export const invoiceTemplateService = {
           includeGst: updated.showCompanyGst ?? currentShareSettings.includeGst,
           includeCustomerAddress: updated.showCustomerAddress ?? currentShareSettings.includeCustomerAddress,
           includeCustomerPhone: updated.showCustomerPhone ?? currentShareSettings.includeCustomerPhone,
+          isTamilLanguage: updated.isTamilLanguage ?? currentShareSettings.isTamilLanguage,
+          isBilingual: updated.isBilingual ?? currentShareSettings.isBilingual,
+          showCustomerHonorificTamil: updated.showCustomerHonorificTamil ?? currentShareSettings.showCustomerHonorificTamil,
+          tamilTerminologyPreset: updated.tamilTerminologyPreset ?? currentShareSettings.tamilTerminologyPreset,
+          customTamilLabels: updated.customTamilLabels ?? currentShareSettings.customTamilLabels,
         };
         await AsyncStorage.setItem('@transaction_share_settings_v1', JSON.stringify(updatedShareSettings));
       } catch (err) {

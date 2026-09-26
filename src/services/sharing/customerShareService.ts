@@ -2,6 +2,7 @@ import { Share, Linking, Alert, Clipboard, Platform } from 'react-native';
 import * as Sharing from 'expo-sharing';
 import * as Print from 'expo-print';
 import { CustomerShareData, ShareSettings, InvoiceTemplate, DEFAULT_CUSTOMER_MESSAGE_TEMPLATE, formatCustomerPhonesDisplay, formatCustomerPhoneNumbers } from '../../types/sharing';
+import { getInvoiceLabels } from '../../utils/invoiceLocalization';
 
 function formatCurrency(amount: number): string {
   if (isNaN(amount) || amount === undefined || amount === null) return '₹0.00';
@@ -23,9 +24,38 @@ export const customerShareService = {
     data: CustomerShareData,
     company: any = {},
     settings: ShareSettings,
-    customTemplate?: string
+    customTemplate?: string,
+    template?: InvoiceTemplate
   ): string {
-    const templateText = customTemplate || settings.customerMessageTemplate || DEFAULT_CUSTOMER_MESSAGE_TEMPLATE;
+    const isTamil = Boolean(settings?.isTamilLanguage ?? template?.isTamilLanguage);
+    const isBilingual = Boolean(settings?.isBilingual ?? template?.isBilingual);
+    const customTamil = (settings?.customTamilLabels || template?.customTamilLabels) as any;
+    const preset = settings?.tamilTerminologyPreset || template?.tamilTerminologyPreset;
+    const labels = getInvoiceLabels(isTamil, customTamil, isBilingual, preset);
+
+    const defaultTamilTemplate = `👤 *${labels.customerDetails.toUpperCase()} - கணக்கு அறிக்கை*
+*{company}*
+------------------------------
+*${labels.billedTo}:* {customer_name}
+*${labels.phone}:* {customer_phone}
+------------------------------
+📊 *கணக்கு கணக்கீட்டு சுருக்கம்*
+• *மொத்த ஆர்டர்கள்:* {total_orders}
+• *${labels.oldBalanceDue}:* {old_balance}
+• *மொத்த விற்பனை:* +{total_sales}
+• *${labels.grandTotalInclDues}:* {grand_total}
+• *${labels.paidAmount}:* −{total_paid}
+------------------------------
+💰 *${labels.balanceDue}:* {net_balance_due}
+------------------------------
+{ledger_summary}
+------------------------------
+💳 *${labels.scanToPay}:*
+{upi_link}
+
+தங்களின் மேலான ஆதரவிற்கு மிக்க நன்றி! 🙏`;
+
+    const templateText = customTemplate || (isTamil ? (settings.customerMessageTemplate && settings.customerMessageTemplate !== DEFAULT_CUSTOMER_MESSAGE_TEMPLATE ? settings.customerMessageTemplate : defaultTamilTemplate) : (settings.customerMessageTemplate || DEFAULT_CUSTOMER_MESSAGE_TEMPLATE));
     const targetUpi = (settings.upiId || company.upiId || '').trim();
     const netDue = data.summary.netBalanceDue;
     const isPaid = (netDue || 0) <= 0;
@@ -157,6 +187,12 @@ export const customerShareService = {
     settings: ShareSettings,
     template: InvoiceTemplate
   ): string {
+    const isTamil = Boolean(settings?.isTamilLanguage ?? template?.isTamilLanguage);
+    const isBilingual = Boolean(settings?.isBilingual ?? template?.isBilingual);
+    const customTamil = (settings?.customTamilLabels || template?.customTamilLabels) as any;
+    const preset = settings?.tamilTerminologyPreset || template?.tamilTerminologyPreset;
+    const labels = getInvoiceLabels(isTamil, customTamil, isBilingual, preset);
+
     const accentColor = settings.themeColor || template.accentColor || '#2563EB';
     const targetUpi = (settings.upiId || company.upiId || '').trim();
     const netDue = data.summary.netBalanceDue;
@@ -191,19 +227,19 @@ export const customerShareService = {
 
       return `
         <tr style="background: ${idx % 2 === 0 ? '#FFFFFF' : '#F8FAFC'};">
-          <td style="padding: 10px; border-bottom: 1px solid #E2E8F0; font-size: 12px; color: #475569;">${formatDate(l.date)}</td>
-          <td style="padding: 10px; border-bottom: 1px solid #E2E8F0; font-size: 12px; font-weight: 600; color: #0F172A;">
+          <td style="padding: 10px; border-bottom: 1px solid #E2E8F0; font-size: 12px; color: #475569; vertical-align: top;">${formatDate(l.date)}</td>
+          <td style="padding: 10px; border-bottom: 1px solid #E2E8F0; font-size: 12px; font-weight: 600; color: #0F172A; vertical-align: top;">
             <div>${l.description}</div>
             ${l.notes ? `<div style="font-size: 10px; color: #64748B; font-weight: 400; font-style: italic; margin-top: 2px;">📝 Note: ${l.notes}</div>` : ''}
           </td>
-          <td style="padding: 10px; border-bottom: 1px solid #E2E8F0; font-size: 12px; text-align: center;">
+          <td style="padding: 10px; border-bottom: 1px solid #E2E8F0; font-size: 12px; text-align: center; vertical-align: top;">
             <span style="padding: 3px 8px; border-radius: 12px; font-size: 10px; font-weight: 700; background: ${l.type === 'order' ? '#EFF6FF' : l.type === 'payment' ? '#ECFDF5' : '#FFFBEB'}; color: ${l.type === 'order' ? '#2563EB' : l.type === 'payment' ? '#059669' : '#D97706'};">
               ${l.type.toUpperCase()}
             </span>
           </td>
-          <td style="padding: 10px; border-bottom: 1px solid #E2E8F0; font-size: 12px; text-align: right; color: #0F172A;">${debitVal > 0 ? formatCurrency(debitVal) : '-'}</td>
-          <td style="padding: 10px; border-bottom: 1px solid #E2E8F0; font-size: 12px; text-align: right; font-weight: 700; color: #059669;">${creditVal > 0 ? formatCurrency(creditVal) : '-'}</td>
-          <td style="padding: 10px; border-bottom: 1px solid #E2E8F0; font-size: 12px; text-align: right; font-weight: 700; color: ${l.balance > 0 ? '#DC2626' : '#059669'};">${l.balance < 0 ? `Adv: ${formatCurrency(Math.abs(l.balance))}` : formatCurrency(l.balance)}</td>
+          <td style="padding: 10px; border-bottom: 1px solid #E2E8F0; font-size: 12px; text-align: ${debitVal > 0 ? 'right' : 'center'}; color: ${debitVal > 0 ? '#0F172A' : '#94A3B8'}; vertical-align: top;">${debitVal > 0 ? formatCurrency(debitVal) : '—'}</td>
+          <td style="padding: 10px; border-bottom: 1px solid #E2E8F0; font-size: 12px; text-align: ${creditVal > 0 ? 'right' : 'center'}; font-weight: 700; color: ${creditVal > 0 ? '#059669' : '#94A3B8'}; vertical-align: top;">${creditVal > 0 ? formatCurrency(creditVal) : '—'}</td>
+          <td style="padding: 10px; border-bottom: 1px solid #E2E8F0; font-size: 12px; text-align: right; font-weight: 700; color: ${l.balance > 0 ? '#DC2626' : '#059669'}; vertical-align: top;">${l.balance < 0 ? `Adv: ${formatCurrency(Math.abs(l.balance))}` : formatCurrency(l.balance)}</td>
         </tr>
       `;
     }).join('');
@@ -268,18 +304,18 @@ export const customerShareService = {
             </div>
           </div>
           <div style="text-align: right;">
-            <div class="badge-statement" style="background: ${accentColor}; color: #FFFFFF; padding: 6px 14px; border-radius: 20px; font-size: 11px; font-weight: 800; letter-spacing: 0.5px; display: inline-block;">ACCOUNT STATEMENT</div>
-            <div style="font-size: 11px; color: #64748B; margin-top: 6px; font-weight: 600;">📅 Date: ${formatDate(new Date())}</div>
+            <div class="badge-statement" style="background: ${accentColor}; color: #FFFFFF; padding: 6px 14px; border-radius: 20px; font-size: 11px; font-weight: 800; letter-spacing: 0.5px; display: inline-block;">${isBilingual ? 'ACCOUNT STATEMENT / கணக்கு அறிக்கை' : isTamil ? 'கணக்கு அறிக்கை' : 'ACCOUNT STATEMENT'}</div>
+            <div style="font-size: 11px; color: #64748B; margin-top: 6px; font-weight: 600;">📅 ${labels.invoiceDate}: ${formatDate(new Date())}</div>
           </div>
         </div>
 
         ${opts.includeProfileInfo !== false ? `
           <div class="grid-two">
             <div class="card-info">
-              <div class="info-title">Statement For (Client Profile)</div>
+              <div class="info-title">${isTamil ? labels.customerDetails : 'Statement For (Client Profile)'}</div>
               <div class="info-name">${data.customer.name.endsWith('அவர்கள்') ? `${data.customer.name.replace(/\s+அவர்கள்$/, '')} <span style="font-size: 11px; font-weight: 500; color: #64748B;">அவர்கள்</span>` : data.customer.name} ${data.customer.isSpecial ? '⭐ (Special Client)' : ''}</div>
-              ${formatCustomerPhonesDisplay(data.customer.phone, data.customer.phoneNumbers) ? `<div class="info-text">📞 Phone: ${formatCustomerPhonesDisplay(data.customer.phone, data.customer.phoneNumbers)}</div>` : ''}
-              ${data.customer.address ? `<div class="info-text">📍 Address: ${data.customer.address}</div>` : ''}
+              ${formatCustomerPhonesDisplay(data.customer.phone, data.customer.phoneNumbers) ? `<div class="info-text">📞 ${labels.phone}: ${formatCustomerPhonesDisplay(data.customer.phone, data.customer.phoneNumbers)}</div>` : ''}
+              ${data.customer.address ? `<div class="info-text">📍 ${labels.address}: ${data.customer.address}</div>` : ''}
               ${showGst && data.customer.gstin ? `<div class="info-text">🏷️ GSTIN: ${data.customer.gstin}</div>` : ''}
             </div>
           </div>
@@ -287,39 +323,39 @@ export const customerShareService = {
 
         ${opts.includeDueDates !== false && data.dueDates && data.dueDates.length > 0 ? `
           <div style="margin-bottom: 24px;">
-            <div class="info-title">Scheduled Payment Due Dates</div>
+            <div class="info-title">${isTamil ? 'நிலுவை தேதி அட்டவணை' : 'Scheduled Payment Due Dates'}</div>
             ${dueDatesRows}
           </div>
         ` : ''}
 
         ${opts.includeSummary !== false ? `
           <div style="background: #F8FAFC; border: 1px solid #E2E8F0; border-radius: 12px; padding: 16px; margin-bottom: 24px;">
-            <div class="info-title" style="color: ${accentColor}; margin-bottom: 12px;">📊 Account Calculation Summary</div>
+            <div class="info-title" style="color: ${accentColor}; margin-bottom: 12px;">📊 ${isBilingual ? 'ACCOUNT CALCULATION SUMMARY / கணக்கு கணக்கீட்டு சுருக்கம்' : isTamil ? 'கணக்கு கணக்கீட்டு சுருக்கம்' : 'Account Calculation Summary'}</div>
             <table style="width: 100%; border-collapse: collapse; margin-bottom: 0;">
               <tr style="border-bottom: 1px solid #E2E8F0;">
-                <td style="padding: 6px 0; font-size: 13px; color: #64748B;">Total Orders</td>
+                <td style="padding: 6px 0; font-size: 13px; color: #64748B;">${isTamil ? 'மொத்த ஆர்டர்கள்' : 'Total Orders'}</td>
                 <td style="padding: 6px 0; font-size: 13px; font-weight: 700; text-align: right; color: #0F172A;">${data.summary.totalOrdersCount}</td>
               </tr>
               ${data.summary.oldBalanceDue > 0 ? `
                 <tr style="border-bottom: 1px solid #E2E8F0;">
-                  <td style="padding: 6px 0; font-size: 13px; color: #DC2626; font-weight: 700;">Opening / Old Balance Due</td>
+                  <td style="padding: 6px 0; font-size: 13px; color: #DC2626; font-weight: 700;">${labels.oldBalanceDue}</td>
                   <td style="padding: 6px 0; font-size: 13px; font-weight: 800; text-align: right; color: #DC2626;">+ ${formatCurrency(data.summary.oldBalanceDue)}</td>
                 </tr>
               ` : ''}
               <tr style="border-bottom: 1px solid #E2E8F0;">
-                <td style="padding: 6px 0; font-size: 13px; color: #0F172A;">Total Sales / Order Amount</td>
+                <td style="padding: 6px 0; font-size: 13px; color: #0F172A;">${isTamil ? 'மொத்த விற்பனை / ஆர்டர்கள்' : 'Total Sales / Order Amount'}</td>
                 <td style="padding: 6px 0; font-size: 13px; font-weight: 700; text-align: right; color: #0F172A;">+ ${formatCurrency(data.summary.totalSalesAmount)}</td>
               </tr>
               <tr style="border-bottom: 2px solid ${accentColor};">
-                <td style="padding: 8px 0; font-size: 14px; font-weight: 800; color: ${accentColor};">Grand Total (incl. Dues)</td>
+                <td style="padding: 8px 0; font-size: 14px; font-weight: 800; color: ${accentColor};">${labels.grandTotalInclDues}</td>
                 <td style="padding: 8px 0; font-size: 15px; font-weight: 900; text-align: right; color: ${accentColor};">${formatCurrency((data.summary.oldBalanceDue || 0) + (data.summary.totalSalesAmount || 0))}</td>
               </tr>
               <tr style="border-bottom: 1px solid #E2E8F0;">
-                <td style="padding: 6px 0; font-size: 13px; color: #059669; font-weight: 700;">Total Amount Paid (−)</td>
+                <td style="padding: 6px 0; font-size: 13px; color: #059669; font-weight: 700;">${labels.paidAmount} (−)</td>
                 <td style="padding: 6px 0; font-size: 13px; font-weight: 800; text-align: right; color: #059669;">− ${formatCurrency(data.summary.totalPaidAmount)}</td>
               </tr>
               <tr style="border-bottom: 3px solid ${netDue > 0 ? '#DC2626' : '#059669'};">
-                <td style="padding: 10px 0; font-size: 15px; font-weight: 900; color: ${netDue > 0 ? '#DC2626' : '#059669'};">${netDue > 0 ? '💰 Total Balance Due' : netDue < 0 ? '⭐ Customer Advance Credit' : '✅ Account Fully Settled'}</td>
+                <td style="padding: 10px 0; font-size: 15px; font-weight: 900; color: ${netDue > 0 ? '#DC2626' : '#059669'};">${netDue > 0 ? `💰 ${labels.balanceDue}` : netDue < 0 ? (isTamil ? '⭐ வாடிக்கையாளர் முன்பணம்' : '⭐ Customer Advance Credit') : (isTamil ? '✅ முழுமையாக செலுத்தப்பட்டது' : '✅ Account Fully Settled')}</td>
                 <td style="padding: 10px 0; font-size: 18px; font-weight: 900; text-align: right; color: ${netDue > 0 ? '#DC2626' : '#059669'};">${netDue < 0 ? `+ ${formatCurrency(Math.abs(netDue))}` : formatCurrency(Math.abs(netDue))}</td>
               </tr>
             </table>
@@ -327,16 +363,16 @@ export const customerShareService = {
         ` : ''}
 
         ${opts.includeLedger !== false ? `
-          <div class="info-title">Complete Statement Ledger (${(data.ledger || []).length} entries)</div>
+          <div class="info-title">${isTamil ? `முழு அறிக்கை விவரங்கள் (${(data.ledger || []).length} பதிவுகள்)` : `Complete Statement Ledger (${(data.ledger || []).length} entries)`}</div>
           <table>
             <thead>
               <tr>
-                <th>Date</th>
-                <th>Description / Reference</th>
-                <th style="text-align: center;">Type</th>
-                <th style="text-align: right;">Sales (+)</th>
-                <th style="text-align: right;">Paid (-)</th>
-                <th style="text-align: right;">Balance</th>
+                <th>${labels.invoiceDate}</th>
+                <th>${labels.itemsAndDescription}</th>
+                <th style="text-align: center;">${labels.paymentMode}</th>
+                <th style="text-align: right;">${labels.total} (+)</th>
+                <th style="text-align: right;">${labels.paidAmount} (-)</th>
+                <th style="text-align: right;">${labels.balanceDue}</th>
               </tr>
             </thead>
             <tbody>
@@ -344,10 +380,10 @@ export const customerShareService = {
             </tbody>
             <tfoot>
               <tr style="background: #F1F5F9; border-top: 2px solid ${accentColor}; font-weight: 800;">
-                <td colspan="3" style="padding: 10px; font-size: 12px; color: ${accentColor}; font-weight: 900;">TOTALS</td>
+                <td colspan="3" style="padding: 10px; font-size: 12px; color: ${accentColor}; font-weight: 900;">${labels.total}</td>
                 <td style="padding: 10px; font-size: 12px; text-align: right; color: #0F172A;">${formatCurrency((data.ledger || []).filter(l => l.type === 'order' || l.type === 'opening').reduce((s, l) => s + (l.amount || 0), 0))}</td>
                 <td style="padding: 10px; font-size: 12px; text-align: right; color: #059669;">${formatCurrency((data.ledger || []).reduce((s, l) => s + (l.paid || 0), 0))}</td>
-                <td style="padding: 10px; font-size: 13px; text-align: right; color: ${netDue > 0 ? '#DC2626' : '#059669'}; font-weight: 900;">${netDue < 0 ? `Adv: ${formatCurrency(Math.abs(netDue))}` : formatCurrency(netDue)}</td>
+                <td style="padding: 10px; font-size: 13px; text-align: right; color: ${netDue > 0 ? '#DC2626' : '#059669'}; font-weight: 900;">${netDue < 0 ? `${isTamil ? 'முன்பணம்' : 'Adv'}: ${formatCurrency(Math.abs(netDue))}` : formatCurrency(netDue)}</td>
               </tr>
             </tfoot>
           </table>
@@ -357,24 +393,24 @@ export const customerShareService = {
           ${showQr ? `
             <div class="qr-box">
               <img src="${qrCodeSrc}" class="qr-img" />
-              <div style="font-size: 10px; color: #64748B; margin-top: 4px; font-weight: 600;">Scan to Pay Balance</div>
+              <div style="font-size: 10px; color: #64748B; margin-top: 4px; font-weight: 600;">${labels.scanToPay}</div>
             </div>
           ` : ''}
 
           ${showBank && hasBankInfo ? `
             <div class="bank-box">
-              <strong style="color: ${accentColor}; display: block; margin-bottom: 4px; text-transform: uppercase;">🏦 Bank Account Details</strong>
-              ${accountHolderName ? `<div><strong>Holder:</strong> ${accountHolderName}</div>` : ''}
-              ${bankName ? `<div><strong>Bank:</strong> ${bankName}</div>` : ''}
-              ${accountNo ? `<div><strong>A/C No:</strong> ${accountNo}</div>` : ''}
-              ${ifscCode ? `<div><strong>IFSC:</strong> ${ifscCode}</div>` : ''}
+              <strong style="color: ${accentColor}; display: block; margin-bottom: 4px; text-transform: uppercase;">🏦 ${labels.bankPaymentDetails}</strong>
+              ${accountHolderName ? `<div><strong>${labels.accountHolder}:</strong> ${accountHolderName}</div>` : ''}
+              ${bankName ? `<div><strong>${labels.bankName}:</strong> ${bankName}</div>` : ''}
+              ${accountNo ? `<div><strong>${labels.accountNo}:</strong> ${accountNo}</div>` : ''}
+              ${ifscCode ? `<div><strong>${labels.ifscCode}:</strong> ${ifscCode}</div>` : ''}
             </div>
           ` : ''}
 
           ${showSignature ? `
             <div class="signature-box">
               ${company.signatureUrl ? `<img src="${company.signatureUrl}" style="max-height: 40px; margin-bottom: 4px;" />` : '<div class="sig-line"></div>'}
-              <div style="font-size: 11px; color: #64748B; font-weight: 600;">${settings.signatureTitle || 'Authorized Signatory'}</div>
+              <div style="font-size: 11px; color: #64748B; font-weight: 600;">${settings.signatureTitle || labels.authorizedSignatory}</div>
             </div>
           ` : ''}
         </div>

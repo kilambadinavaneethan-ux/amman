@@ -2,6 +2,7 @@ import React from 'react';
 import { StyleSheet, Text, View } from 'react-native';
 import { Image } from 'expo-image';
 import { ShareSettings, TransactionData, InvoiceTemplate, DEFAULT_INVOICE_TEMPLATE, formatCustomerPhonesDisplay } from '../../types/sharing';
+import { getInvoiceLabels, getLocalizedInvoiceTitle } from '../../utils/invoiceLocalization';
 
 interface Props {
   transaction: TransactionData;
@@ -30,6 +31,7 @@ const TransactionReceiptViewComponent: React.ForwardRefRenderFunction<View, Prop
   const tpl: InvoiceTemplate = propTemplate || {
     ...DEFAULT_INVOICE_TEMPLATE,
     accentColor: settings?.themeColor || DEFAULT_INVOICE_TEMPLATE.accentColor,
+    isTamilLanguage: settings?.isTamilLanguage ?? DEFAULT_INVOICE_TEMPLATE.isTamilLanguage,
     showCompanyLogo: settings?.includeLogo ?? DEFAULT_INVOICE_TEMPLATE.showCompanyLogo,
     showSignature: settings?.includeSignature ?? DEFAULT_INVOICE_TEMPLATE.showSignature,
     showQrCode: settings?.includeQrCode ?? DEFAULT_INVOICE_TEMPLATE.showQrCode,
@@ -38,14 +40,26 @@ const TransactionReceiptViewComponent: React.ForwardRefRenderFunction<View, Prop
     showCustomerPhone: settings?.includeCustomerPhone ?? DEFAULT_INVOICE_TEMPLATE.showCustomerPhone,
   };
 
+  const isTamil = Boolean(tpl.isTamilLanguage ?? settings?.isTamilLanguage);
+  const isBilingual = Boolean(tpl.isBilingual ?? settings?.isBilingual);
+  const customTamil = (tpl.customTamilLabels || settings?.customTamilLabels) as any;
+  const labels = getInvoiceLabels(isTamil, customTamil, isBilingual, tpl.tamilTerminologyPreset || settings?.tamilTerminologyPreset);
+
   const company = transaction.company || {};
-  const customer = transaction.customer || { name: 'Valued Customer' };
+  const rawCustomer = transaction.customer || { name: 'Valued Customer' };
+  const shouldAddHonorific = (isTamil || isBilingual) && (tpl.showCustomerHonorificTamil ?? settings?.showCustomerHonorificTamil) !== false;
+  const customer = {
+    ...rawCustomer,
+    name: shouldAddHonorific && rawCustomer.name && !rawCustomer.name.endsWith('அவர்கள்')
+      ? `${rawCustomer.name} அவர்கள்`
+      : (rawCustomer.name || 'Valued Customer'),
+  };
   const items = transaction.items || [];
   const isPaid = transaction.paymentStatus?.toUpperCase() === 'PAID';
   const isPartial = transaction.paymentStatus?.toUpperCase() === 'PARTIAL';
 
   const statusBg = isPaid ? '#10B981' : isPartial ? '#F59E0B' : '#EF4444';
-  const statusLabel = isPaid ? 'PAID' : isPartial ? 'PARTIALLY PAID' : 'PENDING';
+  const statusLabel = isPaid ? labels.statusPaid : isPartial ? labels.statusPartiallyPaid : labels.statusPending;
 
   const oldBalance = (tpl.showOldBalanceDue !== false && transaction.previousBalance) ? Number(transaction.previousBalance) : 0;
   const hasOldBalance = oldBalance > 0;
@@ -125,10 +139,12 @@ const TransactionReceiptViewComponent: React.ForwardRefRenderFunction<View, Prop
       </View>
     );
 
+    const titleText = getLocalizedInvoiceTitle(tpl.invoiceTitleText, isTamil, customTamil?.invoice, isBilingual);
+
     const titleAndStatus = (
       <View style={[styles.statusBox, tpl.headerLayout === 'centered' && { alignItems: 'center', marginTop: 8 }]}>
         <Text style={[styles.invoiceTitleText, { color: accentColor, fontSize: baseSize + 6 }]}>
-          {tpl.invoiceTitleText || 'INVOICE'}
+          {titleText}
         </Text>
         {tpl.showPaymentStatus && (
           <View style={[styles.statusBadge, { backgroundColor: statusBg }]}>
@@ -204,19 +220,19 @@ const TransactionReceiptViewComponent: React.ForwardRefRenderFunction<View, Prop
         <View style={[styles.metaGrid, { backgroundColor: altRowBg, borderColor }]}>
           {tpl.showInvoiceDate && (
             <View style={styles.metaCol}>
-              <Text style={[styles.metaLabel, { color: subTextColor }]}>INVOICE DATE</Text>
+              <Text style={[styles.metaLabel, { color: subTextColor }]}>{labels.invoiceDate}</Text>
               <Text style={[styles.metaVal, { color: headingColor }]}>{formatDate(transaction.date)}</Text>
             </View>
           )}
           {tpl.showDueDate && transaction.dueDate && (
             <View style={styles.metaCol}>
-              <Text style={[styles.metaLabel, { color: subTextColor }]}>DUE DATE</Text>
+              <Text style={[styles.metaLabel, { color: subTextColor }]}>{labels.dueDate}</Text>
               <Text style={[styles.metaVal, { color: headingColor }]}>{formatDate(transaction.dueDate)}</Text>
             </View>
           )}
           {tpl.showPaymentMethod && (
             <View style={styles.metaCol}>
-              <Text style={[styles.metaLabel, { color: subTextColor }]}>PAYMENT MODE</Text>
+              <Text style={[styles.metaLabel, { color: subTextColor }]}>{labels.paymentMode}</Text>
               <Text style={[styles.metaVal, { color: headingColor }]}>{transaction.paymentMethod || 'Cash / Online'}</Text>
             </View>
           )}
@@ -227,7 +243,7 @@ const TransactionReceiptViewComponent: React.ForwardRefRenderFunction<View, Prop
       {tpl.showCustomerSection && (
         <View style={[styles.customerCard, { backgroundColor: altRowBg, borderColor }]}>
           <Text style={[styles.customerLabel, { color: accentColor }]}>
-            {(tpl.customerSectionTitle || 'BILLED TO').toUpperCase()}
+            {(tpl.customerSectionTitle ? (isTamil && tpl.customerSectionTitle === 'Billed To' ? labels.billedTo : tpl.customerSectionTitle) : labels.billedTo).toUpperCase()}
           </Text>
           {(() => {
             const nameStr = customer.name || '';
@@ -266,11 +282,11 @@ const TransactionReceiptViewComponent: React.ForwardRefRenderFunction<View, Prop
       {/* Items Table */}
       <View style={[styles.tableContainer, { borderColor }]}>
         <View style={[styles.tableHeader, { backgroundColor: tableHeaderBg }]}>
-          {showIndex && <Text style={[styles.th, styles.colIndex, { color: tableHeaderTextColor }]}>#</Text>}
-          <Text style={[styles.th, styles.colItem, { color: tableHeaderTextColor }]}>ITEM</Text>
-          <Text style={[styles.th, styles.colQty, { color: tableHeaderTextColor }]}>QTY</Text>
-          {showRate && <Text style={[styles.th, styles.colRate, { color: tableHeaderTextColor }]}>RATE</Text>}
-          <Text style={[styles.th, styles.colAmount, { color: tableHeaderTextColor }]}>TOTAL</Text>
+          {showIndex && <Text style={[styles.th, styles.colIndex, { color: tableHeaderTextColor }]}>{labels.itemIndex}</Text>}
+          <Text style={[styles.th, styles.colItem, { color: tableHeaderTextColor }]}>{labels.item}</Text>
+          <Text style={[styles.th, styles.colQty, { color: tableHeaderTextColor }]}>{labels.qty}</Text>
+          {showRate && <Text style={[styles.th, styles.colRate, { color: tableHeaderTextColor }]}>{labels.rate}</Text>}
+          <Text style={[styles.th, styles.colAmount, { color: tableHeaderTextColor }]}>{labels.total}</Text>
         </View>
 
         {items.length > 0 ? (
@@ -306,7 +322,7 @@ const TransactionReceiptViewComponent: React.ForwardRefRenderFunction<View, Prop
         ) : (
           <View style={[styles.tableRow, { backgroundColor: cardBg }]}>
             <Text style={[styles.td, { color: subTextColor, textAlign: 'center', width: '100%', paddingVertical: 12 }]}>
-              Transaction Summary Record
+              {labels.transactionSummaryRecord}
             </Text>
           </View>
         )}
@@ -325,30 +341,77 @@ const TransactionReceiptViewComponent: React.ForwardRefRenderFunction<View, Prop
                 contentFit="contain"
               />
               <Text style={[styles.qrCaption, { color: subTextColor }]}>
-                {tpl.useCustomQrCode && tpl.customQrCodeUri ? 'Scan to Pay / Verify' : 'Scan to Pay'}
+                {tpl.useCustomQrCode && tpl.customQrCodeUri ? labels.scanToPayVerify : labels.scanToPay}
               </Text>
             </View>
           ) : null}
 
           {/* Bank Account Details */}
           {settings?.includeBankDetails !== false && tpl?.showBankDetails !== false && settings?.paymentDisplayMode !== 'NONE' && settings?.paymentDisplayMode !== 'QR' ? (
-            (settings?.bankName || company?.bankName || settings?.accountNo || company?.accountNo) ? (
-              <View style={{ marginTop: (settings?.includeQrCode !== false && tpl?.showQrCode !== false) ? 6 : 0, padding: 6, backgroundColor: isDark ? '#1E293B' : '#F8FAFC', borderRadius: 8, borderWidth: 1, borderColor }}>
-                <Text style={{ fontSize: 9, fontWeight: '800', color: accentColor, marginBottom: 2 }}>BANK PAYMENT DETAILS</Text>
-                {(settings?.bankName || company?.bankName) ? (
-                  <Text style={{ fontSize: 9, color: textColor, fontWeight: '600' }}>Bank: {settings?.bankName || company?.bankName}</Text>
-                ) : null}
-                {(settings?.accountNo || company?.accountNo) ? (
-                  <Text style={{ fontSize: 9, color: textColor, fontWeight: '600' }}>A/c: {settings?.accountNo || company?.accountNo}</Text>
-                ) : null}
-                {(settings?.ifscCode || company?.ifscCode) ? (
-                  <Text style={{ fontSize: 9, color: textColor, fontWeight: '600' }}>IFSC: {settings?.ifscCode || company?.ifscCode}</Text>
-                ) : null}
-                {(settings?.accountHolderName || company?.name) ? (
-                  <Text style={{ fontSize: 9, color: subTextColor }}>Holder: {settings?.accountHolderName || company?.name}</Text>
-                ) : null}
-              </View>
-            ) : null
+            (() => {
+              const bName = settings?.bankName || tpl?.bankName || company?.bankName;
+              const bAcc = settings?.accountNo || tpl?.accountNo || company?.accountNo;
+              const bIfsc = settings?.ifscCode || tpl?.ifscCode || company?.ifscCode;
+              const bHolder = settings?.accountHolderName || tpl?.accountHolderName || company?.name;
+
+              if (!bName && !bAcc) return null;
+
+              return (
+                <View
+                  style={{
+                    marginTop: (settings?.includeQrCode !== false && tpl?.showQrCode !== false && settings?.paymentDisplayMode !== 'BANK') ? 6 : 0,
+                    padding: 7,
+                    backgroundColor: altRowBg,
+                    borderRadius: 9,
+                    borderWidth: 1,
+                    borderColor,
+                  }}
+                >
+                  <View style={{ flexDirection: 'row', alignItems: 'center', marginBottom: 5, gap: 4 }}>
+                    <View style={{ width: 3, height: 10, borderRadius: 1.5, backgroundColor: accentColor }} />
+                    <Text style={{ fontSize: 8.5, fontWeight: '800', color: accentColor, letterSpacing: 0.3 }} numberOfLines={1}>
+                      {labels.bankPaymentDetails.toUpperCase()}
+                    </Text>
+                  </View>
+
+                  {bName ? (
+                    <View style={{ marginBottom: 3 }}>
+                      <Text style={{ fontSize: 7.5, color: subTextColor, fontWeight: '700' }}>{labels.bankName}</Text>
+                      <Text style={{ fontSize: 9, color: textColor, fontWeight: '700', marginTop: 0.5 }} numberOfLines={1}>
+                        {bName}
+                      </Text>
+                    </View>
+                  ) : null}
+
+                  {bAcc ? (
+                    <View style={{ marginBottom: 3 }}>
+                      <Text style={{ fontSize: 7.5, color: subTextColor, fontWeight: '700' }}>{labels.accountNo}</Text>
+                      <Text style={{ fontSize: 9, color: textColor, fontWeight: '800', letterSpacing: 0.3, marginTop: 0.5 }} numberOfLines={1}>
+                        {bAcc}
+                      </Text>
+                    </View>
+                  ) : null}
+
+                  {bIfsc ? (
+                    <View style={{ marginBottom: 3 }}>
+                      <Text style={{ fontSize: 7.5, color: subTextColor, fontWeight: '700' }}>{labels.ifscCode}</Text>
+                      <Text style={{ fontSize: 9, color: textColor, fontWeight: '700', marginTop: 0.5 }} numberOfLines={1}>
+                        {bIfsc}
+                      </Text>
+                    </View>
+                  ) : null}
+
+                  {bHolder ? (
+                    <View>
+                      <Text style={{ fontSize: 7.5, color: subTextColor, fontWeight: '700' }}>{labels.accountHolder}</Text>
+                      <Text style={{ fontSize: 8.5, color: subTextColor, fontWeight: '600', marginTop: 0.5 }} numberOfLines={1}>
+                        {bHolder}
+                      </Text>
+                    </View>
+                  ) : null}
+                </View>
+              );
+            })()
           ) : null}
         </View>
 
@@ -356,7 +419,7 @@ const TransactionReceiptViewComponent: React.ForwardRefRenderFunction<View, Prop
         <View style={styles.totalsSection}>
           {tpl.showSubtotal && hasExtraCharges && (
             <View style={styles.totalRow}>
-              <Text style={[styles.totalLabel, { color: subTextColor }]}>Subtotal</Text>
+              <Text style={[styles.totalLabel, { color: subTextColor }]}>{labels.subtotal}</Text>
               <Text style={[styles.totalValue, { color: textColor }]}>
                 {formatCurrency(transaction.subtotal || transaction.totalAmount)}
               </Text>
@@ -365,21 +428,21 @@ const TransactionReceiptViewComponent: React.ForwardRefRenderFunction<View, Prop
 
           {tpl.showDeliveryCharge !== false && !!transaction.shipmentCharge && (
             <View style={styles.totalRow}>
-              <Text style={[styles.totalLabel, { color: subTextColor }]}>Delivery / Freight</Text>
+              <Text style={[styles.totalLabel, { color: subTextColor }]}>{labels.deliveryCharge}</Text>
               <Text style={[styles.totalValue, { color: textColor }]}>+{formatCurrency(transaction.shipmentCharge)}</Text>
             </View>
           )}
 
           {tpl.showLoadingCharge !== false && !!transaction.loadingCharge && (
             <View style={styles.totalRow}>
-              <Text style={[styles.totalLabel, { color: subTextColor }]}>Loading Charge</Text>
+              <Text style={[styles.totalLabel, { color: subTextColor }]}>{labels.loadingCharge}</Text>
               <Text style={[styles.totalValue, { color: textColor }]}>+{formatCurrency(transaction.loadingCharge)}</Text>
             </View>
           )}
 
           {tpl.showUnloadingCharge !== false && !!transaction.unloadingCharge && (
             <View style={styles.totalRow}>
-              <Text style={[styles.totalLabel, { color: subTextColor }]}>Unloading Charge</Text>
+              <Text style={[styles.totalLabel, { color: subTextColor }]}>{labels.unloadingCharge}</Text>
               <Text style={[styles.totalValue, { color: textColor }]}>+{formatCurrency(transaction.unloadingCharge)}</Text>
             </View>
           )}
@@ -387,7 +450,7 @@ const TransactionReceiptViewComponent: React.ForwardRefRenderFunction<View, Prop
           {tpl.showExtraCharge !== false && !!transaction.extraAmount && (
             <View style={styles.totalRow}>
               <Text style={[styles.totalLabel, { color: subTextColor }]} numberOfLines={1}>
-                {transaction.extraAmountDescription || 'Extra Charge'}
+                {transaction.extraAmountDescription || labels.extraCharge}
               </Text>
               <Text style={[styles.totalValue, { color: textColor }]}>+{formatCurrency(transaction.extraAmount)}</Text>
             </View>
@@ -397,7 +460,7 @@ const TransactionReceiptViewComponent: React.ForwardRefRenderFunction<View, Prop
             chg && chg.amount ? (
               <View key={cIdx} style={styles.totalRow}>
                 <Text style={[styles.totalLabel, { color: subTextColor }]} numberOfLines={1}>
-                  {chg.name || 'Additional Charge'}
+                  {chg.name || labels.extraCharge}
                 </Text>
                 <Text style={[styles.totalValue, { color: textColor }]}>+{formatCurrency(chg.amount)}</Text>
               </View>
@@ -406,14 +469,14 @@ const TransactionReceiptViewComponent: React.ForwardRefRenderFunction<View, Prop
 
           {tpl.showTax && !!transaction.taxAmount ? (
             <View style={styles.totalRow}>
-              <Text style={[styles.totalLabel, { color: subTextColor }]}>GST / Tax</Text>
+              <Text style={[styles.totalLabel, { color: subTextColor }]}>{labels.taxGst}</Text>
               <Text style={[styles.totalValue, { color: textColor }]}>+{formatCurrency(transaction.taxAmount)}</Text>
             </View>
           ) : null}
 
           {tpl.showDiscount && !!transaction.discountAmount ? (
             <View style={styles.totalRow}>
-              <Text style={[styles.totalLabel, { color: '#10B981' }]}>Discount</Text>
+              <Text style={[styles.totalLabel, { color: '#10B981' }]}>{labels.discount}</Text>
               <Text style={[styles.totalValue, { color: '#10B981', fontWeight: '700' }]}>-{formatCurrency(transaction.discountAmount)}</Text>
             </View>
           ) : null}
@@ -422,34 +485,34 @@ const TransactionReceiptViewComponent: React.ForwardRefRenderFunction<View, Prop
             <>
               {hasExtraCharges ? (
                 <View style={styles.totalRow}>
-                  <Text style={[styles.totalLabel, { color: subTextColor, fontWeight: '600' }]}>Current Bill Total</Text>
+                  <Text style={[styles.totalLabel, { color: subTextColor, fontWeight: '600' }]}>{labels.currentBillTotal}</Text>
                   <Text style={[styles.totalValue, { color: textColor, fontWeight: '600' }]}>{formatCurrency(transaction.totalAmount)}</Text>
                 </View>
               ) : (
                 <View style={styles.totalRow}>
-                  <Text style={[styles.totalLabel, { color: subTextColor }]}>Subtotal</Text>
+                  <Text style={[styles.totalLabel, { color: subTextColor }]}>{labels.subtotal}</Text>
                   <Text style={[styles.totalValue, { color: textColor }]}>{formatCurrency(transaction.totalAmount)}</Text>
                 </View>
               )}
               <View style={styles.totalRow}>
-                <Text style={[styles.totalLabel, { color: '#EF4444', fontWeight: '600' }]}>Old Balance Due</Text>
+                <Text style={[styles.totalLabel, { color: '#EF4444', fontWeight: '600' }]}>{labels.oldBalanceDue}</Text>
                 <Text style={[styles.totalValue, { color: '#EF4444', fontWeight: '700' }]}>+{formatCurrency(oldBalance)}</Text>
               </View>
               <View style={[styles.totalRow, styles.grandTotalRow, { borderTopColor: headingColor }]}>
-                <Text style={[styles.grandTotalLabel, { color: headingColor }]} numberOfLines={1}>Grand Total (incl. Dues)</Text>
+                <Text style={[styles.grandTotalLabel, { color: headingColor }]} numberOfLines={1}>{labels.grandTotalInclDues}</Text>
                 <Text style={[styles.grandTotalValue, { color: accentColor }]}>{formatCurrency(grandTotalWithOldDues)}</Text>
               </View>
             </>
           ) : (
             <View style={[styles.totalRow, styles.grandTotalRow, { borderTopColor: headingColor }]}>
-              <Text style={[styles.grandTotalLabel, { color: headingColor }]}>Total</Text>
+              <Text style={[styles.grandTotalLabel, { color: headingColor }]}>{labels.totalAmount}</Text>
               <Text style={[styles.grandTotalValue, { color: accentColor }]}>{formatCurrency(transaction.totalAmount)}</Text>
             </View>
           )}
 
           {tpl.showPaidAmount && (
             <View style={styles.totalRow}>
-              <Text style={[styles.totalLabel, { color: '#10B981', fontWeight: '600' }]}>Paid Amount</Text>
+              <Text style={[styles.totalLabel, { color: '#10B981', fontWeight: '600' }]}>{labels.paidAmount}</Text>
               <Text style={[styles.totalValue, { color: '#10B981', fontWeight: '700' }]}>
                 {formatCurrency(transaction.paidAmount)}
               </Text>
@@ -459,7 +522,7 @@ const TransactionReceiptViewComponent: React.ForwardRefRenderFunction<View, Prop
           {tpl.showBalanceDue && (
             <View style={styles.totalRow}>
               <Text style={[styles.totalLabel, { color: '#EF4444', fontWeight: '600' }]}>
-                {hasOldBalance ? 'Total Balance Due' : 'Balance Due'}
+                {hasOldBalance ? labels.totalBalanceDue : labels.balanceDue}
               </Text>
               <Text style={[styles.totalValue, { color: '#EF4444', fontWeight: '700' }]}>
                 {formatCurrency(hasOldBalance ? netBalanceDue : transaction.pendingAmount)}
@@ -474,13 +537,13 @@ const TransactionReceiptViewComponent: React.ForwardRefRenderFunction<View, Prop
         <View style={{ flex: 1, marginRight: 10 }}>
           {tpl.showNotes && transaction.notes ? (
             <View style={[styles.notesBox, { backgroundColor: altRowBg, borderColor, marginBottom: 6 }]}>
-              <Text style={[styles.notesText, { color: subTextColor }]}>Note: {transaction.notes}</Text>
+              <Text style={[styles.notesText, { color: subTextColor }]}>{labels.notes}: {transaction.notes}</Text>
             </View>
           ) : null}
           {tpl.showTerms && settings?.termsAndConditions ? (
             <View style={[styles.notesBox, { backgroundColor: altRowBg, borderColor }]}>
               <Text style={[styles.notesText, { color: subTextColor, fontSize: 8.5 }]}>
-                Terms: {settings.termsAndConditions}
+                {labels.termsAndConditions}: {settings.termsAndConditions}
               </Text>
             </View>
           ) : null}
@@ -495,7 +558,7 @@ const TransactionReceiptViewComponent: React.ForwardRefRenderFunction<View, Prop
             )}
             <View style={[styles.signatureLine, { backgroundColor: borderColor }]} />
             <Text style={[styles.signatureLabel, { color: subTextColor }]}>
-              {settings?.signatureTitle || 'Authorized Signatory'}
+              {settings?.signatureTitle || labels.authorizedSignatory}
             </Text>
           </View>
         )}
@@ -506,7 +569,9 @@ const TransactionReceiptViewComponent: React.ForwardRefRenderFunction<View, Prop
         <View style={[styles.thankYouBox, { borderTopColor: borderColor }]}>
           {tpl.showThankYouNote && (
             <Text style={[styles.thankYouText, { color: headingColor }]}>
-              {settings?.thankYouNote || 'Thank you for your business! 🙏'}
+              {(isTamil && (!settings?.thankYouNote || settings.thankYouNote.toLowerCase().includes('thank you')))
+                ? labels.thankYouNote
+                : (settings?.thankYouNote || labels.thankYouNote)}
             </Text>
           )}
           {tpl.showFooterBranding && (
@@ -693,7 +758,7 @@ const styles = StyleSheet.create({
     fontSize: 11,
   },
   colIndex: {
-    width: 20,
+    width: 24,
     textAlign: 'center',
   },
   colItem: {

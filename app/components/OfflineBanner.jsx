@@ -4,7 +4,7 @@ import { MaterialIcons } from "@expo/vector-icons";
 import { useSafeAreaInsets } from "react-native-safe-area-context";
 import { useNetwork } from "../context/NetworkContext";
 
-export default function OfflineBanner() {
+function OfflineBanner() {
   const { isOnline, wasOffline, isSyncing } = useNetwork();
   const insets = useSafeAreaInsets();
   const slideAnim = useRef(new Animated.Value(-120)).current;
@@ -100,3 +100,5 @@ const styles = StyleSheet.create({
     letterSpacing: 0.3,
   },
 });
+
+export default React.memo(OfflineBanner);

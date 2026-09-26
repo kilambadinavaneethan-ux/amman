@@ -133,6 +133,11 @@ export interface ShareSettings {
   accountHolderName?: string;
   bankAccounts?: BankAccount[];
   selectedBankAccountId?: string;
+  isTamilLanguage?: boolean;
+  isBilingual?: boolean;
+  showCustomerHonorificTamil?: boolean;
+  tamilTerminologyPreset?: 'brick_construction' | 'standard';
+  customTamilLabels?: Record<string, string>;
   customMessageTemplate?: string;
   customerMessageTemplate?: string;
   thankYouNote?: string;
@@ -251,6 +256,11 @@ export const DEFAULT_SHARE_SETTINGS: ShareSettings = {
   watermarkEnabled: false,
   watermarkText: 'CONFIDENTIAL',
   watermarkOpacity: 0.12,
+  isTamilLanguage: false,
+  isBilingual: false,
+  showCustomerHonorificTamil: true,
+  tamilTerminologyPreset: 'brick_construction',
+  customTamilLabels: {},
   customMessageTemplate: '🧾 *RECEIPT / INVOICE*\n*{company}*\n------------------------------\n*Invoice No:* #{invoice}\n*Date:* {date}\n*Customer:* {customer}\n------------------------------\n{calculations}\n------------------------------\nThank you for doing business with us! 🙏',
   customerMessageTemplate: DEFAULT_CUSTOMER_MESSAGE_TEMPLATE,
   thankYouNote: 'Thank you for your business! 🙏',
@@ -267,6 +277,13 @@ export type InvoiceFontFamily = 'Helvetica' | 'Georgia' | 'Courier' | 'Arial' | 
 export type BorderStyle = 'solid' | 'dashed' | 'none';
 
 export interface InvoiceTemplate {
+  // Localization
+  isTamilLanguage?: boolean;
+  isBilingual?: boolean;
+  showCustomerHonorificTamil?: boolean;
+  tamilTerminologyPreset?: 'brick_construction' | 'standard';
+  customTamilLabels?: Record<string, string>;
+
   // Header
   headerLayout: HeaderLayout;
   showCompanyLogo: boolean;
@@ -344,6 +361,13 @@ export interface InvoiceTemplate {
 }
 
 export const DEFAULT_INVOICE_TEMPLATE: InvoiceTemplate = {
+  // Localization
+  isTamilLanguage: false,
+  isBilingual: false,
+  showCustomerHonorificTamil: true,
+  tamilTerminologyPreset: 'brick_construction',
+  customTamilLabels: {},
+
   // Header
   headerLayout: 'classic',
   showCompanyLogo: true,

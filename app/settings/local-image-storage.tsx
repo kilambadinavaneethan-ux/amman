@@ -5,13 +5,13 @@ import {
   Text,
   ScrollView,
   Pressable,
-  Image,
   ActivityIndicator,
   Modal,
   Alert,
   Dimensions,
   FlatList,
 } from "react-native";
+import { Image } from "expo-image";
 import { MaterialIcons } from "@expo/vector-icons";
 import { useRouter } from "expo-router";
 import ProtectedRoute from "../../app/components/ProtectedRoute";
@@ -322,7 +322,7 @@ function LocalImageStorageScreen() {
                 style={({ pressed }) => [styles.imageCard, pressed && styles.pressed]}
                 onPress={() => setSelectedImage(img)}
               >
-                <Image source={{ uri: img.uri }} style={styles.thumbnail} resizeMode="cover" />
+                <Image source={{ uri: img.uri }} style={styles.thumbnail} contentFit="cover" cachePolicy="memory-disk" transition={150} />
                 <View style={styles.cardInfo}>
                   <Text style={styles.cardFileName} numberOfLines={1}>
                     {img.fileName}
@@ -366,7 +366,9 @@ function LocalImageStorageScreen() {
                 <Image
                   source={{ uri: selectedImage.uri }}
                   style={styles.fullPreview}
-                  resizeMode="contain"
+                  contentFit="contain"
+                  cachePolicy="memory-disk"
+                  transition={200}
                 />
               </View>
 

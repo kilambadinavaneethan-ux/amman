@@ -1,4 +1,4 @@
-import React, { createContext, useContext, useState, useEffect, useRef } from "react";
+import React, { createContext, useContext, useState, useEffect, useRef, useMemo } from "react";
 import NetInfo from "@react-native-community/netinfo";
 import { waitForPendingWrites } from "firebase/firestore";
 import { db } from "../../src/config/firebase";
@@ -71,8 +71,13 @@ export function NetworkProvider({ children }) {
     };
   }, []);
 
+  const contextValue = useMemo(
+    () => ({ isOnline, networkType, wasOffline, hasPendingWrites, isSyncing }),
+    [isOnline, networkType, wasOffline, hasPendingWrites, isSyncing]
+  );
+
   return (
-    <NetworkContext.Provider value={{ isOnline, networkType, wasOffline, hasPendingWrites, isSyncing }}>
+    <NetworkContext.Provider value={contextValue}>
       {children}
     </NetworkContext.Provider>
   );

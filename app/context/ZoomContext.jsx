@@ -83,17 +83,17 @@ export function ZoomProvider({ children }) {
     updateZoomState(clamped);
   }, [updateZoomState]);
 
-  // Zoom In step (+0.25x)
+  // Zoom In step (+0.25x / +25%)
   const zoomIn = useCallback(() => {
-    const current = scale.value;
-    setZoomScale(Math.min(current + 0.25, MAX_ZOOM));
-  }, [setZoomScale]);
+    const nextScale = Math.min((zoomPercent + 25) / 100, MAX_ZOOM);
+    setZoomScale(Math.round(nextScale * 100) / 100);
+  }, [zoomPercent, setZoomScale]);
 
-  // Zoom Out step (-0.25x)
+  // Zoom Out step (-0.25x / -25%)
   const zoomOut = useCallback(() => {
-    const current = scale.value;
-    setZoomScale(Math.max(current - 0.25, MIN_ZOOM));
-  }, [setZoomScale]);
+    const nextScale = Math.max((zoomPercent - 25) / 100, MIN_ZOOM);
+    setZoomScale(Math.round(nextScale * 100) / 100);
+  }, [zoomPercent, setZoomScale]);
 
   // Callback to sync JS state when gesture ends
   const onGestureEndJS = useCallback((finalScale) => {
@@ -130,10 +130,22 @@ export function ZoomProvider({ children }) {
       savedTranslateY.value = translateY.value;
     });
 
-  // Compose gestures so 2-finger pinch and 2-finger drag pan work simultaneously
-  // NOTE: We intentionally do NOT include single-finger double-tap at the root level,
-  // because any root Tap gesture delays every single button click across the entire app by up to 250ms.
-  const composedGesture = Gesture.Simultaneous(pinchGesture, twoFingerPanGesture);
+  // Fast & Responsive Double Tap to Reset Zoom & Center Position
+  const doubleTapGesture = Gesture.Tap()
+    .numberOfTaps(2)
+    .maxDuration(300)
+    .onEnd((_e, success) => {
+      if (success) {
+        runOnJS(resetZoom)();
+      }
+    });
+
+  // Compose gestures so 2-finger pinch, 2-finger drag pan, and double-tap to reset work simultaneously
+  const composedGesture = Gesture.Simultaneous(
+    pinchGesture,
+    twoFingerPanGesture,
+    doubleTapGesture
+  );
 
   // Animated style applied to root content container
   const animatedStyle = useAnimatedStyle(() => {

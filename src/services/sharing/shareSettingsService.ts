@@ -61,6 +61,11 @@ export const shareSettingsService = {
           showCompanyGst: settings.includeGst ?? currentTpl.showCompanyGst,
           showCustomerAddress: settings.includeCustomerAddress ?? currentTpl.showCustomerAddress,
           showCustomerPhone: settings.includeCustomerPhone ?? currentTpl.showCustomerPhone,
+          isTamilLanguage: settings.isTamilLanguage ?? currentTpl.isTamilLanguage,
+          isBilingual: settings.isBilingual ?? currentTpl.isBilingual,
+          showCustomerHonorificTamil: settings.showCustomerHonorificTamil ?? currentTpl.showCustomerHonorificTamil,
+          tamilTerminologyPreset: settings.tamilTerminologyPreset ?? currentTpl.tamilTerminologyPreset,
+          customTamilLabels: settings.customTamilLabels ?? currentTpl.customTamilLabels,
         };
         await AsyncStorage.setItem('@invoice_template_v1', JSON.stringify(updatedTpl));
       } catch (err) {

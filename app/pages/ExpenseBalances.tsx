@@ -14,8 +14,8 @@ import {
   Text,
   TextInput,
   View,
-  Image,
 } from "react-native";
+import { Image } from "expo-image";
 import Animated, {
   FadeInDown,
 } from "react-native-reanimated";
@@ -1030,7 +1030,9 @@ export default function ExpenseBalances() {
                                   <Image 
                                     source={{ uri: expense.billImageUrl }} 
                                     style={{ width: "100%", height: 160, borderRadius: 8, backgroundColor: colors.bg.elevated }} 
-                                    resizeMode="cover"
+                                    contentFit="cover"
+                                    cachePolicy="memory-disk"
+                                    transition={150}
                                   />
                                 </View>
                               ) : null}
