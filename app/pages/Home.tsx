@@ -1,6 +1,6 @@
 import { MaterialIcons } from "@expo/vector-icons";
 import { useRouter } from "expo-router";
-import React, { useContext, useMemo, useState, useEffect } from "react";
+import React, { useContext, useMemo, useState, useEffect, useRef } from "react";
 import {
     ActivityIndicator,
     Alert,
@@ -19,6 +19,8 @@ import {
     View,
 } from "react-native";
 import * as Haptics from "expo-haptics";
+import * as Sharing from "expo-sharing";
+import { captureRef } from "react-native-view-shot";
 import Animated, {
     FadeInDown,
 } from "react-native-reanimated";
@@ -740,6 +742,8 @@ export default function Home() {
   // Activity Log Long-Press Profile Details Modal states
   const [selectedActivityProfile, setSelectedActivityProfile] = useState<any>(null);
   const [isActivityProfileModalOpen, setIsActivityProfileModalOpen] = useState(false);
+  const activityCardRef = useRef<View>(null);
+  const [isSharingImage, setIsSharingImage] = useState(false);
 
   // Re-calculate inventory stock value reactively (active finished products only)
   const finishedItems = useMemo(() => {
@@ -2362,6 +2366,127 @@ export default function Home() {
     Linking.openURL(`https://wa.me/${clean}`).catch(() => {
       Alert.alert("Error", "Unable to open WhatsApp.");
     });
+  };
+
+  const handleShareActivityProfile = async (profile: any) => {
+    if (!profile) return;
+
+    try {
+      Haptics.impactAsync(Haptics.ImpactFeedbackStyle.Light);
+    } catch {
+      // Haptics fallback
+    }
+
+    try {
+      const actItem = profile.activityLogItem;
+      const isOrder = actItem?.type === "order";
+      const rawOrder = actItem?.rawOrder || (orders || []).find((o: any) => o.id === actItem?.rawId) || {};
+      const orderId = rawOrder.id || actItem?.rawId || String(actItem?.id || "").replace(/^order-/, "");
+      const orderTotal = Number(rawOrder.total !== undefined ? rawOrder.total : (actItem?.amount || 0));
+
+      let paidAmt = 0;
+      if (rawOrder.paidAmount !== undefined) paidAmt = Number(rawOrder.paidAmount || 0);
+      else if (rawOrder.amountPaid !== undefined) paidAmt = Number(rawOrder.amountPaid || 0);
+      else if (actItem?.amountPaid !== undefined) paidAmt = Number(actItem?.amountPaid || 0);
+      else if (rawOrder.advancePaid !== undefined) paidAmt = Number(rawOrder.advancePaid || 0);
+
+      const orderDue = Math.max(0, orderTotal - paidAmt);
+      const isPaid = orderDue <= 0;
+      const isPartial = !isPaid && paidAmt > 0;
+      const paymentStatusLabel = isPaid ? "Fully Paid" : (isPartial ? "Partially Paid" : "Payment Due");
+      const paymentMode = rawOrder.paymentMethod || rawOrder.paymentMode || rawOrder.paymentType || actItem?.paymentMethod || "Cash";
+
+      let message = `📋 *${profile.badgeText ? profile.badgeText.toUpperCase() : "ACTIVITY"} REPORT - ${profile.name}*\n`;
+      message += `━━━━━━━━━━━━━━━━━━━━━━\n`;
+      message += `👤 *Name:* ${profile.name}\n`;
+      if (profile.phone) message += `📞 *Phone:* ${profile.phone}\n`;
+      if (profile.address) message += `📍 *Address:* ${profile.address}\n`;
+      message += `💰 *Current Outstanding:* ₹${Number(profile.balance || 0).toLocaleString("en-IN")}\n`;
+
+      if (actItem) {
+        message += `━━━━━━━━━━━━━━━━━━━━━━\n`;
+        if (isOrder) {
+          message += `📦 *ORDER ACTIVITY LOG*\n`;
+          if (orderId) message += `• Order ID: #${orderId.slice(-6).toUpperCase()}\n`;
+          if (actItem.subtitle) message += `• Time: ${actItem.subtitle}\n`;
+          message += `• Status: ${paymentStatusLabel}\n`;
+          message += `• Order Total: ₹${orderTotal.toLocaleString("en-IN")}\n`;
+          message += `• Amount Paid: ₹${paidAmt.toLocaleString("en-IN")}\n`;
+          if (orderDue > 0) {
+            message += `• Remaining Due: ₹${orderDue.toLocaleString("en-IN")}\n`;
+          }
+          message += `• Payment Mode: ${paymentMode}\n`;
+
+          if (Array.isArray(rawOrder.items) && rawOrder.items.length > 0) {
+            message += `\n*Items Ordered:*\n`;
+            rawOrder.items.forEach((item: any, idx: number) => {
+              const qty = item.quantity || item.qty || 1;
+              const unit = item.unit ? ` ${item.unit}` : "";
+              const price = item.price || item.rate || item.unitPrice || 0;
+              const total = item.total || item.totalPrice || (qty * price);
+              message += `${idx + 1}. ${item.name || item.itemName} (${qty}${unit} × ₹${price} = ₹${total})\n`;
+            });
+          }
+        } else {
+          message += `📝 *ACTIVITY DETAILS*\n`;
+          message += `• Type: ${profile.badgeText || actItem.type || "Activity"}\n`;
+          message += `• Description: ${actItem.title}\n`;
+          if (actItem.subtitle) message += `• Time: ${actItem.subtitle}\n`;
+          if (actItem.amount) message += `• Amount: ₹${Number(actItem.amount).toLocaleString("en-IN")}\n`;
+        }
+      }
+
+      message += `━━━━━━━━━━━━━━━━━━━━━━\n`;
+      message += `📊 *ACCOUNT OVERVIEW*\n`;
+      message += `• Total Orders: ${profile.totalOrders}\n`;
+      message += `• Total Value: ₹${Number(profile.totalSpent || 0).toLocaleString("en-IN")}\n`;
+      message += `• Total Paid: ₹${Number(profile.totalPaid || 0).toLocaleString("en-IN")}\n`;
+
+      await Share.share({
+        title: `Activity Report - ${profile.name}`,
+        message,
+      });
+    } catch (err) {
+      Alert.alert("Sharing Failed", "Could not open share menu.");
+    }
+  };
+
+  const handleShareActivityImage = async () => {
+    if (!activityCardRef.current) {
+      Alert.alert("Error", "Report card is not ready for image capture.");
+      return;
+    }
+
+    try {
+      Haptics.impactAsync(Haptics.ImpactFeedbackStyle.Light);
+    } catch {
+      // Haptics fallback
+    }
+
+    setIsSharingImage(true);
+    try {
+      const uri = await captureRef(activityCardRef, {
+        format: "png",
+        quality: 0.95,
+        result: "tmpfile",
+      });
+
+      const isAvailable = await Sharing.isAvailableAsync();
+      if (isAvailable) {
+        await Sharing.shareAsync(uri, {
+          mimeType: "image/png",
+          dialogTitle: `Activity Report - ${selectedActivityProfile?.name || "Report"}`,
+          UTI: "public.png",
+        });
+      } else {
+        Alert.alert("Sharing Unavailable", "Sharing is not supported on this device.");
+      }
+    } catch (err: any) {
+      console.error("Capture activity image error:", err);
+      Alert.alert("Image Capture Failed", err?.message || "Could not generate report image.");
+    } finally {
+      setIsSharingImage(false);
+    }
   };
 
   const handleOpenFullProfile = (profile: any) => {
@@ -6840,61 +6965,204 @@ export default function Home() {
                     </View>
                   </View>
 
+                  <View style={{ flexDirection: "row", alignItems: "center", gap: 8 }}>
+                    <Pressable
+                      style={styles.modalCloseBtn}
+                      onPress={handleShareActivityImage}
+                      disabled={isSharingImage}
+                      hitSlop={8}
+                    >
+                      {isSharingImage ? (
+                        <ActivityIndicator size="small" color={colors.accent.primary} />
+                      ) : (
+                        <MaterialIcons name="image" size={20} color={colors.accent.primary} />
+                      )}
+                    </Pressable>
+
+                    <Pressable
+                      style={styles.modalCloseBtn}
+                      onPress={() => handleShareActivityProfile(selectedActivityProfile)}
+                      hitSlop={8}
+                    >
+                      <MaterialIcons name="share" size={20} color={colors.accent.primary} />
+                    </Pressable>
+
+                    <Pressable
+                      style={styles.modalCloseBtn}
+                      onPress={() => setIsActivityProfileModalOpen(false)}
+                      hitSlop={8}
+                    >
+                      <MaterialIcons name="close" size={22} color={colors.text.secondary} />
+                    </Pressable>
+                  </View>
+                </View>
+
+                {/* Quick Action Contact & Share Row */}
+                <View style={{ flexDirection: "row", gap: 6, marginBottom: 16 }}>
+                  {selectedActivityProfile.phone ? (
+                    <>
+                      <Pressable
+                        style={({ pressed }) => [{
+                          flex: 1,
+                          flexDirection: "row",
+                          alignItems: "center",
+                          justifyContent: "center",
+                          gap: 4,
+                          backgroundColor: `${colors.accent.success || "#10B981"}15`,
+                          borderColor: `${colors.accent.success || "#10B981"}40`,
+                          borderWidth: 1,
+                          paddingVertical: 10,
+                          borderRadius: 12,
+                        }, pressed && { opacity: 0.8, transform: [{ scale: 0.98 }] }]}
+                        onPress={() => handleCallCustomer(selectedActivityProfile.phone)}
+                      >
+                        <MaterialIcons name="call" size={16} color={colors.accent.success || "#10B981"} />
+                        <Text style={{ fontSize: 12, fontWeight: "700", color: colors.accent.success || "#10B981" }}>
+                          Call
+                        </Text>
+                      </Pressable>
+
+                      <Pressable
+                        style={({ pressed }) => [{
+                          flex: 1,
+                          flexDirection: "row",
+                          alignItems: "center",
+                          justifyContent: "center",
+                          gap: 4,
+                          backgroundColor: "#25D36615",
+                          borderColor: "#25D36640",
+                          borderWidth: 1,
+                          paddingVertical: 10,
+                          borderRadius: 12,
+                        }, pressed && { opacity: 0.8, transform: [{ scale: 0.98 }] }]}
+                        onPress={() => handleWhatsAppCustomer(selectedActivityProfile.phone)}
+                      >
+                        <MaterialIcons name="chat" size={16} color="#25D366" />
+                        <Text style={{ fontSize: 12, fontWeight: "700", color: "#25D366" }}>
+                          WhatsApp
+                        </Text>
+                      </Pressable>
+                    </>
+                  ) : null}
+
                   <Pressable
-                    style={styles.modalCloseBtn}
-                    onPress={() => setIsActivityProfileModalOpen(false)}
-                    hitSlop={8}
+                    style={({ pressed }) => [{
+                      flex: 1,
+                      flexDirection: "row",
+                      alignItems: "center",
+                      justifyContent: "center",
+                      gap: 4,
+                      backgroundColor: `${colors.accent.info || "#3B82F6"}15`,
+                      borderColor: `${colors.accent.info || "#3B82F6"}40`,
+                      borderWidth: 1,
+                      paddingVertical: 10,
+                      borderRadius: 12,
+                    }, pressed && { opacity: 0.8, transform: [{ scale: 0.98 }] }]}
+                    onPress={handleShareActivityImage}
+                    disabled={isSharingImage}
                   >
-                    <MaterialIcons name="close" size={22} color={colors.text.secondary} />
+                    {isSharingImage ? (
+                      <ActivityIndicator size="small" color={colors.accent.info || "#3B82F6"} />
+                    ) : (
+                      <>
+                        <MaterialIcons name="image" size={16} color={colors.accent.info || "#3B82F6"} />
+                        <Text style={{ fontSize: 12, fontWeight: "700", color: colors.accent.info || "#3B82F6" }}>
+                          Image
+                        </Text>
+                      </>
+                    )}
+                  </Pressable>
+
+                  <Pressable
+                    style={({ pressed }) => [{
+                      flex: 1,
+                      flexDirection: "row",
+                      alignItems: "center",
+                      justifyContent: "center",
+                      gap: 4,
+                      backgroundColor: `${colors.accent.primary}15`,
+                      borderColor: `${colors.accent.primary}40`,
+                      borderWidth: 1,
+                      paddingVertical: 10,
+                      borderRadius: 12,
+                    }, pressed && { opacity: 0.8, transform: [{ scale: 0.98 }] }]}
+                    onPress={() => handleShareActivityProfile(selectedActivityProfile)}
+                  >
+                    <MaterialIcons name="share" size={16} color={colors.accent.primary} />
+                    <Text style={{ fontSize: 12, fontWeight: "700", color: colors.accent.primary }}>
+                      Share
+                    </Text>
                   </Pressable>
                 </View>
 
-                {/* Quick Action Contact Row */}
-                {selectedActivityProfile.phone ? (
-                  <View style={{ flexDirection: "row", gap: 10, marginBottom: 16 }}>
-                    <Pressable
-                      style={({ pressed }) => [{
-                        flex: 1,
-                        flexDirection: "row",
-                        alignItems: "center",
-                        justifyContent: "center",
-                        gap: 6,
-                        backgroundColor: `${colors.accent.success || "#10B981"}15`,
-                        borderColor: `${colors.accent.success || "#10B981"}40`,
-                        borderWidth: 1,
-                        paddingVertical: 10,
-                        borderRadius: 12,
-                      }, pressed && { opacity: 0.8, transform: [{ scale: 0.98 }] }]}
-                      onPress={() => handleCallCustomer(selectedActivityProfile.phone)}
-                    >
-                      <MaterialIcons name="call" size={18} color={colors.accent.success || "#10B981"} />
-                      <Text style={{ fontSize: 13, fontWeight: "700", color: colors.accent.success || "#10B981" }}>
-                        Call
+                {/* Printable / Shareable Visual Card Container */}
+                <View
+                  ref={activityCardRef}
+                  collapsable={false}
+                  style={{
+                    backgroundColor: colors.bg.card || (theme.isDark ? "#1E293B" : "#FFFFFF"),
+                    borderRadius: 16,
+                    padding: 12,
+                    borderWidth: 1,
+                    borderColor: colors.border.subtle,
+                    marginBottom: 14,
+                  }}
+                >
+                  {/* Identity Header in captured image */}
+                  <View style={{
+                    flexDirection: "row",
+                    alignItems: "center",
+                    gap: 10,
+                    marginBottom: 14,
+                    paddingBottom: 12,
+                    borderBottomWidth: 1,
+                    borderBottomColor: colors.border.subtle,
+                  }}>
+                    <View style={{
+                      width: 44,
+                      height: 44,
+                      borderRadius: 22,
+                      backgroundColor: `${selectedActivityProfile.badgeColor || colors.accent.primary}20`,
+                      borderWidth: 2,
+                      borderColor: selectedActivityProfile.badgeColor || colors.accent.primary,
+                      justifyContent: "center",
+                      alignItems: "center",
+                    }}>
+                      <Text style={{
+                        fontSize: 16,
+                        fontWeight: "800",
+                        color: selectedActivityProfile.badgeColor || colors.accent.primary,
+                      }}>
+                        {(selectedActivityProfile.name || "C").slice(0, 2).toUpperCase()}
                       </Text>
-                    </Pressable>
+                    </View>
 
-                    <Pressable
-                      style={({ pressed }) => [{
-                        flex: 1,
-                        flexDirection: "row",
-                        alignItems: "center",
-                        justifyContent: "center",
-                        gap: 6,
-                        backgroundColor: "#25D36615",
-                        borderColor: "#25D36640",
-                        borderWidth: 1,
-                        paddingVertical: 10,
-                        borderRadius: 12,
-                      }, pressed && { opacity: 0.8, transform: [{ scale: 0.98 }] }]}
-                      onPress={() => handleWhatsAppCustomer(selectedActivityProfile.phone)}
-                    >
-                      <MaterialIcons name="chat" size={18} color="#25D366" />
-                      <Text style={{ fontSize: 13, fontWeight: "700", color: "#25D366" }}>
-                        WhatsApp
+                    <View style={{ flex: 1 }}>
+                      <View style={{ flexDirection: "row", alignItems: "center", gap: 6 }}>
+                        <Text style={{ fontSize: 16, fontWeight: "800", color: colors.text.primary, flexShrink: 1 }}>
+                          {selectedActivityProfile.name}
+                        </Text>
+                        <View style={{
+                          backgroundColor: `${selectedActivityProfile.badgeColor || colors.accent.primary}1A`,
+                          paddingHorizontal: 7,
+                          paddingVertical: 1.5,
+                          borderRadius: 5,
+                        }}>
+                          <Text style={{
+                            fontSize: 9.5,
+                            fontWeight: "800",
+                            color: selectedActivityProfile.badgeColor || colors.accent.primary,
+                            textTransform: "uppercase",
+                          }}>
+                            {selectedActivityProfile.badgeText || "Customer"}
+                          </Text>
+                        </View>
+                      </View>
+                      <Text style={{ fontSize: 12, color: colors.text.secondary, marginTop: 1 }}>
+                        {selectedActivityProfile.phone || "No phone number available"}
                       </Text>
-                    </Pressable>
+                    </View>
                   </View>
-                ) : null}
 
                 {/* Outstanding Balance Banner */}
                 <View style={{
@@ -7429,6 +7697,7 @@ export default function Home() {
                     </View>
                   );
                 })()}
+                </View>
 
                 {/* Action Buttons */}
                 <View style={{ gap: 10, marginTop: 4 }}>

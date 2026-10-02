@@ -1,4 +1,5 @@
 import * as Print from 'expo-print';
+import * as FileSystem from 'expo-file-system/legacy';
 import { ShareSettings, TransactionData, InvoiceTemplate, DEFAULT_INVOICE_TEMPLATE, formatCustomerPhonesDisplay } from '../../types/sharing';
 import { invoiceTemplateService } from './invoiceTemplateService';
 import { getInvoiceLabels, getLocalizedInvoiceTitle } from '../../utils/invoiceLocalization';
@@ -11,9 +12,21 @@ function formatDate(dateInput: Date | string | number | undefined): string {
     : dateObj.toLocaleDateString('en-IN', { day: '2-digit', month: 'short', year: 'numeric' });
 }
 
-function formatCurrency(amount: number | undefined): string {
-  if (amount === undefined || amount === null || isNaN(amount)) return '₹0.00';
-  return `₹${amount.toLocaleString('en-IN', { minimumFractionDigits: 2, maximumFractionDigits: 2 })}`;
+function formatCurrency(
+  amount: number | undefined,
+  currencySymbol: string = '₹',
+  decimalPlaces: number = 2
+): string {
+  const sym = currencySymbol === 'None' || !currencySymbol ? '' : currencySymbol;
+  const decimals = typeof decimalPlaces === 'number' ? Math.max(0, Math.min(4, decimalPlaces)) : 2;
+  if (amount === undefined || amount === null || isNaN(amount)) {
+    return `${sym}0${decimals > 0 ? '.' + '0'.repeat(decimals) : ''}`;
+  }
+  const formatted = amount.toLocaleString('en-IN', {
+    minimumFractionDigits: decimals,
+    maximumFractionDigits: decimals,
+  });
+  return `${sym}${formatted}`;
 }
 
 function getFontStack(family: string): string {
@@ -27,6 +40,12 @@ function getFontStack(family: string): string {
 }
 
 function getTableCss(tpl: InvoiceTemplate): string {
+  const density = tpl.tableDensity || 'normal';
+  const padding = density === 'compact' ? '6px 8px' : density === 'relaxed' ? '14px 16px' : '10px 12px';
+  const borderRule = tpl.borderStyle === 'double'
+    ? `3px double ${tpl.borderColor}`
+    : `1px ${tpl.borderStyle !== 'none' ? tpl.borderStyle : 'solid'} ${tpl.borderColor}`;
+
   const base = `
     table { width: 100%; border-collapse: collapse; margin-bottom: 20px; }
     th {
@@ -35,11 +54,11 @@ function getTableCss(tpl: InvoiceTemplate): string {
       font-weight: 700;
       text-transform: uppercase;
       font-size: ${Math.max(tpl.baseFontSize - 2, 9)}px;
-      padding: 10px 12px;
+      padding: ${padding};
       text-align: left;
     }
     td {
-      padding: 10px 12px;
+      padding: ${padding};
       color: ${tpl.bodyTextColor};
     }
   `;
@@ -47,22 +66,22 @@ function getTableCss(tpl: InvoiceTemplate): string {
   switch (tpl.tableStyle) {
     case 'striped':
       return base + `
-        td { border-bottom: 1px solid ${tpl.borderColor}; }
+        td { border-bottom: ${borderRule}; }
         tr.even { background: #F8FAFC; }
       `;
     case 'bordered':
       return base + `
-        th, td { border: 1px solid ${tpl.borderColor}; }
+        th, td { border: ${borderRule}; }
       `;
     case 'clean':
       return base + `
-        td { border-bottom: 1px solid ${tpl.borderColor}; }
+        td { border-bottom: ${borderRule}; }
       `;
     case 'minimal':
       return base + `
         th { background: transparent; color: ${tpl.headingColor}; border-bottom: 2px solid ${tpl.borderColor}; }
         td { border: none; border-bottom: 1px solid transparent; }
-        tr:last-child td { border-bottom: 1px solid ${tpl.borderColor}; }
+        tr:last-child td { border-bottom: ${borderRule}; }
       `;
     default:
       return base;
@@ -82,15 +101,26 @@ function getHeaderHtml(
 ): string {
   const accentColor = tpl.accentColor || '#2563EB';
 
+  const logoDimensions = tpl.logoSize === 'small'
+    ? { maxH: 38, maxW: 100, avatarSize: 38, avatarFont: 18 }
+    : tpl.logoSize === 'large'
+    ? { maxH: 80, maxW: 200, avatarSize: 66, avatarFont: 30 }
+    : { maxH: 58, maxW: 160, avatarSize: 50, avatarFont: 24 };
+
   const logoHtml = tpl.showCompanyLogo && settings.includeLogo && company.logoUrl
-    ? `<img src="${company.logoUrl}" class="company-logo" alt="Logo" />`
+    ? `<img src="${company.logoUrl}" class="company-logo" style="max-height: ${logoDimensions.maxH}px; max-width: ${logoDimensions.maxW}px;" alt="Logo" />`
     : tpl.showCompanyLogo
-    ? `<div class="company-avatar" style="background: linear-gradient(135deg, ${accentColor}, #1D4ED8);">${(company.name || 'B').charAt(0).toUpperCase()}</div>`
+    ? `<div class="company-avatar" style="width: ${logoDimensions.avatarSize}px; height: ${logoDimensions.avatarSize}px; line-height: ${logoDimensions.avatarSize}px; font-size: ${logoDimensions.avatarFont}px; background: linear-gradient(135deg, ${accentColor}, #1D4ED8);">${(company.name || 'B').charAt(0).toUpperCase()}</div>`
     : '';
 
   const companyGst = settings.gstNo || company.gstNo;
   const companyInfoParts: string[] = [];
-  if (tpl.showCompanyName) companyInfoParts.push(`<div class="company-name">${company.name || 'Business Receipt'}</div>`);
+  if (tpl.showCompanyName) {
+    companyInfoParts.push(`<div class="company-name">${company.name || 'Business Receipt'}</div>`);
+    if (tpl.showCompanyTagline && tpl.companyTagline) {
+      companyInfoParts.push(`<div class="company-tagline" style="font-size: 10.5px; font-style: italic; color: #64748B; margin: 1px 0 4px 0;">${tpl.companyTagline}</div>`);
+    }
+  }
   if (tpl.showCompanyPhone && company.phone) companyInfoParts.push(`<p style="margin: 3px 0; color: #475569; font-size: 11px;">📞 ${company.phone}</p>`);
   if (tpl.showCompanyEmail && company.email) companyInfoParts.push(`<p style="margin: 3px 0; color: #475569; font-size: 11px;">✉️ ${company.email}</p>`);
   if (tpl.showCompanyAddress && company.address) companyInfoParts.push(`<p style="margin: 3px 0; color: #475569; font-size: 11px;">📍 ${company.address}</p>`);
@@ -106,9 +136,14 @@ function getHeaderHtml(
     </div>
   `;
 
+  const invocationHtml = tpl.showInvocation && tpl.invocationText
+    ? `<div class="divine-invocation" style="text-align: center; font-size: 11px; font-weight: 700; color: ${tpl.invocationColor || '#B91C1C'}; margin-bottom: 10px; letter-spacing: 0.5px;">|| ${tpl.invocationText} ||</div>`
+    : '';
+
+  let headerBodyHtml = '';
   switch (tpl.headerLayout) {
     case 'centered':
-      return `
+      headerBodyHtml = `
         <div class="header" style="flex-direction: column; align-items: center; text-align: center; border-bottom: 2px solid ${accentColor}30; padding-bottom: 16px;">
           ${logoHtml}
           <div class="company-info" style="text-align: center; max-width: 100%; margin-top: 10px;">
@@ -119,8 +154,9 @@ function getHeaderHtml(
           </div>
         </div>
       `;
+      break;
     case 'modern':
-      return `
+      headerBodyHtml = `
         <div class="header" style="background: linear-gradient(135deg, ${accentColor}12, ${accentColor}05); padding: 18px 20px; border-radius: 12px; border-left: 5px solid ${accentColor}; margin-bottom: 24px;">
           <div style="display: flex; gap: 14px; align-items: center;">
             ${logoHtml}
@@ -129,8 +165,9 @@ function getHeaderHtml(
           ${titleBoxHtml}
         </div>
       `;
+      break;
     case 'minimal':
-      return `
+      headerBodyHtml = `
         <div class="header" style="border-bottom: 1.5px solid ${tpl.borderColor}; padding-bottom: 14px; margin-bottom: 20px;">
           <div class="company-info">
             ${companyInfoParts.join('')}
@@ -138,8 +175,9 @@ function getHeaderHtml(
           ${titleBoxHtml}
         </div>
       `;
+      break;
     default: // classic
-      return `
+      headerBodyHtml = `
         <div class="header" style="border-bottom: 2px solid ${tpl.borderColor}; padding-bottom: 16px; margin-bottom: 20px;">
           <div style="display: flex; gap: 14px; align-items: center;">
             ${logoHtml}
@@ -148,7 +186,10 @@ function getHeaderHtml(
           ${titleBoxHtml}
         </div>
       `;
+      break;
   }
+
+  return `${invocationHtml}${headerBodyHtml}`;
 }
 
 /**
@@ -164,6 +205,10 @@ export function generateInvoiceHtml(
   const isBilingual = Boolean(tpl.isBilingual ?? settings?.isBilingual);
   const customTamil = (tpl.customTamilLabels || settings?.customTamilLabels) as any;
   const labels = getInvoiceLabels(isTamil, customTamil, isBilingual, tpl.tamilTerminologyPreset || settings?.tamilTerminologyPreset);
+
+  const currencySymbol = tpl.currencySymbol ?? '₹';
+  const decimalPlaces = tpl.decimalPlaces ?? 2;
+  const fmtMoney = (amount: number | undefined) => formatCurrency(amount, currencySymbol, decimalPlaces);
 
   const company = transaction.company || {};
   const customer = transaction.customer || { name: 'Valued Customer' };
@@ -184,14 +229,20 @@ export function generateInvoiceHtml(
   if (showUnit) colCount++;
   if (showRate) colCount++;
 
+  const colIndex = tpl.customColumnLabels?.index || (isTamil ? 'எண்' : '#');
+  const colItem = tpl.customColumnLabels?.item || (isBilingual ? 'Item / பொருள்' : isTamil ? (customTamil?.item || labels.item) : 'Item & Description');
+  const colQty = tpl.customColumnLabels?.qty || (isBilingual ? 'Qty / அளவு' : isTamil ? (customTamil?.qty || labels.qty) : 'Qty');
+  const colRate = tpl.customColumnLabels?.rate || (isBilingual ? 'Rate / விலை' : isTamil ? (customTamil?.rate || labels.rate) : 'Rate');
+  const colAmount = tpl.customColumnLabels?.amount || (isBilingual ? 'Amount / தொகை' : isTamil ? (customTamil?.total || labels.total) : 'Amount');
+
   const itemsHtml = items.length > 0
     ? items.map((item, idx) => `
         <tr class="${idx % 2 === 0 ? 'even' : 'odd'}">
           ${showIndex ? `<td style="text-align: center; width: 40px;">${idx + 1}</td>` : ''}
           <td><strong>${item.name}</strong></td>
           <td style="text-align: right;">${item.quantity}${showUnit && item.unit ? ' ' + item.unit : ''}</td>
-          ${showRate ? `<td style="text-align: right;">${formatCurrency(item.unitPrice)}</td>` : ''}
-          <td style="text-align: right; font-weight: 600;">${formatCurrency(item.totalPrice)}</td>
+          ${showRate ? `<td style="text-align: right;">${fmtMoney(item.unitPrice)}</td>` : ''}
+          <td style="text-align: right; font-weight: 600;">${fmtMoney(item.totalPrice)}</td>
         </tr>
       `).join('')
     : `
@@ -202,8 +253,11 @@ export function generateInvoiceHtml(
         </tr>
       `;
 
-  const watermarkHtml = settings.watermarkEnabled
-    ? `<div class="watermark">${settings.watermarkText || 'CONFIDENTIAL'}</div>`
+  const watermarkEnabled = tpl.watermarkEnabled ?? settings.watermarkEnabled;
+  const watermarkText = tpl.watermarkText || settings.watermarkText || 'CONFIDENTIAL';
+  const watermarkOpacity = tpl.watermarkOpacity !== undefined ? tpl.watermarkOpacity : 0.12;
+  const watermarkHtml = watermarkEnabled
+    ? `<div class="watermark" style="opacity: ${watermarkOpacity};">${watermarkText}</div>`
     : '';
 
   const headerHtml = getHeaderHtml(tpl, company, settings, statusBg, statusLabel, transaction.invoiceNumber, isTamil, customTamil?.invoice, isBilingual);
@@ -246,13 +300,22 @@ export function generateInvoiceHtml(
     `;
   }
 
-  // Signature
-  const sigTitle = settings.signatureTitle || labels.authorizedSignatory;
-  const signatureHtml = tpl.showSignature && settings.includeSignature
+  // Signature & Rubber Seal
+  const sigTitle = tpl.signatureTitle || settings.signatureTitle || labels.authorizedSignatory;
+  const sigName = tpl.signatoryName ? `<div style="font-size: 11px; font-weight: 700; color: ${tpl.headingColor}; margin-top: 3px;">${tpl.signatoryName}</div>` : '';
+  const rubberSealHtml = tpl.showRubberSeal
+    ? `<div class="rubber-seal" style="display: flex; align-items: center; justify-content: center; width: 68px; height: 68px; border-radius: 50%; border: 2px dashed ${accentColor}; color: ${accentColor}; font-size: 8px; font-weight: 800; text-transform: uppercase; text-align: center; transform: rotate(-12deg); margin: 0 auto 6px auto; opacity: 0.85; padding: 4px; box-sizing: border-box; line-height: 1.1;">
+        ${tpl.rubberSealText || '★ SEAL ★'}
+      </div>`
+    : '';
+
+  const signatureHtml = tpl.showSignature && (settings.includeSignature !== false)
     ? `
-      <div class="signature-box">
-        ${company.signatureUrl ? `<img src="${company.signatureUrl}" style="max-height: 48px; max-width: 140px; margin-bottom: 4px;" />` : '<div style="height: 40px;"></div>'}
+      <div class="signature-box" style="display: flex; flex-direction: column; align-items: center;">
+        ${rubberSealHtml}
+        ${company.signatureUrl ? `<img src="${company.signatureUrl}" style="max-height: 48px; max-width: 140px; margin-bottom: 4px;" />` : '<div style="height: 36px;"></div>'}
         <div class="signature-line"></div>
+        ${sigName}
         <p style="margin: 4px 0 0 0; font-size: 11px; color: #64748B;">${sigTitle}</p>
       </div>
     `
@@ -262,6 +325,7 @@ export function generateInvoiceHtml(
   const hasOldBalance = oldBalance > 0;
   const grandTotalWithOldDues = (transaction.totalAmount || 0) + oldBalance;
   const netBalanceDue = Math.max(0, grandTotalWithOldDues - (transaction.paidAmount || 0));
+  const excessAdvance = Math.max(0, (transaction.paidAmount || 0) - grandTotalWithOldDues);
 
   // QR Code
   const targetUpi = (settings.upiId || company.upiId || '').trim();
@@ -323,69 +387,83 @@ export function generateInvoiceHtml(
   // Summary rows
   const summaryRows: string[] = [];
   if (tpl.showSubtotal && hasExtraCharges) {
-    summaryRows.push(`<tr><td style="color: #64748B;">${labels.subtotal}:</td><td style="text-align: right; font-weight: 600;">${formatCurrency(transaction.subtotal || transaction.totalAmount)}</td></tr>`);
+    summaryRows.push(`<tr><td style="color: #64748B;">${labels.subtotal}:</td><td style="text-align: right; font-weight: 600;">${fmtMoney(transaction.subtotal || transaction.totalAmount)}</td></tr>`);
   }
   if (tpl.showDeliveryCharge !== false && transaction.shipmentCharge) {
-    summaryRows.push(`<tr><td style="color: #64748B;">${labels.deliveryCharge}:</td><td style="text-align: right; font-weight: 600;">+ ${formatCurrency(transaction.shipmentCharge)}</td></tr>`);
+    summaryRows.push(`<tr><td style="color: #64748B;">${labels.deliveryCharge}:</td><td style="text-align: right; font-weight: 600;">+ ${fmtMoney(transaction.shipmentCharge)}</td></tr>`);
   }
   if (tpl.showLoadingCharge !== false && transaction.loadingCharge) {
-    summaryRows.push(`<tr><td style="color: #64748B;">${labels.loadingCharge}:</td><td style="text-align: right; font-weight: 600;">+ ${formatCurrency(transaction.loadingCharge)}</td></tr>`);
+    summaryRows.push(`<tr><td style="color: #64748B;">${labels.loadingCharge}:</td><td style="text-align: right; font-weight: 600;">+ ${fmtMoney(transaction.loadingCharge)}</td></tr>`);
   }
   if (tpl.showUnloadingCharge !== false && transaction.unloadingCharge) {
-    summaryRows.push(`<tr><td style="color: #64748B;">${labels.unloadingCharge}:</td><td style="text-align: right; font-weight: 600;">+ ${formatCurrency(transaction.unloadingCharge)}</td></tr>`);
+    summaryRows.push(`<tr><td style="color: #64748B;">${labels.unloadingCharge}:</td><td style="text-align: right; font-weight: 600;">+ ${fmtMoney(transaction.unloadingCharge)}</td></tr>`);
   }
   if (tpl.showExtraCharge !== false && transaction.extraAmount) {
     const extraLabel = transaction.extraAmountDescription ? transaction.extraAmountDescription : labels.extraCharge;
-    summaryRows.push(`<tr><td style="color: #64748B;">${extraLabel}:</td><td style="text-align: right; font-weight: 600;">+ ${formatCurrency(transaction.extraAmount)}</td></tr>`);
+    summaryRows.push(`<tr><td style="color: #64748B;">${extraLabel}:</td><td style="text-align: right; font-weight: 600;">+ ${fmtMoney(transaction.extraAmount)}</td></tr>`);
   }
   if (Array.isArray(transaction.charges)) {
     transaction.charges.forEach((chg) => {
       if (chg && chg.amount) {
-        summaryRows.push(`<tr><td style="color: #64748B;">${chg.name || labels.extraCharge}:</td><td style="text-align: right; font-weight: 600;">+ ${formatCurrency(chg.amount)}</td></tr>`);
+        summaryRows.push(`<tr><td style="color: #64748B;">${chg.name || labels.extraCharge}:</td><td style="text-align: right; font-weight: 600;">+ ${fmtMoney(chg.amount)}</td></tr>`);
       }
     });
   }
-  if (tpl.showTax && transaction.taxAmount) summaryRows.push(`<tr><td style="color: #64748B;">${labels.taxGst}:</td><td style="text-align: right; font-weight: 600;">+ ${formatCurrency(transaction.taxAmount)}</td></tr>`);
-  if (tpl.showDiscount && transaction.discountAmount) summaryRows.push(`<tr><td style="color: #10B981;">${labels.discount}:</td><td style="text-align: right; font-weight: 600; color: #10B981;">- ${formatCurrency(transaction.discountAmount)}</td></tr>`);
+  if (tpl.showTax && transaction.taxAmount) summaryRows.push(`<tr><td style="color: #64748B;">${labels.taxGst}:</td><td style="text-align: right; font-weight: 600;">+ ${fmtMoney(transaction.taxAmount)}</td></tr>`);
+  if (tpl.showDiscount && transaction.discountAmount) summaryRows.push(`<tr><td style="color: #10B981;">${labels.discount}:</td><td style="text-align: right; font-weight: 600; color: #10B981;">- ${fmtMoney(transaction.discountAmount)}</td></tr>`);
 
   if (hasOldBalance) {
     const billTotalLabel = hasExtraCharges ? labels.currentBillTotal + ':' : labels.subtotal + ':';
-    summaryRows.push(`<tr><td style="color: #64748B; font-weight: 600;">${billTotalLabel}</td><td style="text-align: right; font-weight: 600;">${formatCurrency(transaction.totalAmount)}</td></tr>`);
-    summaryRows.push(`<tr><td style="color: #EF4444; font-weight: 600;">${labels.oldBalanceDue}:</td><td style="text-align: right; font-weight: 700; color: #EF4444;">+ ${formatCurrency(oldBalance)}</td></tr>`);
-    summaryRows.push(`<tr class="total-row"><td style="font-size: 11.5px; font-weight: 800;">${labels.grandTotalInclDues}:</td><td style="text-align: right; color: ${accentColor}; font-weight: 800; font-size: 13px; white-space: nowrap;">${formatCurrency(grandTotalWithOldDues)}</td></tr>`);
+    summaryRows.push(`<tr><td style="color: #64748B; font-weight: 600;">${billTotalLabel}</td><td style="text-align: right; font-weight: 600;">${fmtMoney(transaction.totalAmount)}</td></tr>`);
+    summaryRows.push(`<tr><td style="color: #EF4444; font-weight: 600;">${labels.oldBalanceDue}:</td><td style="text-align: right; font-weight: 700; color: #EF4444;">+ ${fmtMoney(oldBalance)}</td></tr>`);
+    summaryRows.push(`<tr class="total-row"><td style="font-size: 11.5px; font-weight: 800;">${labels.grandTotalInclDues}:</td><td style="text-align: right; color: ${accentColor}; font-weight: 800; font-size: 13px; white-space: nowrap;">${fmtMoney(grandTotalWithOldDues)}</td></tr>`);
   } else {
-    summaryRows.push(`<tr class="total-row"><td style="font-weight: 800;">${labels.totalAmount}:</td><td style="text-align: right; color: ${accentColor}; font-weight: 800; white-space: nowrap;">${formatCurrency(transaction.totalAmount)}</td></tr>`);
+    summaryRows.push(`<tr class="total-row"><td style="font-weight: 800;">${labels.totalAmount}:</td><td style="text-align: right; color: ${accentColor}; font-weight: 800; white-space: nowrap;">${fmtMoney(transaction.totalAmount)}</td></tr>`);
   }
 
-  if (tpl.showPaidAmount) summaryRows.push(`<tr><td style="color: #10B981; font-weight: 600;">${labels.paidAmount}:</td><td style="text-align: right; font-weight: 700; color: #10B981;">${formatCurrency(transaction.paidAmount)}</td></tr>`);
-  if (tpl.showBalanceDue) summaryRows.push(`<tr><td style="color: #EF4444; font-weight: 600;">${hasOldBalance ? labels.totalBalanceDue + ':' : labels.balanceDue + ':'}</td><td style="text-align: right; font-weight: 700; color: #EF4444;">${formatCurrency(hasOldBalance ? netBalanceDue : transaction.pendingAmount)}</td></tr>`);
+  if (tpl.showPaidAmount) summaryRows.push(`<tr><td style="color: #10B981; font-weight: 600;">${labels.paidAmount}:</td><td style="text-align: right; font-weight: 700; color: #10B981;">${fmtMoney(transaction.paidAmount)}</td></tr>`);
+  if (excessAdvance > 0) {
+    summaryRows.push(`<tr style="background: #F0FDF4;"><td style="color: #059669; font-weight: 700;">${isTamil ? 'முன்பணம் கிரெடிட்:' : 'Advance Credit Added:'}</td><td style="text-align: right; font-weight: 800; color: #059669;">+ ${fmtMoney(excessAdvance)}</td></tr>`);
+  }
+  if (tpl.showBalanceDue) summaryRows.push(`<tr><td style="color: #EF4444; font-weight: 600;">${hasOldBalance ? labels.totalBalanceDue + ':' : labels.balanceDue + ':'}</td><td style="text-align: right; font-weight: 700; color: #EF4444;">${fmtMoney(hasOldBalance ? netBalanceDue : transaction.pendingAmount)}</td></tr>`);
 
-  // Footer parts
-  const thankNote = (isTamil && (!settings.thankYouNote || settings.thankYouNote.toLowerCase().includes('thank you')))
-    ? labels.thankYouNote
-    : (settings.thankYouNote || labels.thankYouNote);
-  const termsText = settings.termsAndConditions;
+  // Footer parts (effective notes, terms, thank you note)
+  const effectiveNotes = transaction.notes || tpl.defaultNotes || '';
+  const effectiveTerms = tpl.termsAndConditions || settings.termsAndConditions || '';
+  const effectiveThankNote = tpl.thankYouNote || (
+    (isTamil && (!settings.thankYouNote || settings.thankYouNote.toLowerCase().includes('thank you')))
+      ? labels.thankYouNote
+      : (settings.thankYouNote || labels.thankYouNote)
+  );
 
   let footerNotesHtml = '';
-  if (tpl.showNotes && transaction.notes) {
-    footerNotesHtml += `<div style="background: #F1F5F9; border-radius: 6px; padding: 10px; font-size: 11px; color: #475569; margin-bottom: 8px;"><strong>${labels.notes}:</strong> ${transaction.notes}</div>`;
+  if (tpl.showNotes && effectiveNotes) {
+    footerNotesHtml += `<div style="background: #F1F5F9; border-radius: 6px; padding: 10px; font-size: 11px; color: #475569; margin-bottom: 8px;"><strong>${labels.notes}:</strong> ${effectiveNotes}</div>`;
   }
-  if (tpl.showTerms && termsText) {
-    footerNotesHtml += `<div style="font-size: 10px; color: #64748B; background: #F8FAFC; border-radius: 6px; padding: 8px; border: 1px solid ${tpl.borderColor};"><strong>${labels.termsAndConditions}:</strong><br />${termsText.replace(/\n/g, '<br />')}</div>`;
+  if (tpl.showTerms && effectiveTerms) {
+    footerNotesHtml += `<div style="font-size: 10px; color: #64748B; background: #F8FAFC; border-radius: 6px; padding: 8px; border: 1px solid ${tpl.borderColor};"><strong>${labels.termsAndConditions}:</strong><br />${effectiveTerms.replace(/\n/g, '<br />')}</div>`;
   }
 
   const footerHtml = (tpl.showThankYouNote || tpl.showFooterBranding) ? `
     <div class="footer">
-      ${tpl.showThankYouNote ? `<p style="margin: 0; font-weight: 600;">${thankNote}</p>` : ''}
+      ${tpl.showThankYouNote ? `<p style="margin: 0; font-weight: 600;">${effectiveThankNote}</p>` : ''}
       ${tpl.showFooterBranding ? `<p style="margin: 4px 0 0 0; color: #94A3B8; font-size: 10px;">${tpl.footerBrandingText}</p>` : ''}
     </div>
   ` : '';
 
-  const paperSizeCss = settings.paperSize === 'THERMAL_80MM'
-    ? '@page { size: 80mm 200mm; margin: 5mm; } body { font-size: 10px; }'
-    : settings.paperSize === 'LETTER'
-    ? '@page { size: letter; margin: 20mm; }'
-    : '@page { size: A4; margin: 20mm; }';
+  const paperSize = tpl.paperSize || settings.paperSize || 'A4';
+  const pageMargin = tpl.pageMargin || 'normal';
+  const marginMm = pageMargin === 'compact' ? '10mm' : pageMargin === 'wide' ? '25mm' : '20mm';
+
+  let paperSizeCss = `@page { size: A4; margin: ${marginMm}; }`;
+  if (paperSize === 'THERMAL_80MM') {
+    const thermalMargin = pageMargin === 'compact' ? '3mm' : pageMargin === 'wide' ? '8mm' : '5mm';
+    paperSizeCss = `@page { size: 80mm auto; margin: ${thermalMargin}; } body { font-size: 10px; }`;
+  } else if (paperSize === 'LETTER') {
+    paperSizeCss = `@page { size: letter; margin: ${marginMm}; }`;
+  }
+
+  const borderStyleVal = tpl.borderStyle === 'double' ? '3px double' : (tpl.borderStyle !== 'none' ? `1px ${tpl.borderStyle}` : 'none');
 
   return `
     <!DOCTYPE html>
@@ -415,7 +493,7 @@ export function generateInvoiceHtml(
             text-align: center;
             font-size: 64px;
             font-weight: 800;
-            color: rgba(226, 232, 240, 0.45);
+            color: #64748B;
             transform: rotate(-30deg);
             z-index: 0;
             pointer-events: none;
@@ -429,27 +507,21 @@ export function generateInvoiceHtml(
             display: flex;
             justify-content: space-between;
             align-items: flex-start;
-            border-bottom: 2px ${tpl.borderStyle !== 'none' ? tpl.borderStyle : 'solid'} ${tpl.borderColor};
+            border-bottom: 2px ${tpl.borderStyle === 'double' ? 'double' : (tpl.borderStyle !== 'none' ? tpl.borderStyle : 'solid')} ${tpl.borderColor};
             padding-bottom: 16px;
             margin-bottom: 20px;
           }
           .company-logo {
-            max-height: 60px;
-            max-width: 160px;
             object-fit: contain;
           }
           .company-avatar {
-            width: 50px;
-            height: 50px;
             border-radius: 12px;
             color: #FFFFFF;
-            font-size: 24px;
             font-weight: 700;
             display: flex;
             align-items: center;
             justify-content: center;
             text-align: center;
-            line-height: 50px;
           }
           .company-info {
             max-width: 280px;
@@ -458,7 +530,7 @@ export function generateInvoiceHtml(
             font-size: ${tpl.baseFontSize + 6}px;
             font-weight: 700;
             color: ${tpl.headingColor};
-            margin: 0 0 4px 0;
+            margin: 0 0 2px 0;
           }
           .invoice-title-box {
             text-align: right;
@@ -487,7 +559,7 @@ export function generateInvoiceHtml(
             border-radius: 10px;
             padding: 14px 18px;
             margin-bottom: 20px;
-            border: 1px ${tpl.borderStyle !== 'none' ? tpl.borderStyle : 'solid'} ${tpl.borderColor};
+            border: ${borderStyleVal !== 'none' ? `${borderStyleVal} ${tpl.borderColor}` : 'none'};
           }
           .meta-col { flex: 1; }
           .meta-label {
@@ -513,7 +585,7 @@ export function generateInvoiceHtml(
             background: ${tpl.pageBackground};
             border-radius: 8px;
             padding: 12px;
-            border: 1px ${tpl.borderStyle !== 'none' ? tpl.borderStyle : 'solid'} ${tpl.borderColor};
+            border: ${borderStyleVal !== 'none' ? `${borderStyleVal} ${tpl.borderColor}` : 'none'};
           }
           .card-title {
             font-size: 11px;
@@ -570,7 +642,7 @@ export function generateInvoiceHtml(
           }
           .footer {
             margin-top: 30px;
-            border-top: 1px ${tpl.borderStyle !== 'none' ? tpl.borderStyle : 'solid'} ${tpl.borderColor};
+            border-top: ${borderStyleVal !== 'none' ? `${borderStyleVal} ${tpl.borderColor}` : '1px solid ' + tpl.borderColor};
             padding-top: 12px;
             text-align: center;
             color: #64748B;
@@ -588,11 +660,11 @@ export function generateInvoiceHtml(
           <table>
             <thead>
               <tr>
-                ${showIndex ? '<th style="width: 40px; text-align: center;">#</th>' : ''}
-                <th>Item & Description</th>
-                <th style="text-align: right;">Qty</th>
-                ${showRate ? '<th style="text-align: right;">Rate</th>' : ''}
-                <th style="text-align: right;">Amount</th>
+                ${showIndex ? `<th style="width: 40px; text-align: center;">${colIndex}</th>` : ''}
+                <th>${colItem}</th>
+                <th style="text-align: right;">${colQty}</th>
+                ${showRate ? `<th style="text-align: right;">${colRate}</th>` : ''}
+                <th style="text-align: right;">${colAmount}</th>
               </tr>
             </thead>
             <tbody>
@@ -637,11 +709,39 @@ export async function generatePdfInvoice(
 
   const html = generateInvoiceHtml(transaction, settings, tpl);
 
-  const { uri } = await Print.printToFileAsync({
+  const printResult = await Print.printToFileAsync({
     html,
     width: 612,
     height: 792,
+    base64: true,
   });
 
-  return uri;
+  // In Android / Expo Go, temporary files from Print.printToFileAsync reside in the root cache,
+  // which triggers 'Not allowed to read file under given URL' in ExpoSharing and is unreadable by FileSystem.copyAsync.
+  // Writing base64 directly into FileSystem.cacheDirectory places the file inside the app sandbox safely.
+  try {
+    const baseDir = FileSystem.cacheDirectory || FileSystem.documentDirectory;
+    if (baseDir) {
+      const sanitizedInvoiceNo = (transaction.invoiceNumber || 'Invoice').replace(/[/\\?%*:|"<>]/g, '_');
+      const targetUri = `${baseDir}Invoice_${sanitizedInvoiceNo}_${Date.now()}.pdf`;
+
+      if (printResult.base64) {
+        await FileSystem.writeAsStringAsync(targetUri, printResult.base64, {
+          encoding: FileSystem.EncodingType.Base64,
+        });
+        return targetUri;
+      } else {
+        try {
+          await FileSystem.copyAsync({ from: printResult.uri, to: targetUri });
+          return targetUri;
+        } catch (copyErr) {
+          console.warn('Fallback copyAsync failed, using raw URI:', copyErr);
+        }
+      }
+    }
+  } catch (writeErr) {
+    console.warn('Could not write PDF invoice to cache directory:', writeErr);
+  }
+
+  return printResult.uri;
 }

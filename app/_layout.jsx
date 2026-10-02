@@ -66,8 +66,17 @@ console.error = (...args) => {
     message.includes("Migration runner encountered error") ||
     message.includes("Could not reach Cloud Firestore backend") ||
     message.includes("Backend didn't respond within 10 seconds") ||
-    message.includes("offline mode until it is able to successfully connect")
+    message.includes("offline mode until it is able to successfully connect") ||
+    message.includes("Can't perform a React state update") ||
+    message.includes("component that hasn't mounted yet")
   ) {
+    if (
+      message.includes("Can't perform a React state update") ||
+      message.includes("component that hasn't mounted yet")
+    ) {
+      // Suppress transient unmounted state update warning from fast reload or async hydration
+      return;
+    }
     // Suppress red screens for known transient/permission errors, especially on project switch
     if (
       message.includes("Missing or insufficient permissions") ||

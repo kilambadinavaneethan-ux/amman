@@ -275,6 +275,7 @@ export function ThemeProvider({ children }) {
 
   // Load saved preferences on mount
   useEffect(() => {
+    let isMounted = true;
     (async () => {
       try {
         const [savedSize, savedStyle, savedBold, savedSpacing, savedHeight] = await Promise.all([
@@ -284,6 +285,7 @@ export function ThemeProvider({ children }) {
           AsyncStorage.getItem("font_letter_spacing"),
           AsyncStorage.getItem("font_line_height"),
         ]);
+        if (!isMounted) return;
         if (savedSize) setFontSizeState(savedSize);
         if (savedStyle) setFontStyleState(savedStyle);
         if (savedBold) setBoldEnabledState(savedBold === "true");
@@ -293,6 +295,10 @@ export function ThemeProvider({ children }) {
         console.error("Font settings load error:", e);
       }
     })();
+
+    return () => {
+      isMounted = false;
+    };
   }, []);
 
   // Auto-persisting setters so changes apply instantly & stick across screens

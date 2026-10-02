@@ -1,4 +1,4 @@
-import React, { useEffect, useState, useMemo, useCallback } from 'react';
+import React, { useEffect, useState, useMemo, useCallback, useContext } from 'react';
 import {
   ActivityIndicator,
   Alert,
@@ -18,6 +18,7 @@ import { Image } from 'expo-image';
 import * as ImagePicker from 'expo-image-picker';
 import { listLocalImages, saveImageToLocalFolder, LocalImageFile } from '../../src/services/localImageStorageService';
 import { useTheme } from '../context/ThemeContext';
+import { UserContext } from '../context/UserContext';
 import ProtectedRoute from '../components/ProtectedRoute';
 import {
   DEFAULT_INVOICE_TEMPLATE,
@@ -27,10 +28,16 @@ import {
   TableStyle,
   InvoiceFontFamily,
   BorderStyle,
+  TableDensity,
+  PageMargin,
   DEFAULT_SHARE_SETTINGS,
   ShareSettings,
   TransactionData,
   BankAccount,
+  AppaEstimateBillSettings,
+  DEFAULT_APPA_ESTIMATE_BILL_SETTINGS,
+  AppaBillTheme,
+  CustomerShareData,
 } from '../../src/types/sharing';
 import { invoiceTemplateService } from '../../src/services/sharing/invoiceTemplateService';
 import { shareSettingsService } from '../../src/services/sharing/shareSettingsService';
@@ -42,6 +49,8 @@ import {
   InvoiceLabels,
 } from '../../src/utils/invoiceLocalization';
 import { WebView } from 'react-native-webview';
+import { AppaEstimateBillView, APPA_BILL_THEMES } from '../../src/components/sharing/AppaEstimateBillView';
+import { SignaturePadModal } from '../../src/components/sharing/SignaturePadModal';
 
 // ═══════════════════════════════════════════════════════════
 // COLOR PRESETS
@@ -108,13 +117,391 @@ const SAMPLE_TRANSACTION: TransactionData = {
   notes: 'Deliver to warehouse B by Friday.',
 };
 
+const SAMPLE_CUSTOMER_STATEMENT_DATA: CustomerShareData = {
+  customer: {
+    id: 'sample-cust-1',
+    name: 'திரு. எஸ். குமார்',
+    phone: '98421 98421',
+    address: '24, காவேரி நகர், தளவாபாளையம்',
+  },
+  summary: {
+    totalOrdersCount: 2,
+    totalSalesAmount: 48500,
+    totalPaidAmount: 30000,
+    netBalanceDue: 18500,
+    oldBalanceDue: 5000,
+  },
+  ledger: [
+    {
+      id: 'led-1',
+      date: new Date(Date.now() - 14 * 86400000).toISOString(),
+      type: 'opening',
+      description: 'முந்தைய பழைய பாக்கி',
+      amount: 5000,
+      paid: 0,
+      balance: 5000,
+    },
+    {
+      id: 'led-2',
+      date: new Date(Date.now() - 7 * 86400000).toISOString(),
+      type: 'order',
+      description: 'ஹாலோ பிளாக்ஸ் (4" & 6")',
+      amount: 43500,
+      paid: 0,
+      balance: 48500,
+      shipmentCharge: 1500,
+      loadingCharge: 600,
+      unloadingCharge: 400,
+      items: [
+        { name: '4" ஹாலோ பிளாக்ஸ்', quantity: 1500, rate: 21, total: 31500 },
+        { name: '6" சாலிட் பிளாக்ஸ்', quantity: 300, rate: 32, total: 9500 },
+      ],
+    },
+    {
+      id: 'led-3',
+      date: new Date().toISOString(),
+      type: 'payment',
+      description: 'GPay மூலம் ரொக்க வரவு',
+      amount: 0,
+      paid: 30000,
+      balance: 18500,
+      notes: 'முன்பணம் வரவு வைக்கப்பட்டது',
+    },
+  ],
+};
+
 type TabId = 'HEADER' | 'CONTENT' | 'TABLE' | 'STYLE' | 'PREVIEW';
+
+// ═══════════════════════════════════════════════════════════
+// INVOICE EDITOR CONTEXT (Module level to keep component tree stable)
+// ═══════════════════════════════════════════════════════════
+interface InvoiceEditorContextValue {
+  template: InvoiceTemplate;
+  updateTamilLabel: (key: keyof InvoiceLabels, val: string) => void;
+  resetTamilLabel: (key: keyof InvoiceLabels) => void;
+}
+
+const InvoiceEditorContext = React.createContext<InvoiceEditorContextValue>({
+  template: DEFAULT_INVOICE_TEMPLATE,
+  updateTamilLabel: () => {},
+  resetTamilLabel: () => {},
+});
+
+// ═══════════════════════════════════════════════════════════
+// REUSABLE SUB-COMPONENTS (Module level to prevent unmount/remount on keystrokes)
+// ═══════════════════════════════════════════════════════════
+
+interface ToggleRowProps {
+  title: string;
+  subtitle: string;
+  value: boolean;
+  onToggle: (v: boolean) => void;
+  isLast?: boolean;
+}
+const ToggleRow = React.memo(function ToggleRow({ title, subtitle, value, onToggle, isLast = false }: ToggleRowProps) {
+  const { theme } = useTheme();
+  return (
+    <View style={[{
+      flexDirection: 'row',
+      justifyContent: 'space-between',
+      alignItems: 'center',
+      paddingVertical: 12,
+    }, !isLast && { borderBottomWidth: 1, borderBottomColor: theme.colors.border.subtle }]}>
+      <View style={{ flex: 1, paddingRight: 12 }}>
+        <Text style={{ fontSize: 14, fontWeight: '600', color: theme.colors.text.primary }}>{title}</Text>
+        <Text style={{ fontSize: 11, marginTop: 2, color: theme.colors.text.muted }}>{subtitle}</Text>
+      </View>
+      <Switch
+        value={value}
+        onValueChange={onToggle}
+        trackColor={{ false: '#CBD5E1', true: '#93C5FD' }}
+        thumbColor={value ? '#2563EB' : '#F1F5F9'}
+      />
+    </View>
+  );
+});
+
+interface SectionHeadingProps {
+  text: string;
+  marginTop?: number;
+}
+const SectionHeading = React.memo(function SectionHeading({ text, marginTop = 0 }: SectionHeadingProps) {
+  const { theme } = useTheme();
+  return (
+    <Text style={{
+      fontSize: 12,
+      fontWeight: '700',
+      textTransform: 'uppercase',
+      letterSpacing: 0.5,
+      marginBottom: 8,
+      color: theme.colors.accent.primary,
+      marginTop,
+    }}>
+      {text}
+    </Text>
+  );
+});
+
+interface CardProps {
+  children: React.ReactNode;
+  style?: any;
+}
+const Card = React.memo(function Card({ children, style }: CardProps) {
+  const { theme } = useTheme();
+  return (
+    <View style={[{
+      borderRadius: 12,
+      borderWidth: 1,
+      padding: 14,
+      marginBottom: 12,
+      backgroundColor: theme.colors.bg.card,
+      borderColor: theme.colors.border.subtle,
+    }, style]}>
+      {children}
+    </View>
+  );
+});
+
+interface ChipSelectorProps<T extends string> {
+  options: T[];
+  selected: T;
+  onSelect: (v: T) => void;
+  renderLabel?: (v: T) => string;
+}
+function ChipSelector<T extends string>({ options, selected, onSelect, renderLabel }: ChipSelectorProps<T>) {
+  const { theme } = useTheme();
+  return (
+    <View style={{ flexDirection: 'row', flexWrap: 'wrap', gap: 6 }}>
+      {options.map((opt) => {
+        const isSelected = selected === opt;
+        return (
+          <Pressable
+            key={opt}
+            onPress={() => onSelect(opt)}
+            style={{
+              paddingHorizontal: 12,
+              paddingVertical: 6,
+              borderRadius: 8,
+              borderWidth: 1,
+              backgroundColor: isSelected ? theme.colors.accent.primary : theme.colors.bg.primary,
+              borderColor: isSelected ? theme.colors.accent.primary : theme.colors.border.subtle,
+            }}
+          >
+            <Text
+              style={{
+                fontSize: 12,
+                color: isSelected ? '#FFFFFF' : theme.colors.text.primary,
+                fontWeight: isSelected ? '700' : '500',
+              }}
+            >
+              {renderLabel ? renderLabel(opt) : opt.charAt(0).toUpperCase() + opt.slice(1)}
+            </Text>
+          </Pressable>
+        );
+      })}
+    </View>
+  );
+}
+
+interface ColorPickerProps {
+  colors: string[];
+  selected: string;
+  onSelect: (c: string) => void;
+}
+const ColorPicker = React.memo(function ColorPicker({ colors: colorOptions, selected, onSelect }: ColorPickerProps) {
+  return (
+    <View style={{ flexDirection: 'row', flexWrap: 'wrap', gap: 12, marginTop: 8 }}>
+      {colorOptions.map((c) => {
+        const isSelected = selected === c;
+        return (
+          <Pressable
+            key={c}
+            onPress={() => onSelect(c)}
+            style={[
+              {
+                width: 38,
+                height: 38,
+                borderRadius: 19,
+                justifyContent: 'center',
+                alignItems: 'center',
+                backgroundColor: c,
+              },
+              isSelected && { borderWidth: 3, borderColor: '#FFFFFF', elevation: 4 },
+            ]}
+          >
+            {isSelected && <MaterialIcons name="check" size={16} color={c === '#F8FAFC' || c === '#FFFFFF' ? '#000' : '#FFF'} />}
+          </Pressable>
+        );
+      })}
+    </View>
+  );
+});
+
+interface FontSizeControllerProps {
+  label: string;
+  value: number;
+  min?: number;
+  max?: number;
+  presets: number[];
+  onChange: (val: number) => void;
+  accentColor?: string;
+}
+
+const FontSizeController = React.memo(function FontSizeController({
+  label,
+  value,
+  min = 10,
+  max = 40,
+  presets,
+  onChange,
+  accentColor,
+}: FontSizeControllerProps) {
+  const { theme } = useTheme();
+  const textColor = theme.colors.text.primary;
+  const subTextColor = theme.colors.text.muted;
+  const borderColor = theme.colors.border.subtle;
+  const primaryBg = theme.colors.bg.primary;
+  const activeColor = accentColor || theme.colors.accent.primary;
+
+  return (
+    <View style={{ marginTop: 12, paddingTop: 10, borderTopWidth: 1, borderTopColor: borderColor }}>
+      <View style={{ flexDirection: 'row', justifyContent: 'space-between', alignItems: 'center' }}>
+        <Text style={{ fontSize: 11, fontWeight: '700', color: subTextColor, marginBottom: 0 }}>
+          {label}
+        </Text>
+        <View style={{ flexDirection: 'row', alignItems: 'center', gap: 6 }}>
+          <Pressable
+            onPress={() => {
+              if (value > min) onChange(value - 1);
+            }}
+            style={{
+              width: 28,
+              height: 28,
+              borderRadius: 6,
+              backgroundColor: primaryBg,
+              borderWidth: 1,
+              borderColor,
+              justifyContent: 'center',
+              alignItems: 'center',
+            }}
+          >
+            <MaterialIcons name="remove" size={16} color={textColor} />
+          </Pressable>
+          <Text style={{ fontSize: 13, fontWeight: '700', color: textColor, minWidth: 36, textAlign: 'center' }}>
+            {value}px
+          </Text>
+          <Pressable
+            onPress={() => {
+              if (value < max) onChange(value + 1);
+            }}
+            style={{
+              width: 28,
+              height: 28,
+              borderRadius: 6,
+              backgroundColor: primaryBg,
+              borderWidth: 1,
+              borderColor,
+              justifyContent: 'center',
+              alignItems: 'center',
+            }}
+          >
+            <MaterialIcons name="add" size={16} color={textColor} />
+          </Pressable>
+        </View>
+      </View>
+
+      <View style={{ flexDirection: 'row', flexWrap: 'wrap', gap: 6, marginTop: 8 }}>
+        {presets.map((sz) => {
+          const isSelected = value === sz;
+          return (
+            <Pressable
+              key={sz}
+              onPress={() => onChange(sz)}
+              style={{
+                paddingHorizontal: 8,
+                paddingVertical: 4,
+                borderRadius: 6,
+                backgroundColor: isSelected ? activeColor : primaryBg,
+                borderWidth: 1,
+                borderColor: isSelected ? activeColor : borderColor,
+                minWidth: 34,
+                alignItems: 'center',
+              }}
+            >
+              <Text style={{ fontSize: 11, fontWeight: '700', color: isSelected ? '#FFFFFF' : textColor }}>
+                {sz}
+              </Text>
+            </Pressable>
+          );
+        })}
+      </View>
+    </View>
+  );
+});
+
+interface TamilLabelFieldProps {
+  label: string;
+  hint: string;
+  fieldKey: keyof InvoiceLabels;
+}
+const TamilLabelField = React.memo(function TamilLabelField({
+  label,
+  hint,
+  fieldKey,
+}: TamilLabelFieldProps) {
+  const { theme } = useTheme();
+  const { template, updateTamilLabel, resetTamilLabel } = useContext(InvoiceEditorContext);
+
+  const customValue = template.customTamilLabels?.[fieldKey];
+  const preset = template.tamilTerminologyPreset || 'brick_construction';
+  const presetDict = preset === 'standard' ? STANDARD_COMMERCE_TAMIL_LABELS : BRICK_CONSTRUCTION_TAMIL_LABELS;
+  const defaultValue = presetDict[fieldKey] || TAMIL_INVOICE_LABELS[fieldKey] || '';
+  const isCustomized = customValue !== undefined && customValue !== defaultValue && customValue.trim() !== '';
+
+  return (
+    <View style={{ marginBottom: 10 }}>
+      <View style={{ flexDirection: 'row', justifyContent: 'space-between', alignItems: 'center', marginBottom: 4 }}>
+        <Text style={{ fontSize: 11, fontWeight: '700', marginBottom: 0, color: theme.colors.text.muted }}>
+          {label}
+        </Text>
+        {isCustomized ? (
+          <Pressable
+            onPress={() => resetTamilLabel(fieldKey)}
+            style={{ flexDirection: 'row', alignItems: 'center', gap: 2 }}
+          >
+            <Text style={{ fontSize: 10, fontWeight: '700', color: theme.colors.accent.primary }}>
+              ✓ Custom (Reset)
+            </Text>
+          </Pressable>
+        ) : null}
+      </View>
+      <TextInput
+        style={{
+          height: 40,
+          borderRadius: 10,
+          borderWidth: 1,
+          paddingHorizontal: 12,
+          fontSize: 13,
+          backgroundColor: theme.colors.bg.primary,
+          borderColor: isCustomized ? theme.colors.accent.primary : theme.colors.border.subtle,
+          color: theme.colors.text.primary,
+        }}
+        value={customValue !== undefined ? customValue : defaultValue}
+        onChangeText={(val) => updateTamilLabel(fieldKey, val)}
+        placeholder={hint}
+        placeholderTextColor={theme.colors.text.muted}
+      />
+    </View>
+  );
+});
 
 function InvoiceManagementScreen() {
   const router = useRouter();
   const { theme } = useTheme();
   const { colors } = theme;
 
+  const [docType, setDocType] = useState<'standard' | 'appa_estimate'>('standard');
+  const [appaPreviewTheme, setAppaPreviewTheme] = useState<AppaBillTheme>('classic');
   const [template, setTemplate] = useState<InvoiceTemplate>(DEFAULT_INVOICE_TEMPLATE);
   const [shareSettings, setShareSettings] = useState<ShareSettings>(DEFAULT_SHARE_SETTINGS);
   const [loading, setLoading] = useState(true);
@@ -133,6 +520,73 @@ function InvoiceManagementScreen() {
   const [modalAccountNo, setModalAccountNo] = useState('');
   const [modalIfscCode, setModalIfscCode] = useState('');
   const [modalAccountHolderName, setModalAccountHolderName] = useState('');
+  const [signatoryPadModalVisible, setSignatoryPadModalVisible] = useState(false);
+  const { profile: userProfile } = (useContext(UserContext) as any) || {};
+
+  const handlePickAppaLogoFromGallery = async () => {
+    try {
+      const { status } = await ImagePicker.requestMediaLibraryPermissionsAsync();
+      if (status !== 'granted') {
+        Alert.alert('Permission Denied', 'Gallery permission is required to select logo image.');
+        return;
+      }
+      const result = await ImagePicker.launchImageLibraryAsync({
+        mediaTypes: ['images'],
+        allowsEditing: true,
+        aspect: [1, 1],
+        quality: 0.9,
+      });
+      if (!result.canceled && result.assets && result.assets[0]?.uri) {
+        updateAppaField('companyLogoUri', result.assets[0].uri);
+      }
+    } catch (e: any) {
+      console.error('Gallery pick logo error:', e);
+      Alert.alert('Error', 'Failed to pick logo image.');
+    }
+  };
+
+  const handlePickAppaLogoFromCamera = async () => {
+    try {
+      const { status } = await ImagePicker.requestCameraPermissionsAsync();
+      if (status !== 'granted') {
+        Alert.alert('Permission Denied', 'Camera permission is required to capture logo image.');
+        return;
+      }
+      const result = await ImagePicker.launchCameraAsync({
+        allowsEditing: true,
+        aspect: [1, 1],
+        quality: 0.9,
+      });
+      if (!result.canceled && result.assets && result.assets[0]?.uri) {
+        updateAppaField('companyLogoUri', result.assets[0].uri);
+      }
+    } catch (e: any) {
+      console.error('Camera pick logo error:', e);
+      Alert.alert('Error', 'Failed to capture logo image.');
+    }
+  };
+
+  const handlePickSignatureFromGallery = async () => {
+    try {
+      const { status } = await ImagePicker.requestMediaLibraryPermissionsAsync();
+      if (status !== 'granted') {
+        Alert.alert('Permission Denied', 'Gallery permission is required to select signature image.');
+        return;
+      }
+      const result = await ImagePicker.launchImageLibraryAsync({
+        mediaTypes: ['images'],
+        allowsEditing: true,
+        aspect: [3, 1],
+        quality: 0.9,
+      });
+      if (!result.canceled && result.assets && result.assets[0]?.uri) {
+        updateAppaField('signatureImageUri', result.assets[0].uri);
+      }
+    } catch (e: any) {
+      console.error('Gallery pick error:', e);
+      Alert.alert('Error', 'Failed to pick signature image.');
+    }
+  };
 
   const handleOpenAddBankModal = () => {
     setEditingBankAccountId(null);
@@ -366,6 +820,17 @@ function InvoiceManagementScreen() {
     setHasChanges(true);
   }, []);
 
+  const updateColumnLabel = useCallback((col: 'index' | 'item' | 'qty' | 'rate' | 'amount', val: string) => {
+    setTemplate((prev) => ({
+      ...prev,
+      customColumnLabels: {
+        ...(prev.customColumnLabels || {}),
+        [col]: val,
+      },
+    }));
+    setHasChanges(true);
+  }, []);
+
   const resetTamilLabels = useCallback(() => {
     Alert.alert(
       'Reset Tamil Words?',
@@ -395,6 +860,64 @@ function InvoiceManagementScreen() {
     );
   }, []);
 
+  const appaSettings: AppaEstimateBillSettings = useMemo(() => ({
+    ...DEFAULT_APPA_ESTIMATE_BILL_SETTINGS,
+    ...(template.appaBillSettings || {}),
+  }), [template.appaBillSettings]);
+
+  const effectiveAppaLogoUri = appaSettings.companyLogoUri || userProfile?.company?.logoUrl || userProfile?.photoURL || userProfile?.logoUrl || '';
+
+  const updateAppaField = useCallback(<K extends keyof AppaEstimateBillSettings>(key: K, value: AppaEstimateBillSettings[K]) => {
+    setTemplate((prev) => ({
+      ...prev,
+      appaBillSettings: {
+        ...DEFAULT_APPA_ESTIMATE_BILL_SETTINGS,
+        ...(prev.appaBillSettings || {}),
+        [key]: value,
+      },
+    }));
+    setHasChanges(true);
+  }, []);
+
+  const updateAppaColumnLabel = useCallback((colKey: keyof AppaEstimateBillSettings['columnLabels'], val: string) => {
+    setTemplate((prev) => {
+      const current = prev.appaBillSettings || DEFAULT_APPA_ESTIMATE_BILL_SETTINGS;
+      return {
+        ...prev,
+        appaBillSettings: {
+          ...current,
+          columnLabels: {
+            ...DEFAULT_APPA_ESTIMATE_BILL_SETTINGS.columnLabels,
+            ...(current.columnLabels || {}),
+            [colKey]: val,
+          },
+        },
+      };
+    });
+    setHasChanges(true);
+  }, []);
+
+  const resetAppaSettings = useCallback(() => {
+    Alert.alert(
+      'Reset Appa Estimate Bill?',
+      'Restore all Appa Estimate Bill settings to their original traditional defaults (பாரம்பரிய இயல்புநிலைக்கு மீட்டமைக்கவா)?',
+      [
+        { text: 'Cancel', style: 'cancel' },
+        {
+          text: 'Reset',
+          style: 'destructive',
+          onPress: () => {
+            setTemplate((prev) => ({
+              ...prev,
+              appaBillSettings: DEFAULT_APPA_ESTIMATE_BILL_SETTINGS,
+            }));
+            setHasChanges(true);
+          },
+        },
+      ]
+    );
+  }, []);
+
   const handleSave = async () => {
     if (saving) return;
     setSaving(true);
@@ -409,6 +932,12 @@ function InvoiceManagementScreen() {
           showCustomerHonorificTamil: template.showCustomerHonorificTamil,
           tamilTerminologyPreset: template.tamilTerminologyPreset,
           customTamilLabels: template.customTamilLabels,
+          termsAndConditions: template.termsAndConditions,
+          thankYouNote: template.thankYouNote,
+          watermarkEnabled: template.watermarkEnabled,
+          watermarkText: template.watermarkText,
+          signatureTitle: template.signatureTitle,
+          paperSize: template.paperSize,
         }),
       ]);
       if (updatedTpl) {
@@ -465,6 +994,92 @@ function InvoiceManagementScreen() {
 
   const styles = useMemo(() => getStyles(theme), [theme]);
 
+  const resetTamilLabel = useCallback((fieldKey: keyof InvoiceLabels) => {
+    setTemplate((prev) => {
+      const nextCustom = { ...(prev.customTamilLabels || {}) };
+      delete nextCustom[fieldKey];
+      return { ...prev, customTamilLabels: nextCustom };
+    });
+    setHasChanges(true);
+  }, []);
+
+  const editorContextValue = useMemo(() => ({
+    template,
+    updateTamilLabel,
+    resetTamilLabel,
+  }), [template, updateTamilLabel, resetTamilLabel]);
+
+  const phoneList: string[] = useMemo(() => {
+    if (appaSettings.phoneNumbers && Array.isArray(appaSettings.phoneNumbers) && appaSettings.phoneNumbers.length > 0) {
+      return appaSettings.phoneNumbers;
+    }
+    if (appaSettings.customPhones?.trim()) {
+      return appaSettings.customPhones.split(/[•,]/).map((p) => p.trim()).filter(Boolean);
+    }
+    return ['99430 51509', '99430 51209'];
+  }, [appaSettings.phoneNumbers, appaSettings.customPhones]);
+
+  const handleUpdatePhone = useCallback((index: number, val: string) => {
+    const current = (appaSettings.phoneNumbers && appaSettings.phoneNumbers.length > 0)
+      ? [...appaSettings.phoneNumbers]
+      : (appaSettings.customPhones?.trim()
+          ? appaSettings.customPhones.split(/[•,]/).map((p) => p.trim()).filter(Boolean)
+          : ['99430 51509', '99430 51209']);
+    current[index] = val;
+    setTemplate((prev) => ({
+      ...prev,
+      appaBillSettings: {
+        ...DEFAULT_APPA_ESTIMATE_BILL_SETTINGS,
+        ...(prev.appaBillSettings || {}),
+        phoneNumbers: current,
+        customPhones: current.filter(Boolean).join(' • '),
+      },
+    }));
+    setHasChanges(true);
+  }, [appaSettings.phoneNumbers, appaSettings.customPhones]);
+
+  const handleAddPhone = useCallback(() => {
+    const current = (appaSettings.phoneNumbers && appaSettings.phoneNumbers.length > 0)
+      ? [...appaSettings.phoneNumbers]
+      : (appaSettings.customPhones?.trim()
+          ? appaSettings.customPhones.split(/[•,]/).map((p) => p.trim()).filter(Boolean)
+          : ['99430 51509', '99430 51209']);
+    current.push('');
+    setTemplate((prev) => ({
+      ...prev,
+      appaBillSettings: {
+        ...DEFAULT_APPA_ESTIMATE_BILL_SETTINGS,
+        ...(prev.appaBillSettings || {}),
+        phoneNumbers: current,
+        customPhones: current.filter(Boolean).join(' • '),
+      },
+    }));
+    setHasChanges(true);
+  }, [appaSettings.phoneNumbers, appaSettings.customPhones]);
+
+  const handleRemovePhone = useCallback((index: number) => {
+    const current = (appaSettings.phoneNumbers && appaSettings.phoneNumbers.length > 0)
+      ? [...appaSettings.phoneNumbers]
+      : (appaSettings.customPhones?.trim()
+          ? appaSettings.customPhones.split(/[•,]/).map((p) => p.trim()).filter(Boolean)
+          : ['99430 51509', '99430 51209']);
+    if (current.length <= 1) {
+      current[0] = '';
+    } else {
+      current.splice(index, 1);
+    }
+    setTemplate((prev) => ({
+      ...prev,
+      appaBillSettings: {
+        ...DEFAULT_APPA_ESTIMATE_BILL_SETTINGS,
+        ...(prev.appaBillSettings || {}),
+        phoneNumbers: current,
+        customPhones: current.filter(Boolean).join(' • '),
+      },
+    }));
+    setHasChanges(true);
+  }, [appaSettings.phoneNumbers, appaSettings.customPhones]);
+
   if (loading) {
     return (
       <View style={[styles.center, { backgroundColor: colors.bg.primary }]}>
@@ -473,140 +1088,6 @@ function InvoiceManagementScreen() {
       </View>
     );
   }
-
-  // ═══════════════════════════════════════════════════════════
-  // REUSABLE SUB-COMPONENTS
-  // ═══════════════════════════════════════════════════════════
-
-  const ToggleRow = ({ title, subtitle, value, onToggle, isLast = false }: { title: string; subtitle: string; value: boolean; onToggle: (v: boolean) => void; isLast?: boolean }) => (
-    <View style={[styles.toggleRow, !isLast && { borderBottomWidth: 1, borderBottomColor: borderColor }]}>
-      <View style={{ flex: 1, paddingRight: 12 }}>
-        <Text style={[styles.toggleTitle, { color: textColor }]}>{title}</Text>
-        <Text style={[styles.toggleSub, { color: subTextColor }]}>{subtitle}</Text>
-      </View>
-      <Switch
-        value={value}
-        onValueChange={onToggle}
-        trackColor={{ false: '#CBD5E1', true: '#93C5FD' }}
-        thumbColor={value ? '#2563EB' : '#F1F5F9'}
-      />
-    </View>
-  );
-
-  const SectionHeading = ({ text, marginTop = 0 }: { text: string; marginTop?: number }) => (
-    <Text style={[styles.sectionHeading, { color: colors.accent.primary, marginTop }]}>{text}</Text>
-  );
-
-  const Card = ({ children }: { children: React.ReactNode }) => (
-    <View style={[styles.card, { backgroundColor: cardBg, borderColor }]}>{children}</View>
-  );
-
-  const ChipSelector = <T extends string>({ options, selected, onSelect, renderLabel }: { options: T[]; selected: T; onSelect: (v: T) => void; renderLabel?: (v: T) => string }) => (
-    <View style={styles.chipRow}>
-      {options.map((opt) => {
-        const isSelected = selected === opt;
-        return (
-          <Pressable
-            key={opt}
-            onPress={() => onSelect(opt)}
-            style={[
-              styles.chip,
-              {
-                backgroundColor: isSelected ? colors.accent.primary : colors.bg.primary,
-                borderColor: isSelected ? colors.accent.primary : borderColor,
-              },
-            ]}
-          >
-            <Text
-              style={[
-                styles.chipText,
-                { color: isSelected ? '#FFFFFF' : textColor, fontWeight: isSelected ? '700' : '500' },
-              ]}
-            >
-              {renderLabel ? renderLabel(opt) : opt.charAt(0).toUpperCase() + opt.slice(1)}
-            </Text>
-          </Pressable>
-        );
-      })}
-    </View>
-  );
-
-  const ColorPicker = ({ colors: colorOptions, selected, onSelect }: { colors: string[]; selected: string; onSelect: (c: string) => void }) => (
-    <View style={styles.colorGrid}>
-      {colorOptions.map((c) => {
-        const isSelected = selected === c;
-        return (
-          <Pressable
-            key={c}
-            onPress={() => onSelect(c)}
-            style={[
-              styles.colorDot,
-              { backgroundColor: c },
-              isSelected && styles.colorDotSelected,
-            ]}
-          >
-            {isSelected && <MaterialIcons name="check" size={16} color={c === '#F8FAFC' || c === '#FFFFFF' ? '#000' : '#FFF'} />}
-          </Pressable>
-        );
-      })}
-    </View>
-  );
-
-  const TamilLabelField = ({
-    label,
-    hint,
-    fieldKey,
-  }: {
-    label: string;
-    hint: string;
-    fieldKey: keyof InvoiceLabels;
-  }) => {
-    const customValue = template.customTamilLabels?.[fieldKey];
-    const preset = template.tamilTerminologyPreset || 'brick_construction';
-    const presetDict = preset === 'standard' ? STANDARD_COMMERCE_TAMIL_LABELS : BRICK_CONSTRUCTION_TAMIL_LABELS;
-    const defaultValue = presetDict[fieldKey] || TAMIL_INVOICE_LABELS[fieldKey] || '';
-    const isCustomized = customValue !== undefined && customValue !== defaultValue && customValue.trim() !== '';
-
-    return (
-      <View style={{ marginBottom: 10 }}>
-        <View style={{ flexDirection: 'row', justifyContent: 'space-between', alignItems: 'center', marginBottom: 4 }}>
-          <Text style={[styles.inputLabel, { color: subTextColor, marginBottom: 0 }]}>
-            {label}
-          </Text>
-          {isCustomized ? (
-            <Pressable
-              onPress={() => {
-                const nextCustom = { ...(template.customTamilLabels || {}) };
-                delete nextCustom[fieldKey];
-                setTemplate((prev) => ({ ...prev, customTamilLabels: nextCustom }));
-                setHasChanges(true);
-              }}
-              style={{ flexDirection: 'row', alignItems: 'center', gap: 2 }}
-            >
-              <Text style={{ fontSize: 10, fontWeight: '700', color: colors.accent.primary }}>
-                ✓ Custom (Reset)
-              </Text>
-            </Pressable>
-          ) : null}
-        </View>
-        <TextInput
-          style={[
-            styles.input,
-            {
-              backgroundColor: colors.bg.primary,
-              borderColor: isCustomized ? colors.accent.primary : borderColor,
-              color: textColor,
-              height: 40,
-            },
-          ]}
-          value={customValue !== undefined ? customValue : defaultValue}
-          onChangeText={(val) => updateTamilLabel(fieldKey, val)}
-          placeholder={hint}
-          placeholderTextColor={subTextColor}
-        />
-      </View>
-    );
-  };
 
   // ═══════════════════════════════════════════════════════════
   // TABS
@@ -622,7 +1103,8 @@ function InvoiceManagementScreen() {
 
   return (
     <ProtectedRoute>
-      <View style={[styles.container, { backgroundColor: colors.bg.primary }]}>
+      <InvoiceEditorContext.Provider value={editorContextValue}>
+        <View style={[styles.container, { backgroundColor: colors.bg.primary }]}>
         {/* App Bar */}
         <View style={[styles.appBar, { backgroundColor: cardBg, borderBottomColor: borderColor }]}>
           <Pressable onPress={() => router.back()} style={styles.iconBtn}>
@@ -645,7 +1127,62 @@ function InvoiceManagementScreen() {
           </Pressable>
         </View>
 
-        {/* Action Bar */}
+        {/* Document Type Switcher: Standard Invoice vs Appa Estimate Bill */}
+        <View style={[styles.docTypeSwitcherContainer, { backgroundColor: cardBg, borderBottomColor: borderColor }]}>
+          <Pressable
+            onPress={() => setDocType('standard')}
+            style={[
+              styles.docTypeTab,
+              docType === 'standard' && [styles.docTypeTabActive, { backgroundColor: colors.accent.primary + '15', borderColor: colors.accent.primary }],
+            ]}
+          >
+            <MaterialIcons
+              name="receipt-long"
+              size={20}
+              color={docType === 'standard' ? colors.accent.primary : subTextColor}
+            />
+            <View style={{ flex: 1 }}>
+              <Text
+                style={[
+                  styles.docTypeTabText,
+                  { color: docType === 'standard' ? colors.accent.primary : textColor, fontWeight: docType === 'standard' ? '800' : '600' },
+                ]}
+              >
+                Standard Invoice
+              </Text>
+              <Text style={{ fontSize: 10, color: subTextColor }}>விலைப்பட்டியல் & GST</Text>
+            </View>
+          </Pressable>
+
+          <Pressable
+            onPress={() => setDocType('appa_estimate')}
+            style={[
+              styles.docTypeTab,
+              docType === 'appa_estimate' && [styles.docTypeTabActive, { backgroundColor: '#B91C1C15', borderColor: '#B91C1C' }],
+            ]}
+          >
+            <MaterialIcons
+              name="history-edu"
+              size={20}
+              color={docType === 'appa_estimate' ? '#B91C1C' : subTextColor}
+            />
+            <View style={{ flex: 1 }}>
+              <Text
+                style={[
+                  styles.docTypeTabText,
+                  { color: docType === 'appa_estimate' ? '#B91C1C' : textColor, fontWeight: docType === 'appa_estimate' ? '800' : '600' },
+                ]}
+              >
+                Appa Estimate Bill
+              </Text>
+              <Text style={{ fontSize: 10, color: subTextColor }}>அப்பா எஸ்டிமேட் பில்</Text>
+            </View>
+          </Pressable>
+        </View>
+
+        {docType === 'standard' ? (
+          <>
+            {/* Action Bar */}
         <View style={[styles.subHeaderRow, { backgroundColor: cardBg, borderBottomColor: borderColor }]}>
           <ScrollView horizontal showsHorizontalScrollIndicator={false} contentContainerStyle={styles.presetScroll}>
             {INVOICE_PRESETS.map((preset) => (
@@ -697,7 +1234,12 @@ function InvoiceManagementScreen() {
 
         {/* ═══════════════════════ SCROLLABLE CONTENT ═══════════════════════ */}
         {activeTab !== 'PREVIEW' ? (
-          <ScrollView style={styles.scrollContent} showsVerticalScrollIndicator={false}>
+          <ScrollView
+            style={styles.scrollContent}
+            showsVerticalScrollIndicator={false}
+            keyboardShouldPersistTaps="handled"
+            removeClippedSubviews={false}
+          >
             {/* ────────── TAB 1: HEADER & BRANDING ────────── */}
             {activeTab === 'HEADER' && (
               <View style={styles.sectionContainer}>
@@ -1145,6 +1687,61 @@ function InvoiceManagementScreen() {
                   )}
                 </Card>
 
+                <SectionHeading text="AUSPICIOUS INVOCATION (மங்கல தலைப்பு)" marginTop={20} />
+                <Card>
+                  <ToggleRow
+                    title="Divine Invocation / Header Blessing"
+                    subtitle="Display a sacred or motivational blessing at the very top of the invoice"
+                    value={Boolean(template.showInvocation)}
+                    onToggle={(v) => updateField('showInvocation', v)}
+                    isLast={!template.showInvocation}
+                  />
+                  {Boolean(template.showInvocation) && (
+                    <View style={{ marginTop: 12, paddingTop: 12, borderTopWidth: 1, borderTopColor: borderColor }}>
+                      <Text style={[styles.inputLabel, { color: subTextColor }]}>Invocation Text</Text>
+                      <TextInput
+                        value={template.invocationText || ''}
+                        onChangeText={(val) => updateField('invocationText', val)}
+                        placeholder="e.g. ஸ்ரீ சொக்கநாச்சி அம்மன் துணை"
+                        placeholderTextColor={subTextColor}
+                        style={[styles.input, { backgroundColor: colors.bg.primary, color: textColor, borderColor }]}
+                      />
+                      <View style={styles.quickTags}>
+                        {[
+                          'ஸ்ரீ சொக்கநாச்சி அம்மன் துணை',
+                          'ஓம் முருகா துணை',
+                          'சுப லாபம்',
+                          'Quality & Trust',
+                          'In the Name of God',
+                        ].map((t) => (
+                          <Pressable
+                            key={t}
+                            onPress={() => updateField('invocationText', t)}
+                            style={[
+                              styles.quickTag,
+                              {
+                                backgroundColor: template.invocationText === t ? colors.accent.primary : colors.bg.primary,
+                                borderColor: template.invocationText === t ? colors.accent.primary : borderColor,
+                              },
+                            ]}
+                          >
+                            <Text style={[styles.quickTagText, { color: template.invocationText === t ? '#FFF' : textColor }]}>{t}</Text>
+                          </Pressable>
+                        ))}
+                      </View>
+
+                      <View style={{ marginTop: 12 }}>
+                        <Text style={[styles.inputLabel, { color: subTextColor }]}>Invocation Banner Color</Text>
+                        <ColorPicker
+                          colors={['#B91C1C', '#D97706', '#2563EB', '#059669', '#7C3AED', '#0F172A']}
+                          selected={template.invocationColor || '#B91C1C'}
+                          onSelect={(c) => updateField('invocationColor', c)}
+                        />
+                      </View>
+                    </View>
+                  )}
+                </Card>
+
                 <SectionHeading text="HEADER LAYOUT" marginTop={20} />
                 <Card>
                   <Text style={[styles.cardTitle, { color: textColor }]}>Layout Style</Text>
@@ -1197,6 +1794,59 @@ function InvoiceManagementScreen() {
                   <ToggleRow title="Business Address" subtitle="Show physical address" value={template.showCompanyAddress} onToggle={(v) => updateField('showCompanyAddress', v)} />
                   <ToggleRow title="GST Number" subtitle="Show GSTIN in header" value={template.showCompanyGst} onToggle={(v) => updateField('showCompanyGst', v)} isLast />
                 </Card>
+
+                <SectionHeading text="BUSINESS SLOGAN & LOGO SIZE" marginTop={20} />
+                <Card>
+                  <ToggleRow
+                    title="Company Slogan / Tagline"
+                    subtitle="Show subtitle under business name"
+                    value={Boolean(template.showCompanyTagline)}
+                    onToggle={(v) => updateField('showCompanyTagline', v)}
+                  />
+                  {Boolean(template.showCompanyTagline) && (
+                    <View style={{ marginTop: 10, marginBottom: 12 }}>
+                      <Text style={[styles.inputLabel, { color: subTextColor }]}>Slogan / Tagline Text</Text>
+                      <TextInput
+                        value={template.companyTagline || ''}
+                        onChangeText={(val) => updateField('companyTagline', val)}
+                        placeholder="e.g. Quality Red Bricks & Masonry"
+                        placeholderTextColor={subTextColor}
+                        style={[styles.input, { backgroundColor: colors.bg.primary, color: textColor, borderColor }]}
+                      />
+                      <View style={styles.quickTags}>
+                        {[
+                          'Quality Red Bricks & Masonry',
+                          'Building Trust Since 1998',
+                          'Direct Manufacturer & Wholesale Supplier',
+                        ].map((t) => (
+                          <Pressable
+                            key={t}
+                            onPress={() => updateField('companyTagline', t)}
+                            style={[
+                              styles.quickTag,
+                              {
+                                backgroundColor: template.companyTagline === t ? colors.accent.primary : colors.bg.primary,
+                                borderColor: template.companyTagline === t ? colors.accent.primary : borderColor,
+                              },
+                            ]}
+                          >
+                            <Text style={[styles.quickTagText, { color: template.companyTagline === t ? '#FFF' : textColor }]}>{t}</Text>
+                          </Pressable>
+                        ))}
+                      </View>
+                    </View>
+                  )}
+
+                  <View style={{ marginTop: 8, paddingTop: 10, borderTopWidth: 1, borderTopColor: borderColor }}>
+                    <Text style={[styles.inputLabel, { color: subTextColor }]}>Logo & Avatar Display Size</Text>
+                    <ChipSelector<'small' | 'medium' | 'large'>
+                      options={['small', 'medium', 'large']}
+                      selected={template.logoSize || 'medium'}
+                      onSelect={(v) => updateField('logoSize', v)}
+                      renderLabel={(v) => v === 'small' ? 'Small (38px)' : v === 'large' ? 'Large (80px)' : 'Medium (58px)'}
+                    />
+                  </View>
+                </Card>
               </View>
             )}
 
@@ -1235,9 +1885,157 @@ function InvoiceManagementScreen() {
 
                 <SectionHeading text="FOOTER SECTIONS" marginTop={20} />
                 <Card>
-                  <ToggleRow title="Notes" subtitle="Show transaction notes" value={template.showNotes} onToggle={(v) => updateField('showNotes', v)} />
-                  <ToggleRow title="Terms & Conditions" subtitle="Show terms text block" value={template.showTerms} onToggle={(v) => updateField('showTerms', v)} />
-                  <ToggleRow title="Signature" subtitle="Show authorized signature area" value={template.showSignature} onToggle={(v) => updateField('showSignature', v)} />
+                  {/* Default Notes */}
+                  <ToggleRow
+                    title="Default Notes"
+                    subtitle="Show transaction notes or delivery instructions"
+                    value={template.showNotes}
+                    onToggle={(v) => updateField('showNotes', v)}
+                  />
+                  {template.showNotes && (
+                    <View style={{ marginTop: 8, marginBottom: 12, padding: 12, backgroundColor: colors.bg.primary, borderRadius: 12, borderWidth: 1, borderColor }}>
+                      <Text style={[styles.inputLabel, { color: subTextColor }]}>Default Invoice Notes</Text>
+                      <TextInput
+                        value={template.defaultNotes || ''}
+                        onChangeText={(val) => updateField('defaultNotes', val)}
+                        placeholder="e.g. Goods once dispatched cannot be returned or redirected."
+                        placeholderTextColor={subTextColor}
+                        multiline
+                        numberOfLines={3}
+                        style={[styles.input, { backgroundColor: cardBg, color: textColor, borderColor, height: 68, textAlignVertical: 'top', paddingTop: 8 }]}
+                      />
+                      <View style={styles.quickTags}>
+                        {[
+                          'Goods once dispatched cannot be returned.',
+                          'Breakage during transport at buyer\'s risk.',
+                          'Site unloading must be completed within 2 hours.',
+                        ].map((t) => (
+                          <Pressable
+                            key={t}
+                            onPress={() => updateField('defaultNotes', t)}
+                            style={[
+                              styles.quickTag,
+                              {
+                                backgroundColor: template.defaultNotes === t ? colors.accent.primary : cardBg,
+                                borderColor: template.defaultNotes === t ? colors.accent.primary : borderColor,
+                              },
+                            ]}
+                          >
+                            <Text style={[styles.quickTagText, { color: template.defaultNotes === t ? '#FFF' : textColor, fontSize: 10 }]}>{t}</Text>
+                          </Pressable>
+                        ))}
+                      </View>
+                    </View>
+                  )}
+
+                  {/* Terms & Conditions */}
+                  <ToggleRow
+                    title="Terms & Conditions"
+                    subtitle="Show terms & conditions block on invoice"
+                    value={template.showTerms}
+                    onToggle={(v) => updateField('showTerms', v)}
+                  />
+                  {template.showTerms && (
+                    <View style={{ marginTop: 8, marginBottom: 12, padding: 12, backgroundColor: colors.bg.primary, borderRadius: 12, borderWidth: 1, borderColor }}>
+                      <Text style={[styles.inputLabel, { color: subTextColor }]}>Terms & Conditions Text</Text>
+                      <TextInput
+                        value={template.termsAndConditions || ''}
+                        onChangeText={(val) => updateField('termsAndConditions', val)}
+                        placeholder="Enter invoice terms & conditions..."
+                        placeholderTextColor={subTextColor}
+                        multiline
+                        numberOfLines={4}
+                        style={[styles.input, { backgroundColor: cardBg, color: textColor, borderColor, height: 85, textAlignVertical: 'top', paddingTop: 8 }]}
+                      />
+                      <View style={{ flexDirection: 'row', flexWrap: 'wrap', gap: 6, marginTop: 8 }}>
+                        <Pressable
+                          onPress={() => updateField('termsAndConditions', '1. Goods once sold will not be taken back.\n2. Payment due within 15 days from date of invoice.\n3. Subject to local jurisdiction.')}
+                          style={[styles.quickTag, { backgroundColor: cardBg, borderColor }]}
+                        >
+                          <Text style={[styles.quickTagText, { color: textColor }]}>⚡ Standard Commerce</Text>
+                        </Pressable>
+                        <Pressable
+                          onPress={() => updateField('termsAndConditions', '1. செங்கல் இறக்கும் போது வாடிக்கையாளர் சரிபார்த்துக் கொள்ள வேண்டும்.\n2. வாகனம் வந்த 2 மணி நேரத்திற்குள் இறக்கப்பட வேண்டும்.\n3. நிலுவைத் தொகை உடனே செலுத்தப்பட வேண்டும்.')}
+                          style={[styles.quickTag, { backgroundColor: cardBg, borderColor }]}
+                        >
+                          <Text style={[styles.quickTagText, { color: textColor }]}>⚡ Brick & Construction</Text>
+                        </Pressable>
+                        <Pressable
+                          onPress={() => updateField('termsAndConditions', '1. Payment due upon receipt.\n2. 18% annual interest charged on overdue balances past 15 days.\n3. Disputes subject to judicial jurisdiction.')}
+                          style={[styles.quickTag, { backgroundColor: cardBg, borderColor }]}
+                        >
+                          <Text style={[styles.quickTagText, { color: textColor }]}>⚡ Overdue Penalty</Text>
+                        </Pressable>
+                      </View>
+                    </View>
+                  )}
+
+                  {/* Signature & Rubber Stamp */}
+                  <ToggleRow
+                    title="Authorized Signature"
+                    subtitle="Show signature block and signatory details"
+                    value={template.showSignature}
+                    onToggle={(v) => updateField('showSignature', v)}
+                  />
+                  {template.showSignature && (
+                    <View style={{ marginTop: 8, marginBottom: 12, padding: 12, backgroundColor: colors.bg.primary, borderRadius: 12, borderWidth: 1, borderColor }}>
+                      <Text style={[styles.inputLabel, { color: subTextColor }]}>Signatory Designation / Title</Text>
+                      <TextInput
+                        value={template.signatureTitle || ''}
+                        onChangeText={(val) => updateField('signatureTitle', val)}
+                        placeholder="e.g. Authorized Signatory / மேலாளர்"
+                        placeholderTextColor={subTextColor}
+                        style={[styles.input, { backgroundColor: cardBg, color: textColor, borderColor, height: 40, marginBottom: 10 }]}
+                      />
+                      <Text style={[styles.inputLabel, { color: subTextColor }]}>Signatory Person Name (Optional)</Text>
+                      <TextInput
+                        value={template.signatoryName || ''}
+                        onChangeText={(val) => updateField('signatoryName', val)}
+                        placeholder="e.g. Managing Partner / Proprietor"
+                        placeholderTextColor={subTextColor}
+                        style={[styles.input, { backgroundColor: cardBg, color: textColor, borderColor, height: 40, marginBottom: 12 }]}
+                      />
+
+                      <ToggleRow
+                        title="Rubber Stamp / Seal (முத்திரை)"
+                        subtitle="Show circular approval stamp in signature box"
+                        value={Boolean(template.showRubberSeal)}
+                        onToggle={(v) => updateField('showRubberSeal', v)}
+                        isLast={!template.showRubberSeal}
+                      />
+                      {Boolean(template.showRubberSeal) && (
+                        <View style={{ marginTop: 8, paddingTop: 8, borderTopWidth: 1, borderTopColor: borderColor }}>
+                          <Text style={[styles.inputLabel, { color: subTextColor }]}>Stamp Text</Text>
+                          <TextInput
+                            value={template.rubberSealText || ''}
+                            onChangeText={(val) => updateField('rubberSealText', val)}
+                            placeholder="e.g. ★ SEAL / முத்திரை ★"
+                            placeholderTextColor={subTextColor}
+                            style={[styles.input, { backgroundColor: cardBg, color: textColor, borderColor, height: 40 }]}
+                          />
+                          <View style={styles.quickTags}>
+                            {['★ SEAL / முத்திரை ★', '★ VERIFIED & APPROVED ★', '★ FOR BUSINESS CORP ★'].map((t) => (
+                              <Pressable
+                                key={t}
+                                onPress={() => updateField('rubberSealText', t)}
+                                style={[
+                                  styles.quickTag,
+                                  {
+                                    backgroundColor: template.rubberSealText === t ? colors.accent.primary : cardBg,
+                                    borderColor: template.rubberSealText === t ? colors.accent.primary : borderColor,
+                                  },
+                                ]}
+                              >
+                                <Text style={[styles.quickTagText, { color: template.rubberSealText === t ? '#FFF' : textColor, fontSize: 10 }]}>{t}</Text>
+                              </Pressable>
+                            ))}
+                          </View>
+                        </View>
+                      )}
+                    </View>
+                  )}
+
+                  {/* QR Code */}
                   <ToggleRow title="QR Code" subtitle="Show payment QR code" value={template.showQrCode} onToggle={(v) => updateField('showQrCode', v)} />
                   {template.showQrCode && (
                     <View style={{ marginTop: 10, marginBottom: 12, padding: 12, backgroundColor: colors.bg.primary, borderRadius: 12, borderWidth: 1, borderColor }}>
@@ -1491,7 +2289,49 @@ function InvoiceManagementScreen() {
                       </View>
                     </View>
                   )}
-                  <ToggleRow title="Thank You Note" subtitle="Show footer thank you message" value={template.showThankYouNote} onToggle={(v) => updateField('showThankYouNote', v)} />
+
+                  {/* Thank You Note */}
+                  <ToggleRow
+                    title="Thank You Note"
+                    subtitle="Show footer thank you message"
+                    value={template.showThankYouNote}
+                    onToggle={(v) => updateField('showThankYouNote', v)}
+                  />
+                  {template.showThankYouNote && (
+                    <View style={{ marginTop: 8, marginBottom: 12, padding: 12, backgroundColor: colors.bg.primary, borderRadius: 12, borderWidth: 1, borderColor }}>
+                      <Text style={[styles.inputLabel, { color: subTextColor }]}>Thank You Note Text</Text>
+                      <TextInput
+                        value={template.thankYouNote || ''}
+                        onChangeText={(val) => updateField('thankYouNote', val)}
+                        placeholder="e.g. Thank you for your business! 🙏"
+                        placeholderTextColor={subTextColor}
+                        style={[styles.input, { backgroundColor: cardBg, color: textColor, borderColor, height: 42 }]}
+                      />
+                      <View style={styles.quickTags}>
+                        {[
+                          'Thank you for your business! 🙏',
+                          'தங்களின் மேலான ஆதரவிற்கு மிக்க நன்றி! 🙏',
+                          'We appreciate your prompt payment! Have a great day.',
+                        ].map((t) => (
+                          <Pressable
+                            key={t}
+                            onPress={() => updateField('thankYouNote', t)}
+                            style={[
+                              styles.quickTag,
+                              {
+                                backgroundColor: template.thankYouNote === t ? colors.accent.primary : cardBg,
+                                borderColor: template.thankYouNote === t ? colors.accent.primary : borderColor,
+                              },
+                            ]}
+                          >
+                            <Text style={[styles.quickTagText, { color: template.thankYouNote === t ? '#FFF' : textColor, fontSize: 10.5 }]}>{t}</Text>
+                          </Pressable>
+                        ))}
+                      </View>
+                    </View>
+                  )}
+
+                  {/* Footer Branding */}
                   <ToggleRow title="Footer Branding" subtitle="Show 'Generated via...' text" value={template.showFooterBranding} onToggle={(v) => updateField('showFooterBranding', v)} isLast />
                   {template.showFooterBranding && (
                     <View style={{ marginTop: 12 }}>
@@ -1507,6 +2347,77 @@ function InvoiceManagementScreen() {
                   )}
                 </Card>
 
+                {/* Watermark Section */}
+                <SectionHeading text="WATERMARK" marginTop={20} />
+                <Card>
+                  <ToggleRow
+                    title="Invoice Watermark"
+                    subtitle="Display faint diagonal watermark across invoice background"
+                    value={Boolean(template.watermarkEnabled)}
+                    onToggle={(v) => updateField('watermarkEnabled', v)}
+                    isLast={!template.watermarkEnabled}
+                  />
+                  {Boolean(template.watermarkEnabled) && (
+                    <View style={{ marginTop: 12, paddingTop: 12, borderTopWidth: 1, borderTopColor: borderColor }}>
+                      <Text style={[styles.inputLabel, { color: subTextColor }]}>Watermark Text</Text>
+                      <TextInput
+                        value={template.watermarkText || ''}
+                        onChangeText={(val) => updateField('watermarkText', val.toUpperCase())}
+                        placeholder="e.g. ORIGINAL, PAID, ESTIMATE, DUPLICATE"
+                        placeholderTextColor={subTextColor}
+                        autoCapitalize="characters"
+                        style={[styles.input, { backgroundColor: colors.bg.primary, color: textColor, borderColor }]}
+                      />
+                      <View style={styles.quickTags}>
+                        {['PAID', 'ESTIMATE', 'ORIGINAL', 'DUPLICATE', 'CONFIDENTIAL', 'SAMPLE'].map((t) => (
+                          <Pressable
+                            key={t}
+                            onPress={() => updateField('watermarkText', t)}
+                            style={[
+                              styles.quickTag,
+                              {
+                                backgroundColor: template.watermarkText === t ? colors.accent.primary : colors.bg.primary,
+                                borderColor: template.watermarkText === t ? colors.accent.primary : borderColor,
+                              },
+                            ]}
+                          >
+                            <Text style={[styles.quickTagText, { color: template.watermarkText === t ? '#FFF' : textColor }]}>{t}</Text>
+                          </Pressable>
+                        ))}
+                      </View>
+
+                      <View style={{ marginTop: 12 }}>
+                        <Text style={[styles.inputLabel, { color: subTextColor }]}>Watermark Intensity / Opacity</Text>
+                        <View style={styles.chipRow}>
+                          {[
+                            { label: 'Faint (6%)', val: 0.06 },
+                            { label: 'Subtle (12%)', val: 0.12 },
+                            { label: 'Normal (18%)', val: 0.18 },
+                            { label: 'Bold (25%)', val: 0.25 },
+                          ].map((op) => {
+                            const isSel = (template.watermarkOpacity !== undefined ? template.watermarkOpacity : 0.12) === op.val;
+                            return (
+                              <Pressable
+                                key={op.label}
+                                onPress={() => updateField('watermarkOpacity', op.val)}
+                                style={[
+                                  styles.chip,
+                                  {
+                                    backgroundColor: isSel ? colors.accent.primary : colors.bg.primary,
+                                    borderColor: isSel ? colors.accent.primary : borderColor,
+                                  },
+                                ]}
+                              >
+                                <Text style={[styles.chipText, { color: isSel ? '#FFF' : textColor, fontSize: 11 }]}>{op.label}</Text>
+                              </Pressable>
+                            );
+                          })}
+                        </View>
+                      </View>
+                    </View>
+                  )}
+                </Card>
+
                 <SectionHeading text="PAYMENT STATUS" marginTop={20} />
                 <Card>
                   <ToggleRow title="Status Badge" subtitle="Show PAID/PENDING badge in header" value={template.showPaymentStatus} onToggle={(v) => updateField('showPaymentStatus', v)} isLast />
@@ -1517,7 +2428,7 @@ function InvoiceManagementScreen() {
             {/* ────────── TAB 3: TABLE & SUMMARY ────────── */}
             {activeTab === 'TABLE' && (
               <View style={styles.sectionContainer}>
-                <SectionHeading text="TABLE STYLE" />
+                <SectionHeading text="TABLE STYLE & DENSITY" />
                 <Card>
                   <Text style={[styles.cardTitle, { color: textColor }]}>Items Table Layout</Text>
                   <Text style={[styles.cardDesc, { color: subTextColor }]}>
@@ -1529,6 +2440,16 @@ function InvoiceManagementScreen() {
                     onSelect={(v) => updateField('tableStyle', v)}
                     renderLabel={(v) => v.charAt(0).toUpperCase() + v.slice(1)}
                   />
+
+                  <View style={{ marginTop: 14, paddingTop: 12, borderTopWidth: 1, borderTopColor: borderColor }}>
+                    <Text style={[styles.inputLabel, { color: subTextColor }]}>Row Density & Spacing</Text>
+                    <ChipSelector<TableDensity>
+                      options={['compact', 'normal', 'relaxed']}
+                      selected={template.tableDensity || 'normal'}
+                      onSelect={(v) => updateField('tableDensity', v)}
+                      renderLabel={(v) => v === 'compact' ? 'Compact (6px)' : v === 'relaxed' ? 'Relaxed (14px)' : 'Standard (10px)'}
+                    />
+                  </View>
                 </Card>
 
                 <SectionHeading text="TABLE COLUMNS" marginTop={20} />
@@ -1536,6 +2457,91 @@ function InvoiceManagementScreen() {
                   <ToggleRow title="Row Index (#)" subtitle="Show item number column" value={template.showItemIndex} onToggle={(v) => updateField('showItemIndex', v)} />
                   <ToggleRow title="Unit Column" subtitle="Show unit alongside quantity (pcs, kg, etc.)" value={template.showItemUnit} onToggle={(v) => updateField('showItemUnit', v)} />
                   <ToggleRow title="Rate Column" subtitle="Show per-unit price column" value={template.showItemRate} onToggle={(v) => updateField('showItemRate', v)} isLast />
+                </Card>
+
+                <SectionHeading text="CUSTOM COLUMN HEADINGS" marginTop={20} />
+                <Card>
+                  <Text style={[styles.cardTitle, { color: textColor }]}>Rename Table Columns</Text>
+                  <Text style={[styles.cardDesc, { color: subTextColor }]}>
+                    Customize the header text displayed for each column in the items table.
+                  </Text>
+
+                  <View style={{ gap: 10 }}>
+                    <View>
+                      <Text style={[styles.inputLabel, { color: subTextColor }]}># / S.No Column Label</Text>
+                      <TextInput
+                        value={template.customColumnLabels?.index || ''}
+                        onChangeText={(val) => updateColumnLabel('index', val)}
+                        placeholder="Default: # or எண்"
+                        placeholderTextColor={subTextColor}
+                        style={[styles.input, { backgroundColor: colors.bg.primary, color: textColor, borderColor, height: 40 }]}
+                      />
+                    </View>
+
+                    <View>
+                      <Text style={[styles.inputLabel, { color: subTextColor }]}>Item & Description Column Label</Text>
+                      <TextInput
+                        value={template.customColumnLabels?.item || ''}
+                        onChangeText={(val) => updateColumnLabel('item', val)}
+                        placeholder="Default: Item & Description or பொருள்"
+                        placeholderTextColor={subTextColor}
+                        style={[styles.input, { backgroundColor: colors.bg.primary, color: textColor, borderColor, height: 40 }]}
+                      />
+                    </View>
+
+                    <View style={{ flexDirection: 'row', gap: 10 }}>
+                      <View style={{ flex: 1 }}>
+                        <Text style={[styles.inputLabel, { color: subTextColor }]}>Quantity Column Label</Text>
+                        <TextInput
+                          value={template.customColumnLabels?.qty || ''}
+                          onChangeText={(val) => updateColumnLabel('qty', val)}
+                          placeholder="Default: Qty or அளவு"
+                          placeholderTextColor={subTextColor}
+                          style={[styles.input, { backgroundColor: colors.bg.primary, color: textColor, borderColor, height: 40 }]}
+                        />
+                      </View>
+                      <View style={{ flex: 1 }}>
+                        <Text style={[styles.inputLabel, { color: subTextColor }]}>Unit Rate Column Label</Text>
+                        <TextInput
+                          value={template.customColumnLabels?.rate || ''}
+                          onChangeText={(val) => updateColumnLabel('rate', val)}
+                          placeholder="Default: Rate or விலை"
+                          placeholderTextColor={subTextColor}
+                          style={[styles.input, { backgroundColor: colors.bg.primary, color: textColor, borderColor, height: 40 }]}
+                        />
+                      </View>
+                    </View>
+
+                    <View>
+                      <Text style={[styles.inputLabel, { color: subTextColor }]}>Amount / Total Column Label</Text>
+                      <TextInput
+                        value={template.customColumnLabels?.amount || ''}
+                        onChangeText={(val) => updateColumnLabel('amount', val)}
+                        placeholder="Default: Amount or மொத்தம்"
+                        placeholderTextColor={subTextColor}
+                        style={[styles.input, { backgroundColor: colors.bg.primary, color: textColor, borderColor, height: 40 }]}
+                      />
+                    </View>
+
+                    {template.customColumnLabels && Object.keys(template.customColumnLabels).length > 0 && (
+                      <Pressable
+                        onPress={() => {
+                          setTemplate((prev) => {
+                            const updated = { ...prev };
+                            delete updated.customColumnLabels;
+                            return updated;
+                          });
+                          setHasChanges(true);
+                        }}
+                        style={{ flexDirection: 'row', alignItems: 'center', justifyContent: 'center', gap: 4, marginTop: 4, paddingVertical: 8 }}
+                      >
+                        <MaterialIcons name="restore" size={16} color={colors.accent.primary} />
+                        <Text style={{ fontSize: 12, fontWeight: '700', color: colors.accent.primary }}>
+                          Reset Column Headings to Default
+                        </Text>
+                      </Pressable>
+                    )}
+                  </View>
                 </Card>
 
                 <SectionHeading text="TABLE HEADER COLOR" marginTop={20} />
@@ -1586,7 +2592,90 @@ function InvoiceManagementScreen() {
             {/* ────────── TAB 4: TYPOGRAPHY & STYLE ────────── */}
             {activeTab === 'STYLE' && (
               <View style={styles.sectionContainer}>
-                <SectionHeading text="TYPOGRAPHY" />
+                <SectionHeading text="PAPER SIZE & MARGINS" />
+                <Card>
+                  <Text style={[styles.cardTitle, { color: textColor }]}>Page Format</Text>
+                  <Text style={[styles.cardDesc, { color: subTextColor }]}>
+                    Choose the target paper size for PDF downloads and printing.
+                  </Text>
+                  <ChipSelector<'A4' | 'LETTER' | 'THERMAL_80MM'>
+                    options={['A4', 'LETTER', 'THERMAL_80MM']}
+                    selected={template.paperSize || 'A4'}
+                    onSelect={(v) => updateField('paperSize', v)}
+                    renderLabel={(v) => v === 'THERMAL_80MM' ? 'Thermal 80mm' : v}
+                  />
+
+                  <View style={{ marginTop: 14, paddingTop: 12, borderTopWidth: 1, borderTopColor: borderColor }}>
+                    <Text style={[styles.inputLabel, { color: subTextColor }]}>Page Margins</Text>
+                    <ChipSelector<PageMargin>
+                      options={['compact', 'normal', 'wide']}
+                      selected={template.pageMargin || 'normal'}
+                      onSelect={(v) => updateField('pageMargin', v)}
+                      renderLabel={(v) => v === 'compact' ? 'Compact (10mm)' : v === 'wide' ? 'Generous (25mm)' : 'Standard (20mm)'}
+                    />
+                  </View>
+                </Card>
+
+                <SectionHeading text="CURRENCY & NUMBER FORMATTING" marginTop={20} />
+                <Card>
+                  <Text style={[styles.cardTitle, { color: textColor }]}>Currency Symbol</Text>
+                  <Text style={[styles.cardDesc, { color: subTextColor }]}>
+                    Symbol prepended to monetary amounts across the invoice.
+                  </Text>
+                  <View style={styles.chipRow}>
+                    {['₹', 'Rs.', 'INR', '$', 'None'].map((sym) => {
+                      const isSel = (template.currencySymbol ?? '₹') === sym;
+                      return (
+                        <Pressable
+                          key={sym}
+                          onPress={() => updateField('currencySymbol', sym)}
+                          style={[
+                            styles.chip,
+                            {
+                              backgroundColor: isSel ? colors.accent.primary : colors.bg.primary,
+                              borderColor: isSel ? colors.accent.primary : borderColor,
+                            },
+                          ]}
+                        >
+                          <Text style={[styles.chipText, { color: isSel ? '#FFF' : textColor, fontWeight: isSel ? '700' : '500' }]}>
+                            {sym}
+                          </Text>
+                        </Pressable>
+                      );
+                    })}
+                  </View>
+
+                  <View style={{ marginTop: 14, paddingTop: 12, borderTopWidth: 1, borderTopColor: borderColor }}>
+                    <Text style={[styles.inputLabel, { color: subTextColor }]}>Decimal Places</Text>
+                    <View style={styles.chipRow}>
+                      {[
+                        { label: '2 Decimals (e.g. ₹1,250.00)', val: 2 },
+                        { label: 'No Decimals (e.g. ₹1,250)', val: 0 },
+                      ].map((dp) => {
+                        const isSel = (template.decimalPlaces ?? 2) === dp.val;
+                        return (
+                          <Pressable
+                            key={dp.val}
+                            onPress={() => updateField('decimalPlaces', dp.val)}
+                            style={[
+                              styles.chip,
+                              {
+                                backgroundColor: isSel ? colors.accent.primary : colors.bg.primary,
+                                borderColor: isSel ? colors.accent.primary : borderColor,
+                              },
+                            ]}
+                          >
+                            <Text style={[styles.chipText, { color: isSel ? '#FFF' : textColor, fontWeight: isSel ? '700' : '500' }]}>
+                              {dp.label}
+                            </Text>
+                          </Pressable>
+                        );
+                      })}
+                    </View>
+                  </View>
+                </Card>
+
+                <SectionHeading text="TYPOGRAPHY" marginTop={20} />
                 <Card>
                   <Text style={[styles.cardTitle, { color: textColor }]}>Font Family</Text>
                   <Text style={[styles.cardDesc, { color: subTextColor }]}>
@@ -1645,7 +2734,7 @@ function InvoiceManagementScreen() {
                 <Card>
                   <Text style={[styles.cardTitle, { color: textColor }]}>Border Style</Text>
                   <ChipSelector<BorderStyle>
-                    options={['solid', 'dashed', 'none']}
+                    options={['solid', 'dashed', 'double', 'none']}
                     selected={template.borderStyle}
                     onSelect={(v) => updateField('borderStyle', v)}
                     renderLabel={(v) => v.charAt(0).toUpperCase() + v.slice(1)}
@@ -1718,6 +2807,780 @@ function InvoiceManagementScreen() {
             )}
           </View>
         )}
+      </>
+    ) : (
+      /* ═══════════════════════ APPA ESTIMATE BILL DEDICATED VIEW ═══════════════════════ */
+      <ScrollView
+        style={styles.scrollContent}
+        showsVerticalScrollIndicator={false}
+        keyboardShouldPersistTaps="handled"
+        removeClippedSubviews={false}
+      >
+        <View style={styles.sectionContainer}>
+          {/* Banner / Info Card */}
+          <View
+            style={{
+              backgroundColor: '#B91C1C10',
+              borderRadius: 12,
+              borderWidth: 1,
+              borderColor: '#B91C1C30',
+              padding: 12,
+              marginBottom: 16,
+              flexDirection: 'row',
+              alignItems: 'center',
+              gap: 10,
+            }}
+          >
+            <MaterialIcons name="auto-stories" size={24} color="#B91C1C" />
+            <View style={{ flex: 1 }}>
+              <Text style={{ fontSize: 13, fontWeight: '800', color: '#B91C1C' }}>
+                Appa Estimate Bill Settings (அப்பா எஸ்டிமேட் அமைப்புகள்)
+              </Text>
+              <Text style={{ fontSize: 11, color: textColor, marginTop: 2 }}>
+                Customize divine invocation, branding, contact numbers, 6-column headings, and bill theme for account statements.
+              </Text>
+            </View>
+            <Pressable
+              onPress={resetAppaSettings}
+              style={{
+                paddingHorizontal: 8,
+                paddingVertical: 5,
+                borderRadius: 8,
+                backgroundColor: '#EF444418',
+              }}
+              hitSlop={8}
+            >
+              <MaterialIcons name="restart-alt" size={16} color="#EF4444" />
+            </Pressable>
+          </View>
+
+          {/* 1. DIVINE INVOCATION (கடவுள் வாழ்த்து) */}
+          <SectionHeading text="1. DIVINE INVOCATION (கடவுள் வாழ்த்து)" />
+          <Card>
+            <Text style={[styles.inputLabel, { color: subTextColor }]}>
+              Invocation Heading (மங்கள வாழ்த்து வாசகம்)
+            </Text>
+            <TextInput
+              style={[styles.input, { backgroundColor: colors.bg.primary, borderColor, color: textColor }]}
+              value={appaSettings.invocationText}
+              onChangeText={(val) => updateAppaField('invocationText', val)}
+              placeholder="|| ஸ்ரீ சொக்கநாச்சி அம்மன் துணை ||"
+              placeholderTextColor={subTextColor}
+            />
+
+            <Text style={[styles.inputLabel, { color: subTextColor, marginTop: 12 }]}>
+              Quick Presets (தேர்ந்தெடுக்கவும்):
+            </Text>
+            <View style={styles.quickTags}>
+              {[
+                '|| ஸ்ரீ சொக்கநாச்சி அம்மன் துணை ||',
+                '|| ஸ்ரீ விநாயகர் துணை ||',
+                '|| ஸ்ரீ முருகன் துணை ||',
+                '|| ஓம் நமசிவாய ||',
+                '|| ஸ்ரீ கருப்பண்ணசாமி துணை ||',
+              ].map((preset) => (
+                <Pressable
+                  key={preset}
+                  onPress={() => updateAppaField('invocationText', preset)}
+                  style={[
+                    styles.quickTag,
+                    {
+                      backgroundColor: appaSettings.invocationText === preset ? '#B91C1C20' : colors.bg.primary,
+                      borderColor: appaSettings.invocationText === preset ? '#B91C1C' : borderColor,
+                    },
+                  ]}
+                >
+                  <Text
+                    style={[
+                      styles.quickTagText,
+                      { color: appaSettings.invocationText === preset ? '#B91C1C' : textColor },
+                    ]}
+                  >
+                    {preset}
+                  </Text>
+                </Pressable>
+              ))}
+            </View>
+
+            <Text style={[styles.inputLabel, { color: subTextColor, marginTop: 14 }]}>
+              Invocation Text Color (எழுத்து வண்ணம்)
+            </Text>
+            <ColorPicker
+              colors={['#B91C1C', '#881337', '#B45309', '#1E3A8A', '#064E3B', '#0F172A']}
+              selected={appaSettings.invocationColor || '#B91C1C'}
+              onSelect={(c) => updateAppaField('invocationColor', c)}
+            />
+
+            <FontSizeController
+              label="Divine Invocation Size (வாழ்த்து எழுத்து அளவு)"
+              value={appaSettings.invocationFontSize || 14}
+              min={10}
+              max={26}
+              presets={[12, 14, 16, 18, 20, 22]}
+              onChange={(sz) => updateAppaField('invocationFontSize', sz)}
+              accentColor={appaSettings.invocationColor || '#B91C1C'}
+            />
+          </Card>
+
+          {/* 2. BUSINESS BRANDING, ADDRESS & PHONES */}
+          <SectionHeading text="2. BUSINESS BRANDING, ADDRESS & PHONES (நிறுவனம், முகவரி & தொலைபேசி)" marginTop={16} />
+          <Card>
+            {/* Company Logo in Header */}
+            <ToggleRow
+              title="Company Logo (நிறுவன லோகோ)"
+              subtitle="Show business logo at top-left corner of the bill"
+              value={Boolean(appaSettings.showCompanyLogo !== false)}
+              onToggle={(v) => updateAppaField('showCompanyLogo', v)}
+            />
+
+            {appaSettings.showCompanyLogo !== false && (
+              <View style={{ marginTop: 10, marginBottom: 14, padding: 12, borderRadius: 10, backgroundColor: isDark ? '#1E293B30' : '#F8FAFC', borderWidth: 1, borderColor }}>
+                <Text style={[styles.inputLabel, { color: subTextColor, marginBottom: 8 }]}>
+                  Logo Preview & Upload (லோகோ முன்னோட்டம் & பதிவேற்றம்)
+                </Text>
+                <View style={{ flexDirection: 'row', alignItems: 'center', gap: 12 }}>
+                  {effectiveAppaLogoUri ? (
+                    <View style={{ width: 68, height: 68, borderRadius: 8, borderWidth: 1, borderColor, backgroundColor: colors.bg.primary, overflow: 'hidden', alignItems: 'center', justifyContent: 'center' }}>
+                      <Image source={{ uri: effectiveAppaLogoUri }} style={{ width: '100%', height: '100%' }} contentFit="contain" />
+                    </View>
+                  ) : (
+                    <View style={{ width: 68, height: 68, borderRadius: 8, borderWidth: 1.5, borderStyle: 'dashed', borderColor, alignItems: 'center', justifyContent: 'center' }}>
+                      <MaterialIcons name="image" size={28} color={subTextColor} />
+                      <Text style={{ fontSize: 9, color: subTextColor, marginTop: 2 }}>No Logo</Text>
+                    </View>
+                  )}
+                  <View style={{ flex: 1, gap: 6 }}>
+                    <View style={{ flexDirection: 'row', gap: 6 }}>
+                      <Pressable
+                        onPress={handlePickAppaLogoFromGallery}
+                        style={{ flex: 1, flexDirection: 'row', alignItems: 'center', justifyContent: 'center', gap: 4, paddingVertical: 8, paddingHorizontal: 10, borderRadius: 8, backgroundColor: colors.accent.primary }}
+                      >
+                        <MaterialIcons name="photo-library" size={16} color="#FFF" />
+                        <Text style={{ fontSize: 11, fontWeight: '700', color: '#FFF' }}>Gallery</Text>
+                      </Pressable>
+                      <Pressable
+                        onPress={handlePickAppaLogoFromCamera}
+                        style={{ flex: 1, flexDirection: 'row', alignItems: 'center', justifyContent: 'center', gap: 4, paddingVertical: 8, paddingHorizontal: 10, borderRadius: 8, backgroundColor: isDark ? '#334155' : '#E2E8F0' }}
+                      >
+                        <MaterialIcons name="photo-camera" size={16} color={textColor} />
+                        <Text style={{ fontSize: 11, fontWeight: '700', color: textColor }}>Camera</Text>
+                      </Pressable>
+                    </View>
+                    {appaSettings.companyLogoUri ? (
+                      <Pressable
+                        onPress={() => updateAppaField('companyLogoUri', '')}
+                        style={{ paddingVertical: 4, alignItems: 'center' }}
+                      >
+                        <Text style={{ fontSize: 11, fontWeight: '700', color: '#EF4444' }}>
+                          Reset to Profile Logo
+                        </Text>
+                      </Pressable>
+                    ) : null}
+                  </View>
+                </View>
+              </View>
+            )}
+
+            <Text style={[styles.inputLabel, { color: subTextColor }]}>
+              Company Name Override (நிறுவனப் பெயர்)
+            </Text>
+            <TextInput
+              style={[styles.input, { backgroundColor: colors.bg.primary, borderColor, color: textColor }]}
+              value={appaSettings.customCompanyName || ''}
+              onChangeText={(val) => updateAppaField('customCompanyName', val)}
+              placeholder="Default: அம்மன் ஹாலோ பிரிக்ஸ்"
+              placeholderTextColor={subTextColor}
+            />
+
+            <Text style={[styles.inputLabel, { color: subTextColor, marginTop: 10 }]}>
+              Company Name Color (பெயர் எழுத்து வண்ணம்)
+            </Text>
+            <ColorPicker
+              colors={['#0F172A', '#1E3A8A', '#B91C1C', '#064E3B', '#451A03', '#4C1D95', '#B45309']}
+              selected={appaSettings.companyNameColor || '#0F172A'}
+              onSelect={(c) => updateAppaField('companyNameColor', c)}
+            />
+
+            <FontSizeController
+              label="Company Name Font Size (பெயர் எழுத்து அளவு)"
+              value={appaSettings.companyNameFontSize || 20}
+              min={14}
+              max={32}
+              presets={[16, 18, 20, 22, 24, 28]}
+              onChange={(sz) => updateAppaField('companyNameFontSize', sz)}
+              accentColor={appaSettings.companyNameColor || '#0F172A'}
+            />
+
+            <Text style={[styles.inputLabel, { color: subTextColor, marginTop: 14 }]}>
+              Company Address Override (நிறுவன முகவரி)
+            </Text>
+            <TextInput
+              style={[styles.input, { backgroundColor: colors.bg.primary, borderColor, color: textColor }]}
+              value={appaSettings.customAddress || ''}
+              onChangeText={(val) => updateAppaField('customAddress', val)}
+              placeholder="Default: 11, கரூர் மெயின் ரோடு, தளவாபாளையம்"
+              placeholderTextColor={subTextColor}
+            />
+
+            <Text style={[styles.inputLabel, { color: subTextColor, marginTop: 10 }]}>
+              Company Address Color (முகவரி எழுத்து வண்ணம்)
+            </Text>
+            <ColorPicker
+              colors={['#475569', '#0F172A', '#1E3A8A', '#B91C1C', '#064E3B', '#78350F']}
+              selected={appaSettings.companyAddressColor || '#475569'}
+              onSelect={(c) => updateAppaField('companyAddressColor', c)}
+            />
+
+            <FontSizeController
+              label="Company Address Font Size (முகவரி எழுத்து அளவு)"
+              value={appaSettings.companyAddressFontSize || 12}
+              min={9}
+              max={18}
+              presets={[10, 11, 12, 13, 14, 16]}
+              onChange={(sz) => updateAppaField('companyAddressFontSize', sz)}
+              accentColor={appaSettings.companyAddressColor || '#475569'}
+            />
+
+            <View style={{ marginTop: 14, paddingTop: 12, borderTopWidth: 1, borderTopColor: borderColor }}>
+              <View style={{ flexDirection: 'row', justifyContent: 'space-between', alignItems: 'center', marginBottom: 8 }}>
+                <Text style={[styles.inputLabel, { color: subTextColor, marginBottom: 0 }]}>
+                  Contact Phone Numbers (தொடர்பு எண்கள்)
+                </Text>
+                <Pressable
+                  onPress={handleAddPhone}
+                  style={{
+                    flexDirection: 'row',
+                    alignItems: 'center',
+                    gap: 4,
+                    paddingHorizontal: 10,
+                    paddingVertical: 5,
+                    borderRadius: 8,
+                    backgroundColor: colors.accent.primary + '18',
+                    borderWidth: 1,
+                    borderColor: colors.accent.primary + '40',
+                  }}
+                >
+                  <MaterialIcons name="add-call" size={16} color={colors.accent.primary} />
+                  <Text style={{ fontSize: 11, fontWeight: '700', color: colors.accent.primary }}>
+                    + Add Phone (எண் சேர்)
+                  </Text>
+                </Pressable>
+              </View>
+
+              <View style={{ gap: 8 }}>
+                {phoneList.map((phone, idx) => (
+                  <View
+                    key={idx}
+                    style={{
+                      flexDirection: 'row',
+                      alignItems: 'center',
+                      gap: 8,
+                    }}
+                  >
+                    <View
+                      style={{
+                        width: 34,
+                        height: 42,
+                        borderRadius: 8,
+                        backgroundColor: colors.bg.primary,
+                        borderWidth: 1,
+                        borderColor,
+                        justifyContent: 'center',
+                        alignItems: 'center',
+                      }}
+                    >
+                      <Text style={{ fontSize: 11, fontWeight: '800', color: colors.accent.primary }}>
+                        #{idx + 1}
+                      </Text>
+                    </View>
+                    <TextInput
+                      style={[
+                        styles.input,
+                        {
+                          flex: 1,
+                          backgroundColor: colors.bg.primary,
+                          borderColor,
+                          color: textColor,
+                          height: 42,
+                        },
+                      ]}
+                      value={phone}
+                      onChangeText={(val) => handleUpdatePhone(idx, val)}
+                      placeholder={`Phone ${idx + 1} (e.g. 99430 51509)`}
+                      placeholderTextColor={subTextColor}
+                      keyboardType="phone-pad"
+                    />
+                    <Pressable
+                      onPress={() => handleRemovePhone(idx)}
+                      style={{
+                        width: 38,
+                        height: 42,
+                        borderRadius: 8,
+                        backgroundColor: '#EF444415',
+                        borderWidth: 1,
+                        borderColor: '#EF444430',
+                        justifyContent: 'center',
+                        alignItems: 'center',
+                      }}
+                      hitSlop={6}
+                    >
+                      <MaterialIcons name="delete-outline" size={20} color="#EF4444" />
+                    </Pressable>
+                  </View>
+                ))}
+              </View>
+
+              <Text style={{ fontSize: 10, color: subTextColor, marginTop: 8 }}>
+                All added phone numbers will appear stacked one-by-one in the bill header.
+              </Text>
+            </View>
+          </Card>
+
+          {/* 3. TITLES & CUSTOMER HONORIFIC */}
+          <SectionHeading text="3. BILL TITLES & CUSTOMER HONORIFIC (தலைப்பு & அவர்கள் விபரம்)" marginTop={16} />
+          <Card>
+            <Text style={[styles.inputLabel, { color: subTextColor }]}>
+              English Title (ஆங்கிலத் தலைப்பு)
+            </Text>
+            <TextInput
+              style={[styles.input, { backgroundColor: colors.bg.primary, borderColor, color: textColor }]}
+              value={appaSettings.titleEnglish}
+              onChangeText={(val) => updateAppaField('titleEnglish', val)}
+              placeholder="ESTEEMATE"
+              placeholderTextColor={subTextColor}
+            />
+
+            <Text style={[styles.inputLabel, { color: subTextColor, marginTop: 10 }]}>
+              English Title Color (ஆங்கிலத் தலைப்பு வண்ணம்)
+            </Text>
+            <ColorPicker
+              colors={['#0F172A', '#1E3A8A', '#B91C1C', '#064E3B', '#451A03', '#4C1D95', '#D97706']}
+              selected={appaSettings.titleEnglishColor || '#0F172A'}
+              onSelect={(c) => updateAppaField('titleEnglishColor', c)}
+            />
+
+            <FontSizeController
+              label="English Title Font Size (ஆங்கிலத் தலைப்பு அளவு)"
+              value={appaSettings.titleEnglishFontSize || 28}
+              min={18}
+              max={38}
+              presets={[22, 24, 28, 30, 32, 36]}
+              onChange={(sz) => updateAppaField('titleEnglishFontSize', sz)}
+              accentColor={appaSettings.titleEnglishColor || '#0F172A'}
+            />
+
+            <Text style={[styles.inputLabel, { color: subTextColor, marginTop: 14 }]}>
+              Tamil Subtitle (தமிழ் துணைத்தலைப்பு)
+            </Text>
+            <TextInput
+              style={[styles.input, { backgroundColor: colors.bg.primary, borderColor, color: textColor }]}
+              value={appaSettings.titleTamil}
+              onChangeText={(val) => updateAppaField('titleTamil', val)}
+              placeholder="மதிப்பீட்டு பில் / ESTIMATE BILL"
+              placeholderTextColor={subTextColor}
+            />
+
+            <Text style={[styles.inputLabel, { color: subTextColor, marginTop: 10 }]}>
+              Tamil Subtitle Color (துணைத்தலைப்பு வண்ணம்)
+            </Text>
+            <ColorPicker
+              colors={['#475569', '#0F172A', '#1E3A8A', '#B91C1C', '#064E3B', '#78350F']}
+              selected={appaSettings.titleTamilColor || '#475569'}
+              onSelect={(c) => updateAppaField('titleTamilColor', c)}
+            />
+
+            <FontSizeController
+              label="Tamil Subtitle Font Size (துணைத்தலைப்பு அளவு)"
+              value={appaSettings.titleTamilFontSize || 11}
+              min={9}
+              max={18}
+              presets={[9, 10, 11, 12, 13, 14]}
+              onChange={(sz) => updateAppaField('titleTamilFontSize', sz)}
+              accentColor={appaSettings.titleTamilColor || '#475569'}
+            />
+
+            <View style={{ marginTop: 14, paddingTop: 14, borderTopWidth: 1, borderTopColor: borderColor }}>
+              <Text style={{ fontSize: 13, fontWeight: '700', color: textColor, marginBottom: 4 }}>
+                Customer Honorific ('அவர்கள்' மரியாதை சொல் விபரம்)
+              </Text>
+              <Text style={{ fontSize: 11, color: subTextColor, marginBottom: 10 }}>
+                வாடிக்கையாளர் பெயரின் இறுதியில் வரும் 'அவர்கள்' என்பதற்கான வண்ணம் மற்றும் எழுத்து அளவு.
+              </Text>
+
+              <Text style={[styles.inputLabel, { color: subTextColor }]}>
+                Customer Honorific Color ('அவர்கள்' வண்ணம்)
+              </Text>
+              <ColorPicker
+                colors={['#64748B', '#0F172A', '#1E3A8A', '#B91C1C', '#064E3B', '#78350F', '#4C1D95']}
+                selected={appaSettings.customerHonorificColor || '#64748B'}
+                onSelect={(c) => updateAppaField('customerHonorificColor', c)}
+              />
+
+              <FontSizeController
+                label="Customer Honorific Font Size ('அவர்கள்' அளவு)"
+                value={appaSettings.customerHonorificFontSize || 12}
+                min={9}
+                max={20}
+                presets={[10, 11, 12, 13, 14, 16]}
+                onChange={(sz) => updateAppaField('customerHonorificFontSize', sz)}
+                accentColor={appaSettings.customerHonorificColor || '#64748B'}
+              />
+            </View>
+          </Card>
+
+          {/* 4. DEFAULT BILL THEME */}
+          <SectionHeading text="4. DEFAULT BILL THEME (இயல்புநிலை பில் வண்ணம்)" marginTop={16} />
+          <Card>
+            <Text style={[styles.inputLabel, { color: subTextColor, marginBottom: 8 }]}>
+              Choose Default Color Scheme for Appa Estimate Bill:
+            </Text>
+            <View style={{ gap: 8 }}>
+              {[
+                { key: 'classic', label: 'Classic Parchment (பாரம்பரிய காகிதம்)', color: '#F6F2E5', border: '#0F2942' },
+                { key: 'blue', label: 'Ledger Blue (நீல லெட்ஜர்)', color: '#DBEAFE', border: '#1E3A8A' },
+                { key: 'sepia', label: 'Vintage Sepia (பழைய பழுப்பு தாள்)', color: '#FAF3E3', border: '#451A03' },
+                { key: 'emerald', label: 'Emerald Green (மங்கள மரகத பச்சை)', color: '#D1FAE5', border: '#064E3B' },
+                { key: 'dark', label: 'Dark Slate (கருமை)', color: '#1E293B', border: '#64748B' },
+              ].map((item) => {
+                const isSelected = (appaSettings.defaultTheme || 'classic') === item.key;
+                return (
+                  <Pressable
+                    key={item.key}
+                    onPress={() => {
+                      updateAppaField('defaultTheme', item.key as AppaBillTheme);
+                      setAppaPreviewTheme(item.key as AppaBillTheme);
+                    }}
+                    style={{
+                      flexDirection: 'row',
+                      alignItems: 'center',
+                      padding: 10,
+                      borderRadius: 10,
+                      borderWidth: 1.5,
+                      borderColor: isSelected ? colors.accent.primary : borderColor,
+                      backgroundColor: isSelected ? colors.accent.primary + '12' : colors.bg.primary,
+                    }}
+                  >
+                    <View
+                      style={{
+                        width: 26,
+                        height: 26,
+                        borderRadius: 6,
+                        backgroundColor: item.color,
+                        borderWidth: 1,
+                        borderColor: item.border,
+                        marginRight: 10,
+                      }}
+                    />
+                    <Text style={{ flex: 1, fontSize: 13, fontWeight: isSelected ? '800' : '600', color: textColor }}>
+                      {item.label}
+                    </Text>
+                    {isSelected && <MaterialIcons name="check-circle" size={18} color={colors.accent.primary} />}
+                  </Pressable>
+                );
+              })}
+            </View>
+          </Card>
+
+          {/* 5. 6-COLUMN TABLE HEADINGS */}
+          <SectionHeading text="5. 6-COLUMN TABLE HEADINGS (அட்டவணை தலைப்புகள்)" marginTop={16} />
+          <Card>
+            <View style={{ gap: 10 }}>
+              <View>
+                <Text style={[styles.inputLabel, { color: subTextColor }]}>Col 1: Serial No (வ. எண் / S.No)</Text>
+                <TextInput
+                  style={[styles.input, { backgroundColor: colors.bg.primary, borderColor, color: textColor }]}
+                  value={appaSettings.columnLabels?.sno}
+                  onChangeText={(v) => updateAppaColumnLabel('sno', v)}
+                  placeholder="வ. எண்"
+                  placeholderTextColor={subTextColor}
+                />
+              </View>
+              <View>
+                <Text style={[styles.inputLabel, { color: subTextColor }]}>Col 2: Date (தேதி / Date)</Text>
+                <TextInput
+                  style={[styles.input, { backgroundColor: colors.bg.primary, borderColor, color: textColor }]}
+                  value={appaSettings.columnLabels?.date}
+                  onChangeText={(v) => updateAppaColumnLabel('date', v)}
+                  placeholder="தேதி"
+                  placeholderTextColor={subTextColor}
+                />
+              </View>
+              <View>
+                <Text style={[styles.inputLabel, { color: subTextColor }]}>Col 3: Particulars (விபரம் / Particulars)</Text>
+                <TextInput
+                  style={[styles.input, { backgroundColor: colors.bg.primary, borderColor, color: textColor }]}
+                  value={appaSettings.columnLabels?.description}
+                  onChangeText={(v) => updateAppaColumnLabel('description', v)}
+                  placeholder="விபரம் (பொருட்கள் / கூலி விவரம்)"
+                  placeholderTextColor={subTextColor}
+                />
+              </View>
+              <View>
+                <Text style={[styles.inputLabel, { color: subTextColor }]}>Col 4: Debit (+) (பற்று / Debit)</Text>
+                <TextInput
+                  style={[styles.input, { backgroundColor: colors.bg.primary, borderColor, color: textColor }]}
+                  value={appaSettings.columnLabels?.debit}
+                  onChangeText={(v) => updateAppaColumnLabel('debit', v)}
+                  placeholder="பற்று (+)"
+                  placeholderTextColor={subTextColor}
+                />
+              </View>
+              <View>
+                <Text style={[styles.inputLabel, { color: subTextColor }]}>Col 5: Credit (-) (வரவு / Credit)</Text>
+                <TextInput
+                  style={[styles.input, { backgroundColor: colors.bg.primary, borderColor, color: textColor }]}
+                  value={appaSettings.columnLabels?.credit}
+                  onChangeText={(v) => updateAppaColumnLabel('credit', v)}
+                  placeholder="வரவு (-)"
+                  placeholderTextColor={subTextColor}
+                />
+              </View>
+              <View>
+                <Text style={[styles.inputLabel, { color: subTextColor }]}>Col 6: Balance (பாக்கி / Balance)</Text>
+                <TextInput
+                  style={[styles.input, { backgroundColor: colors.bg.primary, borderColor, color: textColor }]}
+                  value={appaSettings.columnLabels?.balance}
+                  onChangeText={(v) => updateAppaColumnLabel('balance', v)}
+                  placeholder="பாக்கி"
+                  placeholderTextColor={subTextColor}
+                />
+              </View>
+
+              <Pressable
+                onPress={() => {
+                  setTemplate((prev) => ({
+                    ...prev,
+                    appaBillSettings: {
+                      ...DEFAULT_APPA_ESTIMATE_BILL_SETTINGS,
+                      ...(prev.appaBillSettings || {}),
+                      columnLabels: DEFAULT_APPA_ESTIMATE_BILL_SETTINGS.columnLabels,
+                    },
+                  }));
+                  setHasChanges(true);
+                }}
+                style={{
+                  alignSelf: 'flex-start',
+                  paddingHorizontal: 10,
+                  paddingVertical: 6,
+                  borderRadius: 8,
+                  backgroundColor: colors.accent.primary + '15',
+                  marginTop: 4,
+                }}
+              >
+                <Text style={{ fontSize: 11, fontWeight: '700', color: colors.accent.primary }}>
+                  ↺ Reset Column Headings to Tamil Defaults
+                </Text>
+              </Pressable>
+            </View>
+          </Card>
+
+          {/* 6. PAYMENT QR, SIGNATORY & FOOTER NOTES */}
+          <SectionHeading text="6. FOOTER, QR & ACKNOWLEDGMENT (கீழ்க்குறிப்பு & முத்திரை)" marginTop={16} />
+          <Card>
+            <ToggleRow
+              title="Show UPI Payment QR Code"
+              subtitle="Display GPay / PhonePe QR code on statement when balance is due"
+              value={Boolean(appaSettings.showQrCode !== false)}
+              onToggle={(v) => updateAppaField('showQrCode', v)}
+            />
+
+            <View style={{ marginTop: 12, paddingTop: 12, borderTopWidth: 1, borderTopColor: borderColor }}>
+              <Text style={[styles.inputLabel, { color: subTextColor }]}>
+                Authorized Signatory Text (கையொப்ப வாசகம்)
+              </Text>
+              <TextInput
+                style={[styles.input, { backgroundColor: colors.bg.primary, borderColor, color: textColor }]}
+                value={appaSettings.signatoryText}
+                onChangeText={(v) => updateAppaField('signatoryText', v)}
+                placeholder="அங்கீகரிக்கப்பட்ட கையொப்பம்"
+                placeholderTextColor={subTextColor}
+              />
+            </View>
+
+            {/* SIGNATORY PAD & SIGNATURE SECTION */}
+            <View style={{ marginTop: 12, paddingTop: 12, borderTopWidth: 1, borderTopColor: borderColor }}>
+              <Text style={[styles.inputLabel, { color: textColor, fontWeight: '700', fontSize: 12 }]}>
+                AUTHORIZED SIGNATURE (கையொப்ப பலகை / கையொப்பம்)
+              </Text>
+              <Text style={[styles.cardDesc, { color: subTextColor, marginBottom: 10, fontSize: 11 }]}>
+                Draw your signature on the digital pad or upload a signature image to display on the estimate bill.
+              </Text>
+
+              {/* Signature Preview Box */}
+              <View style={{ alignItems: 'center', marginBottom: 12 }}>
+                {appaSettings.signatureImageUri ? (
+                  <View
+                    style={{
+                      width: 220,
+                      height: 80,
+                      borderRadius: 10,
+                      borderWidth: 1.5,
+                      borderColor: colors.accent.primary,
+                      backgroundColor: '#FFFFFF',
+                      padding: 6,
+                      justifyContent: 'center',
+                      alignItems: 'center',
+                    }}
+                  >
+                    <Image
+                      source={{ uri: appaSettings.signatureImageUri }}
+                      style={{ width: '100%', height: '100%' }}
+                      contentFit="contain"
+                    />
+                  </View>
+                ) : (
+                  <View
+                    style={{
+                      width: 220,
+                      height: 80,
+                      borderRadius: 10,
+                      borderWidth: 1.5,
+                      borderColor: borderColor,
+                      borderStyle: 'dashed',
+                      backgroundColor: colors.bg.primary,
+                      justifyContent: 'center',
+                      alignItems: 'center',
+                      gap: 4,
+                    }}
+                  >
+                    <MaterialIcons name="gesture" size={28} color={subTextColor} />
+                    <Text style={{ fontSize: 11, color: subTextColor, fontWeight: '600' }}>
+                      No Signature Saved (கையொப்பம் இல்லை)
+                    </Text>
+                  </View>
+                )}
+              </View>
+
+              {/* Action Buttons: Draw, Upload, Remove */}
+              <View style={{ flexDirection: 'row', flexWrap: 'wrap', gap: 8, justifyContent: 'center' }}>
+                <Pressable
+                  onPress={() => setSignatoryPadModalVisible(true)}
+                  style={[
+                    styles.presetBtn,
+                    { backgroundColor: '#B91C1C15', borderColor: '#B91C1C', paddingHorizontal: 12 },
+                  ]}
+                >
+                  <MaterialIcons name="gesture" size={16} color="#B91C1C" />
+                  <Text style={{ color: '#B91C1C', fontSize: 12, fontWeight: '700' }}>
+                    Draw Signature (கையொப்பம் வரைய)
+                  </Text>
+                </Pressable>
+
+                <Pressable
+                  onPress={handlePickSignatureFromGallery}
+                  style={[
+                    styles.presetBtn,
+                    { backgroundColor: '#2563EB15', borderColor: '#2563EB' },
+                  ]}
+                >
+                  <MaterialIcons name="photo-library" size={15} color="#2563EB" />
+                  <Text style={{ color: '#2563EB', fontSize: 12, fontWeight: '600' }}>Upload Image</Text>
+                </Pressable>
+
+                {appaSettings.signatureImageUri ? (
+                  <Pressable
+                    onPress={() => updateAppaField('signatureImageUri', '')}
+                    style={[
+                      styles.presetBtn,
+                      { backgroundColor: '#EF444415', borderColor: '#EF4444' },
+                    ]}
+                  >
+                    <MaterialIcons name="delete-outline" size={15} color="#EF4444" />
+                    <Text style={{ color: '#EF4444', fontSize: 12, fontWeight: '600' }}>Remove</Text>
+                  </Pressable>
+                ) : null}
+              </View>
+            </View>
+
+            <View style={{ marginTop: 12, paddingTop: 12, borderTopWidth: 1, borderTopColor: borderColor }}>
+              <ToggleRow
+                title="Show Goods Acknowledgment & Notes"
+                subtitle="Display goods received acknowledgment & thank you notes at the bottom"
+                value={Boolean(appaSettings.showGoodsAcknowledgment !== false)}
+                onToggle={(v) => updateAppaField('showGoodsAcknowledgment', v)}
+              />
+              {appaSettings.showGoodsAcknowledgment !== false && (
+                <View style={{ marginTop: 10 }}>
+                  <Text style={[styles.inputLabel, { color: subTextColor }]}>
+                    Goods Acknowledgment & Thank You Notes (ஒப்புதல் & நன்றியுரை)
+                  </Text>
+                  <TextInput
+                    style={[
+                      styles.input,
+                      {
+                        backgroundColor: colors.bg.primary,
+                        borderColor,
+                        color: textColor,
+                        height: 70,
+                        paddingTop: 8,
+                      },
+                    ]}
+                    multiline
+                    numberOfLines={3}
+                    value={appaSettings.footerNotes || ''}
+                    onChangeText={(v) => updateAppaField('footerNotes', v)}
+                    placeholder="• சரக்குகள் சரியான முறையில் கிடைக்கப்பெற்றது.&#10;• தங்களின் மேலான ஆதரவிற்கு மிக்க நன்றி! மீண்டும் வருக!"
+                    placeholderTextColor={subTextColor}
+                  />
+                </View>
+              )}
+            </View>
+          </Card>
+
+          {/* 7. LIVE INTERACTIVE APPA ESTIMATE BILL PREVIEW */}
+          <SectionHeading text="7. LIVE PREVIEW (நேரடி முன்னோட்டம்)" marginTop={20} />
+          <View style={{ marginBottom: 30 }}>
+            {/* Theme switcher tabs for preview */}
+            <View style={{ flexDirection: 'row', alignItems: 'center', gap: 6, marginBottom: 10 }}>
+              <Text style={{ fontSize: 10, fontWeight: '800', color: subTextColor }}>PREVIEW THEME:</Text>
+              <ScrollView horizontal showsHorizontalScrollIndicator={false} contentContainerStyle={{ gap: 6 }}>
+                {(['classic', 'blue', 'sepia', 'emerald', 'dark'] as AppaBillTheme[]).map((thm) => {
+                  const isSel = appaPreviewTheme === thm;
+                  return (
+                    <Pressable
+                      key={thm}
+                      onPress={() => setAppaPreviewTheme(thm)}
+                      style={{
+                        paddingHorizontal: 10,
+                        paddingVertical: 4,
+                        borderRadius: 12,
+                        borderWidth: 1,
+                        borderColor: isSel ? colors.accent.primary : borderColor,
+                        backgroundColor: isSel ? colors.accent.primary : colors.bg.card,
+                      }}
+                    >
+                      <Text style={{ fontSize: 11, fontWeight: '700', color: isSel ? '#FFF' : textColor }}>
+                        {thm.toUpperCase()}
+                      </Text>
+                    </Pressable>
+                  );
+                })}
+              </ScrollView>
+            </View>
+
+            <ScrollView horizontal showsHorizontalScrollIndicator={true} style={{ borderWidth: 1, borderColor, borderRadius: 12, overflow: 'hidden' }}>
+              <AppaEstimateBillView
+                data={SAMPLE_CUSTOMER_STATEMENT_DATA}
+                company={{
+                  name: appaSettings.customCompanyName || 'அம்மன் ஹாலோ பிரிக்ஸ்',
+                  phone: appaSettings.customPhones || '99430 51509',
+                  alternatePhone: '99430 51209',
+                  address: appaSettings.customAddress || '11, கரூர் மெயின் ரோடு, வெங்கமேடு, தளவாபாளையம்',
+                  upiId: shareSettings.upiId || 'ammanbricks@upi',
+                  logoUrl: effectiveAppaLogoUri,
+                }}
+                settings={shareSettings}
+                template={template}
+                isDark={isDark}
+                billTheme={appaPreviewTheme}
+                billNo="1"
+                appaBillSettings={appaSettings}
+              />
+            </ScrollView>
+          </View>
+        </View>
+      </ScrollView>
+    )}
 
         {/* Local Image Storage Modal for QR Selection */}
         <Modal visible={localImagesModalVisible} animationType="slide" transparent onRequestClose={() => setLocalImagesModalVisible(false)}>
@@ -1854,7 +3717,25 @@ function InvoiceManagementScreen() {
             </View>
           </View>
         </Modal>
-      </View>
+
+        {/* Signatory Pad Modal */}
+        <SignaturePadModal
+          visible={signatoryPadModalVisible}
+          onClose={() => setSignatoryPadModalVisible(false)}
+          onSave={(uri) => {
+            updateAppaField('signatureImageUri', uri);
+          }}
+          initialSignatureUri={appaSettings.signatureImageUri}
+          themeColors={{
+            cardBg,
+            textColor,
+            subTextColor,
+            borderColor,
+            primary: colors.accent.primary,
+          }}
+        />
+        </View>
+      </InvoiceEditorContext.Provider>
     </ProtectedRoute>
   );
 }
@@ -1878,6 +3759,30 @@ const getStyles = (theme: any) => {
       paddingTop: 48,
       paddingBottom: 12,
       borderBottomWidth: 1,
+    },
+    docTypeSwitcherContainer: {
+      flexDirection: 'row',
+      paddingHorizontal: 12,
+      paddingVertical: 8,
+      gap: 10,
+      borderBottomWidth: 1,
+    },
+    docTypeTab: {
+      flex: 1,
+      flexDirection: 'row',
+      alignItems: 'center',
+      gap: 8,
+      paddingVertical: 8,
+      paddingHorizontal: 12,
+      borderRadius: 12,
+      borderWidth: 1.5,
+      borderColor: 'transparent',
+    },
+    docTypeTabActive: {
+      elevation: 1,
+    },
+    docTypeTabText: {
+      fontSize: 13,
     },
     iconBtn: { padding: 6 },
     appBarTitleBox: { flex: 1, marginLeft: 12 },

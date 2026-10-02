@@ -135,6 +135,15 @@ export default function CreateInvoice() {
   const [customRate, setCustomRate] = useState<string>("0");
   const [customMinRate, setCustomMinRate] = useState<string>("0");
 
+  // Delivery Partner Loading & Unloading states
+  const [loadingByDeliveryPartner, setLoadingByDeliveryPartner] = useState(false);
+  const [customPartnerLoadingRate, setCustomPartnerLoadingRate] = useState("0");
+  const [customPartnerLoadingRateType, setCustomPartnerLoadingRateType] = useState("per brick");
+
+  const [unloadingByDeliveryPartner, setUnloadingByDeliveryPartner] = useState(false);
+  const [customPartnerUnloadingRate, setCustomPartnerUnloadingRate] = useState("0");
+  const [customPartnerUnloadingRateType, setCustomPartnerUnloadingRateType] = useState("per brick");
+
   // Sync custom rate states with the selected partner's default settings
   React.useEffect(() => {
     const partner = partners.find((p: any) => p.id === deliveryPartnerId);
@@ -142,10 +151,25 @@ export default function CreateInvoice() {
       setCustomRateType(partner.deliveryRateType || "fixed amount");
       setCustomRate(String(partner.deliveryRate || 0));
       setCustomMinRate(String(partner.minimumRate || 0));
+
+      if (partner.hasLoading) {
+        setCustomPartnerLoadingRate(String(partner.loadingRate || 0));
+        setCustomPartnerLoadingRateType(partner.loadingRateType || "per brick");
+      } else {
+        setLoadingByDeliveryPartner(false);
+      }
+      if (partner.hasUnloading) {
+        setCustomPartnerUnloadingRate(String(partner.unloadingRate || 0));
+        setCustomPartnerUnloadingRateType(partner.unloadingRateType || "per brick");
+      } else {
+        setUnloadingByDeliveryPartner(false);
+      }
     } else {
       setCustomRateType("fixed amount");
       setCustomRate("0");
       setCustomMinRate("0");
+      setLoadingByDeliveryPartner(false);
+      setUnloadingByDeliveryPartner(false);
     }
   }, [deliveryPartnerId, partners]);
 
@@ -527,13 +551,31 @@ export default function CreateInvoice() {
     ? addedItems.reduce((sum, item) => sum + (item.grossTotal || 0), 0)
     : (selectedItemId ? (Number(quantity) * Number(rate)) : 0);
 
+  const selectedPartner = (partners || []).find((p: any) => p.id === deliveryPartnerId);
+  const deliveryPartnerName = selectedPartner ? selectedPartner.name : "";
+
+  const isDpLoading = loadingByDeliveryPartner && !!selectedPartner?.hasLoading;
+  const isDpUnloading = unloadingByDeliveryPartner && !!selectedPartner?.hasUnloading;
+
   const loadingWorker = (workers || []).find((w: any) => w.id === loadingWorkerId);
-  const loadingWorkerName = loadingWorker ? loadingWorker.name : "";
-  const loadingCharge = loadingWorker ? currentTotalQuantity * Number(loadingWorker.loadingCost || 0) : 0;
+  const loadingWorkerName = isDpLoading
+    ? (deliveryPartnerName ? `${deliveryPartnerName} (Delivery Partner)` : "Delivery Partner")
+    : (loadingWorker ? loadingWorker.name : "");
+  const loadingCharge = isDpLoading
+    ? (customPartnerLoadingRateType === "per brick"
+        ? currentTotalQuantity * (parseFloat(customPartnerLoadingRate) || 0)
+        : (parseFloat(customPartnerLoadingRate) || 0))
+    : (loadingWorker ? currentTotalQuantity * Number(loadingWorker.loadingCost || 0) : 0);
 
   const unloadingWorker = (workers || []).find((w: any) => w.id === unloadingWorkerId);
-  const unloadingWorkerName = unloadingWorker ? unloadingWorker.name : "";
-  const unloadingCharge = unloadingWorker ? currentTotalQuantity * Number(unloadingWorker.unloadingCost || 0) : 0;
+  const unloadingWorkerName = isDpUnloading
+    ? (deliveryPartnerName ? `${deliveryPartnerName} (Delivery Partner)` : "Delivery Partner")
+    : (unloadingWorker ? unloadingWorker.name : "");
+  const unloadingCharge = isDpUnloading
+    ? (customPartnerUnloadingRateType === "per brick"
+        ? currentTotalQuantity * (parseFloat(customPartnerUnloadingRate) || 0)
+        : (parseFloat(customPartnerUnloadingRate) || 0))
+    : (unloadingWorker ? currentTotalQuantity * Number(unloadingWorker.unloadingCost || 0) : 0);
 
   const shipmentCharge = Number(shipmentChargeInput) || 0;
   const extraAmountVal = Number(extraAmount) || 0;
@@ -679,6 +721,8 @@ export default function CreateInvoice() {
         : (targetEntity?.address || "");
       const resolvedCustomerGst = targetEntity?.gstNo || targetEntity?.gstin || "";
 
+      const calcExcessAdv = Math.max(0, Number(paidAmount) - Math.max(0, calculatedTotal + previousBalanceVal));
+
       // 3. Create the order
       const orderPayload = {
         customerId: finalCustomerId,
@@ -698,6 +742,8 @@ export default function CreateInvoice() {
         discountAmount: calculatedDiscountAmount,
         total: calculatedTotal,
         paidAmount: Number(paidAmount),
+        advanceAmount: calcExcessAdv,
+        excessAdvance: calcExcessAdv,
         paymentMethod: paymentMethod || "Cash",
         paymentMode: paymentMethod || "Cash",
         paymentType: paymentMethod || "Cash",
@@ -707,10 +753,16 @@ export default function CreateInvoice() {
         collectorId: collectorId || null,
         collectorName: collectors.find((c: any) => c.id === collectorId)?.name || null,
         createdAt: orderDate,
-        loadingWorkerId: loadingWorkerId || null,
+        loadingByDeliveryPartner: !!(loadingByDeliveryPartner && selectedPartner?.hasLoading),
+        deliveryPartnerLoadingRate: (loadingByDeliveryPartner && selectedPartner?.hasLoading) ? (parseFloat(customPartnerLoadingRate) || 0) : 0,
+        deliveryPartnerLoadingRateType: (loadingByDeliveryPartner && selectedPartner?.hasLoading) ? customPartnerLoadingRateType : "per brick",
+        loadingWorkerId: (loadingByDeliveryPartner && selectedPartner?.hasLoading) ? null : (loadingWorkerId || null),
         loadingWorkerName: loadingWorkerName || null,
         loadingCharge: loadingCharge,
-        unloadingWorkerId: unloadingWorkerId || null,
+        unloadingByDeliveryPartner: !!(unloadingByDeliveryPartner && selectedPartner?.hasUnloading),
+        deliveryPartnerUnloadingRate: (unloadingByDeliveryPartner && selectedPartner?.hasUnloading) ? (parseFloat(customPartnerUnloadingRate) || 0) : 0,
+        deliveryPartnerUnloadingRateType: (unloadingByDeliveryPartner && selectedPartner?.hasUnloading) ? customPartnerUnloadingRateType : "per brick",
+        unloadingWorkerId: (unloadingByDeliveryPartner && selectedPartner?.hasUnloading) ? null : (unloadingWorkerId || null),
         unloadingWorkerName: unloadingWorkerName || null,
         unloadingCharge: unloadingCharge,
       };
@@ -721,37 +773,78 @@ export default function CreateInvoice() {
         const totalToSettle = Math.max(0, calculatedTotal + previousBalanceVal);
         const excessAdvanceVal = Math.max(0, paidAmountNum - totalToSettle);
 
-        if (!isNewCustomer && finalCustomerId && finalCustomerType === "customer") {
+        if (!isNewCustomer && finalCustomerId) {
           try {
-            const customerRef = doc(db, "customers", finalCustomerId);
-            const customerSnap = await getDoc(customerRef);
-            if (customerSnap.exists()) {
-              const cData = customerSnap.data();
-              const curBal = Number(cData.totalPending !== undefined ? cData.totalPending : (cData.balance || 0));
-              const curPaid = Number(cData.totalPaid || 0);
+            if (finalCustomerType === "customer") {
+              const customerRef = doc(db, "customers", finalCustomerId);
+              const customerSnap = await getDoc(customerRef);
+              if (customerSnap.exists()) {
+                const cData = customerSnap.data();
+                const curBal = Number(cData.totalPending !== undefined ? cData.totalPending : (cData.balance || 0));
+                const curPaid = Number(cData.totalPaid || 0);
 
-              let newBal = curBal;
-              if (curBal < 0) {
-                // Customer already had advance credit
-                const netOrderPayable = Math.max(0, calculatedTotal + curBal);
-                const excessAdv = Math.max(0, paidAmountNum - netOrderPayable);
-                newBal = -excessAdv;
-              } else {
-                // Customer had 0 or positive balance (dues)
-                const excessOverBill = paidAmountNum - calculatedTotal;
-                if (excessOverBill > 0) {
-                  newBal = curBal - excessOverBill;
+                let newBal = curBal;
+                if (curBal < 0) {
+                  // Customer already had advance credit
+                  const netOrderPayable = Math.max(0, calculatedTotal + curBal);
+                  const excessAdv = Math.max(0, paidAmountNum - netOrderPayable);
+                  newBal = -excessAdv;
+                } else {
+                  // Customer had 0 or positive balance (dues)
+                  const excessOverBill = paidAmountNum - calculatedTotal;
+                  if (excessOverBill > 0) {
+                    newBal = curBal - excessOverBill;
+                  }
+                }
+
+                const newAdvance = newBal < 0 ? Math.abs(newBal) : 0;
+                await updateDoc(customerRef, {
+                  balance: newBal,
+                  totalPending: newBal,
+                  advanceAmount: newAdvance,
+                  totalPaid: curPaid + paidAmountNum,
+                  lastTransactionDate: new Date(),
+                });
+              }
+            } else if (finalCustomerType === "worker") {
+              const workerRef = doc(db, "workers", finalCustomerId);
+              const workerSnap = await getDoc(workerRef);
+              if (workerSnap.exists()) {
+                const wData = workerSnap.data();
+                const curPending = Number(wData.totalPending || 0);
+                if (excessAdvanceVal > 0) {
+                  await updateDoc(workerRef, {
+                    totalPending: curPending - excessAdvanceVal,
+                    updatedAt: new Date(),
+                  });
                 }
               }
-
-              const newAdvance = newBal < 0 ? Math.abs(newBal) : 0;
-              await updateDoc(customerRef, {
-                balance: newBal,
-                totalPending: newBal,
-                advanceAmount: newAdvance,
-                totalPaid: curPaid + paidAmountNum,
-                lastTransactionDate: new Date(),
-              });
+            } else if (finalCustomerType === "supplier") {
+              const supplierRef = doc(db, "raw_material_suppliers", finalCustomerId);
+              const supplierSnap = await getDoc(supplierRef);
+              if (supplierSnap.exists()) {
+                const sData = supplierSnap.data();
+                const curBal = Number(sData.balance || 0);
+                if (excessAdvanceVal > 0) {
+                  await updateDoc(supplierRef, {
+                    balance: curBal - excessAdvanceVal,
+                    updatedAt: new Date(),
+                  });
+                }
+              }
+            } else if (finalCustomerType === "delivery_partner") {
+              const partnerRef = doc(db, "deliveryPartners", finalCustomerId);
+              const partnerSnap = await getDoc(partnerRef);
+              if (partnerSnap.exists()) {
+                const pData = partnerSnap.data();
+                const curPending = Number(pData.totalPending || 0);
+                if (excessAdvanceVal > 0) {
+                  await updateDoc(partnerRef, {
+                    totalPending: curPending - excessAdvanceVal,
+                    updatedAt: new Date(),
+                  });
+                }
+              }
             }
           } catch (cErr) {
             console.error("Failed to update customer advance balance:", cErr);
@@ -766,11 +859,12 @@ export default function CreateInvoice() {
               customerName: finalCustomerName,
               amountReceived: paidAmountNum,
               discountAmount: 0,
+              advanceAmount: excessAdvanceVal,
               paymentMethod: paymentMethod || "Cash",
               paymentMode: paymentMethod || "Cash",
               paymentType: paymentMethod || "Cash",
               notes: excessAdvanceVal > 0
-                ? `Bill payment (incl. ₹${excessAdvanceVal.toLocaleString("en-IN")} advance credit)`
+                ? `Bill payment (incl. ₹${excessAdvanceVal.toLocaleString("en-IN")} advance credited to customer profile)`
                 : `Payment for Bill #${orderId.slice(-6).toUpperCase()}`,
               orderId: orderId,
               createdAt: orderDate,
@@ -1377,65 +1471,225 @@ export default function CreateInvoice() {
             <Text style={styles.sectionTitle}>4. Shifting & Loading (Optional)</Text>
           </View>
 
-          {/* Loading Worker */}
-          <Text style={styles.label}>Assign Loading Worker</Text>
-          <ScrollView horizontal showsHorizontalScrollIndicator={false} style={styles.partnersScroll}>
-            <View style={styles.partnersRow}>
+          {/* Delivery Partner Loading Option */}
+          {deliveryPartnerId && selectedPartner?.hasLoading ? (
+            <View style={styles.dpOptionCard}>
               <Pressable
-                style={[styles.partnerCard, !loadingWorkerId && styles.partnerCardActive]}
-                onPress={() => setLoadingWorkerId("")}
+                style={[styles.dpToggleRow, loadingByDeliveryPartner && styles.dpToggleRowActive]}
+                onPress={() => {
+                  const nextVal = !loadingByDeliveryPartner;
+                  setLoadingByDeliveryPartner(nextVal);
+                  if (nextVal) {
+                    setLoadingWorkerId("");
+                    if (selectedPartner?.hasLoading) {
+                      setCustomPartnerLoadingRate(String(selectedPartner.loadingRate || 0));
+                      setCustomPartnerLoadingRateType(selectedPartner.loadingRateType || "per brick");
+                    }
+                  }
+                }}
               >
-                <Text style={[styles.partnerName, !loadingWorkerId && styles.partnerNameActive]}>
-                  No Loading Worker
-                </Text>
+                <View style={{ flexDirection: "row", alignItems: "center", gap: 8, flex: 1 }}>
+                  <MaterialIcons
+                    name={loadingByDeliveryPartner ? "check-box" : "check-box-outline-blank"}
+                    size={22}
+                    color={loadingByDeliveryPartner ? colors.accent.primary : colors.text.muted}
+                  />
+                  <View style={{ flex: 1 }}>
+                    <Text style={styles.dpToggleTitle}>Delivery Partner Handles Loading</Text>
+                    <Text style={styles.dpToggleSub}>
+                      {selectedPartner?.name} {selectedPartner?.hasLoading ? `(Default: ₹${selectedPartner.loadingRate}/${selectedPartner.loadingRateType === "per brick" ? "brick" : "fixed"})` : "(Customizable rate)"}
+                    </Text>
+                  </View>
+                </View>
+                <View style={[styles.dpStatusBadge, loadingByDeliveryPartner && styles.dpStatusBadgeActive]}>
+                  <Text style={[styles.dpStatusBadgeText, loadingByDeliveryPartner && styles.dpStatusBadgeTextActive]}>
+                    {loadingByDeliveryPartner ? "Partner Selected" : "Use Worker"}
+                  </Text>
+                </View>
               </Pressable>
 
-              {workers.filter((w: any) => w.status === "Active").map((w: any) => {
-                const active = loadingWorkerId === w.id;
-                return (
+              {loadingByDeliveryPartner && (
+                <View style={styles.dpRateAdjustRow}>
+                  <View style={{ flexDirection: "row", gap: 8, marginBottom: 8 }}>
+                    {["per brick", "fixed amount"].map((type) => {
+                      const isSel = customPartnerLoadingRateType === type;
+                      return (
+                        <Pressable
+                          key={type}
+                          style={[styles.miniPill, isSel && styles.miniPillActive]}
+                          onPress={() => setCustomPartnerLoadingRateType(type)}
+                        >
+                          <Text style={[styles.miniPillText, isSel && styles.miniPillTextActive]}>
+                            {type === "per brick" ? "Per Brick" : "Fixed Amount"}
+                          </Text>
+                        </Pressable>
+                      );
+                    })}
+                  </View>
+                  <View style={{ flexDirection: "row", alignItems: "center", gap: 10 }}>
+                    <Text style={styles.dpRateLabel}>
+                      {customPartnerLoadingRateType === "per brick" ? "Rate (₹/brick):" : "Fixed Amount (₹):"}
+                    </Text>
+                    <TextInput
+                      style={styles.dpRateInput}
+                      value={customPartnerLoadingRate}
+                      onChangeText={setCustomPartnerLoadingRate}
+                      keyboardType="numeric"
+                      placeholder="0.00"
+                      placeholderTextColor={colors.text.muted}
+                    />
+                  </View>
+                </View>
+              )}
+            </View>
+          ) : null}
+
+          {/* Loading Worker */}
+          {!(loadingByDeliveryPartner && selectedPartner?.hasLoading) && (
+            <>
+              <Text style={styles.label}>Assign Loading Worker</Text>
+              <ScrollView horizontal showsHorizontalScrollIndicator={false} style={styles.partnersScroll}>
+                <View style={styles.partnersRow}>
                   <Pressable
-                    key={`load-${w.id}`}
-                    style={[styles.partnerCard, active && styles.partnerCardActive]}
-                    onPress={() => setLoadingWorkerId(w.id)}
+                    style={[styles.partnerCard, !loadingWorkerId && styles.partnerCardActive]}
+                    onPress={() => setLoadingWorkerId("")}
                   >
-                    <Text style={[styles.partnerName, active && styles.partnerNameActive]}>
-                      {w.name} (₹{w.loadingCost || 0}/pc)
+                    <Text style={[styles.partnerName, !loadingWorkerId && styles.partnerNameActive]}>
+                      No Loading Worker
                     </Text>
                   </Pressable>
-                );
-              })}
+
+                  {workers.filter((w: any) => w.status === "Active").map((w: any) => {
+                    const active = loadingWorkerId === w.id;
+                    return (
+                      <Pressable
+                        key={`load-${w.id}`}
+                        style={[styles.partnerCard, active && styles.partnerCardActive]}
+                        onPress={() => {
+                          setLoadingWorkerId(w.id);
+                          setLoadingByDeliveryPartner(false);
+                        }}
+                      >
+                        <Text style={[styles.partnerName, active && styles.partnerNameActive]}>
+                          {w.name} (₹{w.loadingCost || 0}/pc)
+                        </Text>
+                      </Pressable>
+                    );
+                  })}
+                </View>
+              </ScrollView>
+            </>
+          )}
+
+          {/* Delivery Partner Unloading Option */}
+          {deliveryPartnerId && selectedPartner?.hasUnloading ? (
+            <View style={[styles.dpOptionCard, { marginTop: 14 }]}>
+              <Pressable
+                style={[styles.dpToggleRow, unloadingByDeliveryPartner && styles.dpToggleRowActive]}
+                onPress={() => {
+                  const nextVal = !unloadingByDeliveryPartner;
+                  setUnloadingByDeliveryPartner(nextVal);
+                  if (nextVal) {
+                    setUnloadingWorkerId("");
+                    if (selectedPartner?.hasUnloading) {
+                      setCustomPartnerUnloadingRate(String(selectedPartner.unloadingRate || 0));
+                      setCustomPartnerUnloadingRateType(selectedPartner.unloadingRateType || "per brick");
+                    }
+                  }
+                }}
+              >
+                <View style={{ flexDirection: "row", alignItems: "center", gap: 8, flex: 1 }}>
+                  <MaterialIcons
+                    name={unloadingByDeliveryPartner ? "check-box" : "check-box-outline-blank"}
+                    size={22}
+                    color={unloadingByDeliveryPartner ? colors.accent.primary : colors.text.muted}
+                  />
+                  <View style={{ flex: 1 }}>
+                    <Text style={styles.dpToggleTitle}>Delivery Partner Handles Unloading</Text>
+                    <Text style={styles.dpToggleSub}>
+                      {selectedPartner?.name} {selectedPartner?.hasUnloading ? `(Default: ₹${selectedPartner.unloadingRate}/${selectedPartner.unloadingRateType === "per brick" ? "brick" : "fixed"})` : "(Customizable rate)"}
+                    </Text>
+                  </View>
+                </View>
+                <View style={[styles.dpStatusBadge, unloadingByDeliveryPartner && styles.dpStatusBadgeActive]}>
+                  <Text style={[styles.dpStatusBadgeText, unloadingByDeliveryPartner && styles.dpStatusBadgeTextActive]}>
+                    {unloadingByDeliveryPartner ? "Partner Selected" : "Use Worker"}
+                  </Text>
+                </View>
+              </Pressable>
+
+              {unloadingByDeliveryPartner && (
+                <View style={styles.dpRateAdjustRow}>
+                  <View style={{ flexDirection: "row", gap: 8, marginBottom: 8 }}>
+                    {["per brick", "fixed amount"].map((type) => {
+                      const isSel = customPartnerUnloadingRateType === type;
+                      return (
+                        <Pressable
+                          key={type}
+                          style={[styles.miniPill, isSel && styles.miniPillActive]}
+                          onPress={() => setCustomPartnerUnloadingRateType(type)}
+                        >
+                          <Text style={[styles.miniPillText, isSel && styles.miniPillTextActive]}>
+                            {type === "per brick" ? "Per Brick" : "Fixed Amount"}
+                          </Text>
+                        </Pressable>
+                      );
+                    })}
+                  </View>
+                  <View style={{ flexDirection: "row", alignItems: "center", gap: 10 }}>
+                    <Text style={styles.dpRateLabel}>
+                      {customPartnerUnloadingRateType === "per brick" ? "Rate (₹/brick):" : "Fixed Amount (₹):"}
+                    </Text>
+                    <TextInput
+                      style={styles.dpRateInput}
+                      value={customPartnerUnloadingRate}
+                      onChangeText={setCustomPartnerUnloadingRate}
+                      keyboardType="numeric"
+                      placeholder="0.00"
+                      placeholderTextColor={colors.text.muted}
+                    />
+                  </View>
+                </View>
+              )}
             </View>
-          </ScrollView>
+          ) : null}
 
           {/* Unloading Worker */}
-          <Text style={[styles.label, { marginTop: 14 }]}>Assign Unloading Worker</Text>
-          <ScrollView horizontal showsHorizontalScrollIndicator={false} style={styles.partnersScroll}>
-            <View style={styles.partnersRow}>
-              <Pressable
-                style={[styles.partnerCard, !unloadingWorkerId && styles.partnerCardActive]}
-                onPress={() => setUnloadingWorkerId("")}
-              >
-                <Text style={[styles.partnerName, !unloadingWorkerId && styles.partnerNameActive]}>
-                  No Unloading Worker
-                </Text>
-              </Pressable>
-
-              {workers.filter((w: any) => w.status === "Active").map((w: any) => {
-                const active = unloadingWorkerId === w.id;
-                return (
+          {!(unloadingByDeliveryPartner && selectedPartner?.hasUnloading) && (
+            <>
+              <Text style={[styles.label, { marginTop: (deliveryPartnerId && selectedPartner?.hasUnloading) ? 10 : 14 }]}>Assign Unloading Worker</Text>
+              <ScrollView horizontal showsHorizontalScrollIndicator={false} style={styles.partnersScroll}>
+                <View style={styles.partnersRow}>
                   <Pressable
-                    key={`unload-${w.id}`}
-                    style={[styles.partnerCard, active && styles.partnerCardActive]}
-                    onPress={() => setUnloadingWorkerId(w.id)}
+                    style={[styles.partnerCard, !unloadingWorkerId && styles.partnerCardActive]}
+                    onPress={() => setUnloadingWorkerId("")}
                   >
-                    <Text style={[styles.partnerName, active && styles.partnerNameActive]}>
-                      {w.name} (₹{w.unloadingCost || 0}/pc)
+                    <Text style={[styles.partnerName, !unloadingWorkerId && styles.partnerNameActive]}>
+                      No Unloading Worker
                     </Text>
                   </Pressable>
-                );
-              })}
-            </View>
-          </ScrollView>
+
+                  {workers.filter((w: any) => w.status === "Active").map((w: any) => {
+                    const active = unloadingWorkerId === w.id;
+                    return (
+                      <Pressable
+                        key={`unload-${w.id}`}
+                        style={[styles.partnerCard, active && styles.partnerCardActive]}
+                        onPress={() => {
+                          setUnloadingWorkerId(w.id);
+                          setUnloadingByDeliveryPartner(false);
+                        }}
+                      >
+                        <Text style={[styles.partnerName, active && styles.partnerNameActive]}>
+                          {w.name} (₹{w.unloadingCost || 0}/pc)
+                        </Text>
+                      </Pressable>
+                    );
+                  })}
+                </View>
+              </ScrollView>
+            </>
+          )}
         </View>
 
         {/* Section 5: Balance Money Collector */}
@@ -1817,9 +2071,8 @@ export default function CreateInvoice() {
                 {excessAdvance > 0 && (
                   <View
                     style={{
-                      flexDirection: "row",
-                      alignItems: "center",
-                      justifyContent: "space-between",
+                      flexDirection: "column",
+                      gap: 4,
                       backgroundColor: colors.accent.success + "15",
                       padding: 10,
                       borderRadius: 8,
@@ -1828,14 +2081,19 @@ export default function CreateInvoice() {
                       marginTop: 8,
                     }}
                   >
-                    <View style={{ flexDirection: "row", alignItems: "center", gap: 6 }}>
-                      <MaterialIcons name="arrow-circle-up" size={16} color={colors.accent.success} />
-                      <Text style={{ fontSize: 12, fontWeight: "700", color: colors.accent.success }}>
-                        Advance Credit Added:
+                    <View style={{ flexDirection: "row", alignItems: "center", justifyContent: "space-between" }}>
+                      <View style={{ flexDirection: "row", alignItems: "center", gap: 6 }}>
+                        <MaterialIcons name="arrow-circle-up" size={16} color={colors.accent.success} />
+                        <Text style={{ fontSize: 12, fontWeight: "700", color: colors.accent.success }}>
+                          Advance Credit Added:
+                        </Text>
+                      </View>
+                      <Text style={{ fontSize: 14, fontWeight: "800", color: colors.accent.success }}>
+                        +₹{excessAdvance.toLocaleString("en-IN")}
                       </Text>
                     </View>
-                    <Text style={{ fontSize: 13, fontWeight: "800", color: colors.accent.success }}>
-                      +₹{excessAdvance.toLocaleString("en-IN")}
+                    <Text style={{ fontSize: 11, fontWeight: "600", color: colors.accent.success, opacity: 0.9 }}>
+                      Remaining ₹{excessAdvance.toLocaleString("en-IN")} will go to advance in the customer profile.
                     </Text>
                   </View>
                 )}
@@ -2162,6 +2420,94 @@ const getStyles = (theme: any) => {
   collectorNameActive: {
     color: colors.accent.primary,
     fontWeight: "700",
+  },
+  dpOptionCard: {
+    backgroundColor: colors.bg.primary,
+    borderWidth: 1,
+    borderColor: colors.border.medium,
+    borderRadius: 12,
+    padding: 10,
+    marginBottom: 8,
+  },
+  dpToggleRow: {
+    flexDirection: "row",
+    alignItems: "center",
+    justifyContent: "space-between",
+  },
+  dpToggleRowActive: {},
+  dpToggleTitle: {
+    fontSize: 13,
+    fontWeight: "700",
+    color: colors.text.primary,
+  },
+  dpToggleSub: {
+    fontSize: 11,
+    color: colors.text.muted,
+    marginTop: 1,
+  },
+  dpStatusBadge: {
+    paddingHorizontal: 8,
+    paddingVertical: 3,
+    borderRadius: 6,
+    backgroundColor: colors.bg.card,
+    borderWidth: 1,
+    borderColor: colors.border.subtle,
+  },
+  dpStatusBadgeActive: {
+    backgroundColor: `${colors.accent.primary}18`,
+    borderColor: colors.accent.primary,
+  },
+  dpStatusBadgeText: {
+    fontSize: 10.5,
+    fontWeight: "600",
+    color: colors.text.muted,
+  },
+  dpStatusBadgeTextActive: {
+    color: colors.accent.primary,
+    fontWeight: "800",
+  },
+  dpRateAdjustRow: {
+    marginTop: 10,
+    paddingTop: 10,
+    borderTopWidth: 1,
+    borderTopColor: colors.border.subtle,
+  },
+  miniPill: {
+    paddingHorizontal: 10,
+    paddingVertical: 4,
+    borderRadius: 12,
+    backgroundColor: colors.bg.card,
+    borderWidth: 1,
+    borderColor: colors.border.subtle,
+  },
+  miniPillActive: {
+    backgroundColor: `${colors.accent.primary}18`,
+    borderColor: colors.accent.primary,
+  },
+  miniPillText: {
+    fontSize: 11,
+    fontWeight: "600",
+    color: colors.text.muted,
+  },
+  miniPillTextActive: {
+    color: colors.accent.primary,
+    fontWeight: "700",
+  },
+  dpRateLabel: {
+    fontSize: 12,
+    fontWeight: "600",
+    color: colors.text.secondary,
+  },
+  dpRateInput: {
+    borderWidth: 1,
+    borderColor: colors.border.medium,
+    borderRadius: 8,
+    paddingHorizontal: 8,
+    paddingVertical: 4,
+    fontSize: 13,
+    color: colors.text.primary,
+    backgroundColor: colors.bg.card,
+    width: 90,
   },
   saveBtn: {
     backgroundColor: colors.accent.success,

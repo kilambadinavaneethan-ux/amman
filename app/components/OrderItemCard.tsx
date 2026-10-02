@@ -65,6 +65,7 @@ const OrderItemCardComponent: React.FC<OrderItemCardProps> = ({
   const totalAmountWithOldDues = thisOrderTotal + oldBalanceDue;
   const paidAmountVal = Number(order.paidAmount !== undefined ? order.paidAmount : (thisOrderTotal - thisOrderUnpaid) || 0);
   const totalBalanceUnpaid = oldBalanceDue + thisOrderUnpaid;
+  const excessAdvance = Math.max(0, paidAmountVal - totalAmountWithOldDues);
 
   return (
     <View style={[styles.orderCard, isRaw && { borderColor: "#d97706" }]}>
@@ -235,13 +236,24 @@ const OrderItemCardComponent: React.FC<OrderItemCardProps> = ({
           </View>
 
           <View style={[styles.detailRow, { marginTop: 2, paddingTop: 4, borderTopWidth: 1, borderTopColor: colors.border.subtle }]}>
-            <Text style={[styles.bodyLabel, { fontWeight: "800", color: colors.accent.danger }]}>
+            <Text style={[styles.bodyLabel, { fontWeight: "800", color: totalBalanceUnpaid > 0 ? colors.accent.danger : colors.accent.success }]}>
               Remaining Unpaid Dues
             </Text>
-            <Text style={[styles.bodyValue, { fontSize: 14, fontWeight: "800", color: colors.accent.danger }]}>
+            <Text style={[styles.bodyValue, { fontSize: 14, fontWeight: "800", color: totalBalanceUnpaid > 0 ? colors.accent.danger : colors.accent.success }]}>
               ₹{totalBalanceUnpaid.toLocaleString("en-IN")}
             </Text>
           </View>
+
+          {excessAdvance > 0 && (
+            <View style={[styles.detailRow, { marginTop: 6, paddingVertical: 5, paddingHorizontal: 8, backgroundColor: colors.accent.success + "15", borderRadius: 6, borderColor: colors.accent.success + "30", borderWidth: 1 }]}>
+              <Text style={[styles.bodyLabel, { color: colors.accent.success, fontWeight: "700" }]}>
+                ⭐ Advance Credit (To Profile)
+              </Text>
+              <Text style={[styles.bodyValue, { fontSize: 13, fontWeight: "800", color: colors.accent.success }]}>
+                +₹{excessAdvance.toLocaleString("en-IN")}
+              </Text>
+            </View>
+          )}
         </View>
       </View>
 

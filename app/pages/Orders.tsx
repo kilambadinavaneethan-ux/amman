@@ -28,7 +28,7 @@ import { RawMaterialSupplierContext } from "../context/RawMaterialSupplierContex
 import { useTheme } from "../context/ThemeContext";
 import { UserContext } from "../context/UserContext";
 import { db, normalizeDateValue } from "../../src/config/firebase";
-import { addDoc, collection } from "firebase/firestore";
+import { addDoc, collection, doc, getDoc, updateDoc } from "firebase/firestore";
 import { useScrollRestoration } from "../context/ScrollContext";
 import { TransactionShareBottomSheet } from "../../src/components/sharing/TransactionShareBottomSheet";
 import { adaptToTransactionData } from "../../src/utils/transactionAdapter";
@@ -361,6 +361,15 @@ export default function Orders() {
   const [editCollectorId, setEditCollectorId] = useState("");
   const [editLoadingWorkerId, setEditLoadingWorkerId] = useState("");
   const [editUnloadingWorkerId, setEditUnloadingWorkerId] = useState("");
+
+  // Delivery Partner Loading & Unloading for edit modal
+  const [editLoadingByDeliveryPartner, setEditLoadingByDeliveryPartner] = useState(false);
+  const [editCustomPartnerLoadingRate, setEditCustomPartnerLoadingRate] = useState("0");
+  const [editCustomPartnerLoadingRateType, setEditCustomPartnerLoadingRateType] = useState("per brick");
+
+  const [editUnloadingByDeliveryPartner, setEditUnloadingByDeliveryPartner] = useState(false);
+  const [editCustomPartnerUnloadingRate, setEditCustomPartnerUnloadingRate] = useState("0");
+  const [editCustomPartnerUnloadingRateType, setEditCustomPartnerUnloadingRateType] = useState("per brick");
   const [isSaving, setIsSaving] = useState(false);
   const [deliveryInputs, setDeliveryInputs] = useState<Record<string, string>>({});
   const [isEditDeliveryModalOpen, setIsEditDeliveryModalOpen] = useState(false);
@@ -725,16 +734,36 @@ export default function Orders() {
       setEditDeliveryRate(String(selectedOrder.deliveryRate !== undefined ? selectedOrder.deliveryRate : (partner?.deliveryRate || 0)));
       setEditDeliveryMinRate(String(selectedOrder.deliveryMinRate !== undefined ? selectedOrder.deliveryMinRate : (partner?.minimumRate || 0)));
       setEditShipmentDistance(String(selectedOrder.shipmentDistance || 0));
+      setEditLoadingByDeliveryPartner(!!selectedOrder.loadingByDeliveryPartner);
+      setEditCustomPartnerLoadingRate(String(selectedOrder.deliveryPartnerLoadingRate !== undefined ? selectedOrder.deliveryPartnerLoadingRate : (partner?.loadingRate || 0)));
+      setEditCustomPartnerLoadingRateType(selectedOrder.deliveryPartnerLoadingRateType || partner?.loadingRateType || "per brick");
+      setEditUnloadingByDeliveryPartner(!!selectedOrder.unloadingByDeliveryPartner);
+      setEditCustomPartnerUnloadingRate(String(selectedOrder.deliveryPartnerUnloadingRate !== undefined ? selectedOrder.deliveryPartnerUnloadingRate : (partner?.unloadingRate || 0)));
+      setEditCustomPartnerUnloadingRateType(selectedOrder.deliveryPartnerUnloadingRateType || partner?.unloadingRateType || "per brick");
     } else {
       const partner = partners.find((p: any) => p.id === editDeliveryPartnerId);
       if (partner) {
         setEditDeliveryRateType(partner.deliveryRateType || "fixed amount");
         setEditDeliveryRate(String(partner.deliveryRate || 0));
         setEditDeliveryMinRate(String(partner.minimumRate || 0));
+        if (partner.hasLoading) {
+          setEditCustomPartnerLoadingRate(String(partner.loadingRate || 0));
+          setEditCustomPartnerLoadingRateType(partner.loadingRateType || "per brick");
+        } else {
+          setEditLoadingByDeliveryPartner(false);
+        }
+        if (partner.hasUnloading) {
+          setEditCustomPartnerUnloadingRate(String(partner.unloadingRate || 0));
+          setEditCustomPartnerUnloadingRateType(partner.unloadingRateType || "per brick");
+        } else {
+          setEditUnloadingByDeliveryPartner(false);
+        }
       } else {
         setEditDeliveryRateType("fixed amount");
         setEditDeliveryRate("0");
         setEditDeliveryMinRate("0");
+        setEditLoadingByDeliveryPartner(false);
+        setEditUnloadingByDeliveryPartner(false);
       }
     }
   }, [editDeliveryPartnerId, editModalVisible, selectedOrder, partners]);
@@ -1244,6 +1273,12 @@ export default function Orders() {
     setEditCollectorId(order.collectorId || "");
     setEditLoadingWorkerId(order.loadingWorkerId || "");
     setEditUnloadingWorkerId(order.unloadingWorkerId || "");
+    setEditLoadingByDeliveryPartner(!!order.loadingByDeliveryPartner);
+    setEditCustomPartnerLoadingRate(String(order.deliveryPartnerLoadingRate !== undefined ? order.deliveryPartnerLoadingRate : (partner?.loadingRate || 0)));
+    setEditCustomPartnerLoadingRateType(order.deliveryPartnerLoadingRateType || partner?.loadingRateType || "per brick");
+    setEditUnloadingByDeliveryPartner(!!order.unloadingByDeliveryPartner);
+    setEditCustomPartnerUnloadingRate(String(order.deliveryPartnerUnloadingRate !== undefined ? order.deliveryPartnerUnloadingRate : (partner?.unloadingRate || 0)));
+    setEditCustomPartnerUnloadingRateType(order.deliveryPartnerUnloadingRateType || partner?.unloadingRateType || "per brick");
     setEditModalVisible(true);
     // Reset add item fields
     setSelectedItemId("");
@@ -1361,6 +1396,9 @@ export default function Orders() {
       const finalCustomerName = editCustomerName.trim() || selectedOrder?.customerName || "General Customer";
       const finalCustomerPhone = editCustomerPhone.trim() || selectedOrder?.customerPhone || "";
 
+      const totalWithOldDues = editTotalVal + oldBalanceDue;
+      const excessAdv = Math.max(0, editPaidVal - totalWithOldDues);
+
       const newOrderPayload = {
         ...selectedOrder,
         customerId: finalCustomerId,
@@ -1382,16 +1420,24 @@ export default function Orders() {
         discountAmount: editDiscountAmount,
         collectorId: editCollectorId || null,
         collectorName: collectorName,
-        loadingWorkerId: editLoadingWorkerId || null,
+        loadingByDeliveryPartner: !!(editLoadingByDeliveryPartner && partnerObj?.hasLoading),
+        deliveryPartnerLoadingRate: (editLoadingByDeliveryPartner && partnerObj?.hasLoading) ? (parseFloat(editCustomPartnerLoadingRate) || 0) : 0,
+        deliveryPartnerLoadingRateType: (editLoadingByDeliveryPartner && partnerObj?.hasLoading) ? editCustomPartnerLoadingRateType : "per brick",
+        loadingWorkerId: (editLoadingByDeliveryPartner && partnerObj?.hasLoading) ? null : (editLoadingWorkerId || null),
         loadingWorkerName: loadingWorkerName,
         loadingCharge: editLoadingCharge,
-        unloadingWorkerId: editUnloadingWorkerId || null,
+        unloadingByDeliveryPartner: !!(editUnloadingByDeliveryPartner && partnerObj?.hasUnloading),
+        deliveryPartnerUnloadingRate: (editUnloadingByDeliveryPartner && partnerObj?.hasUnloading) ? (parseFloat(editCustomPartnerUnloadingRate) || 0) : 0,
+        deliveryPartnerUnloadingRateType: (editUnloadingByDeliveryPartner && partnerObj?.hasUnloading) ? editCustomPartnerUnloadingRateType : "per brick",
+        unloadingWorkerId: (editUnloadingByDeliveryPartner && partnerObj?.hasUnloading) ? null : (editUnloadingWorkerId || null),
         unloadingWorkerName: unloadingWorkerName,
         unloadingCharge: editUnloadingCharge,
         total: editTotalVal,
         paidAmount: editPaidVal,
         amountPaid: editPaidVal,
         advancePaid: editPaidVal,
+        advanceAmount: excessAdv,
+        excessAdvance: excessAdv,
         paymentMethod: editPaymentMethod || "Cash",
         paymentMode: editPaymentMethod || "Cash",
         paymentType: editPaymentMethod || "Cash",
@@ -1410,6 +1456,26 @@ export default function Orders() {
         selectedOrder,
       );
       if (success) {
+        // If edit introduced excess advance, adjust customer balance
+        if (finalCustomerId && excessAdv > 0) {
+          try {
+            const customerRef = doc(db, "customers", finalCustomerId);
+            const customerSnap = await getDoc(customerRef);
+            if (customerSnap.exists()) {
+              const cData = customerSnap.data();
+              const curBal = Number(cData.totalPending !== undefined ? cData.totalPending : (cData.balance || 0));
+              const newBal = curBal - excessAdv;
+              await updateDoc(customerRef, {
+                balance: newBal,
+                totalPending: newBal,
+                advanceAmount: newBal < 0 ? Math.abs(newBal) : 0,
+                lastTransactionDate: new Date(),
+              });
+            }
+          } catch (e) {
+            console.error("Error updating customer advance on edit order:", e);
+          }
+        }
         setSelectedOrder(null);
         setEditModalVisible(false);
         Alert.alert("Success", "Order updated successfully.");
@@ -1728,13 +1794,30 @@ export default function Orders() {
   const editShipmentVal = Number(editShipmentCharge) || 0;
   const editExtraVal = Number(editExtraAmount) || 0;
 
+  const partnerObj = partnerByIdMap.get(editDeliveryPartnerId);
+
+  const isEditDpLoading = editLoadingByDeliveryPartner && !!partnerObj?.hasLoading;
+  const isEditDpUnloading = editUnloadingByDeliveryPartner && !!partnerObj?.hasUnloading;
+
   const loadingWorkerObj = workerByIdMap.get(editLoadingWorkerId);
-  const loadingWorkerName = loadingWorkerObj ? loadingWorkerObj.name : null;
-  const editLoadingCharge = loadingWorkerObj ? editTotalQty * Number(loadingWorkerObj.loadingCost || 0) : 0;
+  const loadingWorkerName = isEditDpLoading
+    ? (partnerObj?.name ? `${partnerObj.name} (Delivery Partner)` : "Delivery Partner")
+    : (loadingWorkerObj ? loadingWorkerObj.name : null);
+  const editLoadingCharge = isEditDpLoading
+    ? (editCustomPartnerLoadingRateType === "per brick"
+        ? editTotalQty * (parseFloat(editCustomPartnerLoadingRate) || 0)
+        : (parseFloat(editCustomPartnerLoadingRate) || 0))
+    : (loadingWorkerObj ? editTotalQty * Number(loadingWorkerObj.loadingCost || 0) : 0);
 
   const unloadingWorkerObj = workerByIdMap.get(editUnloadingWorkerId);
-  const unloadingWorkerName = unloadingWorkerObj ? unloadingWorkerObj.name : null;
-  const editUnloadingCharge = unloadingWorkerObj ? editTotalQty * Number(unloadingWorkerObj.unloadingCost || 0) : 0;
+  const unloadingWorkerName = isEditDpUnloading
+    ? (partnerObj?.name ? `${partnerObj.name} (Delivery Partner)` : "Delivery Partner")
+    : (unloadingWorkerObj ? unloadingWorkerObj.name : null);
+  const editUnloadingCharge = isEditDpUnloading
+    ? (editCustomPartnerUnloadingRateType === "per brick"
+        ? editTotalQty * (parseFloat(editCustomPartnerUnloadingRate) || 0)
+        : (parseFloat(editCustomPartnerUnloadingRate) || 0))
+    : (unloadingWorkerObj ? editTotalQty * Number(unloadingWorkerObj.unloadingCost || 0) : 0);
 
   const discountVal = parseFloat(editDiscount) || 0;
   const subtotalBeforeDiscount = editGrossTotal + editShipmentVal + editExtraVal + editLoadingCharge + editUnloadingCharge;
@@ -2658,6 +2741,7 @@ export default function Orders() {
                           const totalAmountWithOldDues = thisOrderTotal + oldBalanceDue;
                           const paidAmountVal = Number(order.paidAmount !== undefined ? order.paidAmount : (thisOrderTotal - thisOrderUnpaid) || 0);
                           const totalBalanceUnpaid = oldBalanceDue + thisOrderUnpaid;
+                          const excessAdvance = Math.max(0, paidAmountVal - totalAmountWithOldDues);
 
                           return (
                             <View style={{ padding: 10, backgroundColor: colors.bg.primary, borderRadius: 10, borderWidth: 1, borderColor: colors.border.subtle }}>
@@ -2800,6 +2884,17 @@ export default function Orders() {
                                   ₹{totalBalanceUnpaid.toLocaleString("en-IN")}
                                 </Text>
                               </View>
+
+                              {excessAdvance > 0 && (
+                                <View style={[styles.detailRow, { marginTop: 6, paddingVertical: 5, paddingHorizontal: 8, backgroundColor: colors.accent.success + "15", borderRadius: 6, borderColor: colors.accent.success + "30", borderWidth: 1 }]}>
+                                  <Text style={[styles.bodyLabel, { color: colors.accent.success, fontWeight: "700" }]}>
+                                    ⭐ Advance Credit (To Profile)
+                                  </Text>
+                                  <Text style={[styles.bodyValue, { fontSize: 13, fontWeight: "800", color: colors.accent.success }]}>
+                                    +₹{excessAdvance.toLocaleString("en-IN")}
+                                  </Text>
+                                </View>
+                              )}
                             </View>
                           );
                         })()}
@@ -3924,93 +4019,257 @@ export default function Orders() {
                     </View>
                   </ScrollView>
 
-                  <Text style={styles.label}>Assign Loading Worker</Text>
-                  <ScrollView horizontal showsHorizontalScrollIndicator={false} style={styles.partnersScroll}>
-                    <View style={styles.partnersRow}>
+                  {/* Delivery Partner Loading Toggle */}
+                  {editDeliveryPartnerId && partnerObj?.hasLoading ? (
+                    <View style={styles.dpOptionCard}>
                       <Pressable
-                        style={[
-                          styles.partnerCard,
-                          !editLoadingWorkerId && styles.partnerCardActive,
-                        ]}
-                        onPress={() => setEditLoadingWorkerId("")}
+                        style={[styles.dpToggleRow, editLoadingByDeliveryPartner && styles.dpToggleRowActive]}
+                        onPress={() => {
+                          const nextVal = !editLoadingByDeliveryPartner;
+                          setEditLoadingByDeliveryPartner(nextVal);
+                          if (nextVal) {
+                            setEditLoadingWorkerId("");
+                            const p = partners.find((x: any) => x.id === editDeliveryPartnerId);
+                            if (p?.hasLoading) {
+                              setEditCustomPartnerLoadingRate(String(p.loadingRate || 0));
+                              setEditCustomPartnerLoadingRateType(p.loadingRateType || "per brick");
+                            }
+                          }
+                        }}
                       >
-                        <Text
-                          style={[
-                            styles.partnerName,
-                            !editLoadingWorkerId && styles.partnerNameActive,
-                          ]}
-                        >
-                          No Loading Worker
-                        </Text>
-                      </Pressable>
-                      {(workers || []).map((w: any) => {
-                        const active = editLoadingWorkerId === w.id;
-                        return (
-                          <Pressable
-                            key={w.id}
-                            style={[
-                              styles.partnerCard,
-                              active && styles.partnerCardActive,
-                            ]}
-                            onPress={() => setEditLoadingWorkerId(w.id)}
-                          >
-                            <Text
-                              style={[
-                                styles.partnerName,
-                                active && styles.partnerNameActive,
-                              ]}
-                            >
-                              {w.name} (₹{w.loadingCost || 0}/unit)
+                        <View style={{ flexDirection: "row", alignItems: "center", gap: 8, flex: 1 }}>
+                          <MaterialIcons
+                            name={editLoadingByDeliveryPartner ? "check-box" : "check-box-outline-blank"}
+                            size={22}
+                            color={editLoadingByDeliveryPartner ? colors.accent.primary : colors.text.muted}
+                          />
+                          <View style={{ flex: 1 }}>
+                            <Text style={styles.dpToggleTitle}>Delivery Partner Handles Loading</Text>
+                            <Text style={styles.dpToggleSub}>
+                              {partnerObj?.name} {partnerObj?.hasLoading ? `(Default: ₹${partnerObj.loadingRate}/${partnerObj.loadingRateType === "per brick" ? "brick" : "fixed"})` : "(Customizable rate)"}
                             </Text>
-                          </Pressable>
-                        );
-                      })}
-                    </View>
-                  </ScrollView>
+                          </View>
+                        </View>
+                        <View style={[styles.dpStatusBadge, editLoadingByDeliveryPartner && styles.dpStatusBadgeActive]}>
+                          <Text style={[styles.dpStatusBadgeText, editLoadingByDeliveryPartner && styles.dpStatusBadgeTextActive]}>
+                            {editLoadingByDeliveryPartner ? "Partner Selected" : "Use Worker"}
+                          </Text>
+                        </View>
+                      </Pressable>
 
-                  <Text style={styles.label}>Assign Unloading Worker</Text>
-                  <ScrollView horizontal showsHorizontalScrollIndicator={false} style={styles.partnersScroll}>
-                    <View style={styles.partnersRow}>
-                      <Pressable
-                        style={[
-                          styles.partnerCard,
-                          !editUnloadingWorkerId && styles.partnerCardActive,
-                        ]}
-                        onPress={() => setEditUnloadingWorkerId("")}
-                      >
-                        <Text
-                          style={[
-                            styles.partnerName,
-                            !editUnloadingWorkerId && styles.partnerNameActive,
-                          ]}
-                        >
-                          No Unloading Worker
-                        </Text>
-                      </Pressable>
-                      {(workers || []).map((w: any) => {
-                        const active = editUnloadingWorkerId === w.id;
-                        return (
+                      {editLoadingByDeliveryPartner && (
+                        <View style={styles.dpRateAdjustRow}>
+                          <View style={{ flexDirection: "row", gap: 8, marginBottom: 8 }}>
+                            {["per brick", "fixed amount"].map((type) => {
+                              const isSel = editCustomPartnerLoadingRateType === type;
+                              return (
+                                <Pressable
+                                  key={type}
+                                  style={[styles.miniPill, isSel && styles.miniPillActive]}
+                                  onPress={() => setEditCustomPartnerLoadingRateType(type)}
+                                >
+                                  <Text style={[styles.miniPillText, isSel && styles.miniPillTextActive]}>
+                                    {type === "per brick" ? "Per Brick" : "Fixed Amount"}
+                                  </Text>
+                                </Pressable>
+                              );
+                            })}
+                          </View>
+                          <View style={{ flexDirection: "row", alignItems: "center", gap: 10 }}>
+                            <Text style={styles.dpRateLabel}>
+                              {editCustomPartnerLoadingRateType === "per brick" ? "Rate (₹/brick):" : "Fixed Amount (₹):"}
+                            </Text>
+                            <TextInput
+                              style={styles.dpRateInput}
+                              value={editCustomPartnerLoadingRate}
+                              onChangeText={setEditCustomPartnerLoadingRate}
+                              keyboardType="numeric"
+                              placeholder="0.00"
+                              placeholderTextColor={colors.text.muted}
+                            />
+                          </View>
+                        </View>
+                      )}
+                    </View>
+                  ) : null}
+
+                  {/* Loading Worker */}
+                  {!(editLoadingByDeliveryPartner && partnerObj?.hasLoading) && (
+                    <>
+                      <Text style={styles.label}>Assign Loading Worker</Text>
+                      <ScrollView horizontal showsHorizontalScrollIndicator={false} style={styles.partnersScroll}>
+                        <View style={styles.partnersRow}>
                           <Pressable
-                            key={w.id}
                             style={[
                               styles.partnerCard,
-                              active && styles.partnerCardActive,
+                              !editLoadingWorkerId && styles.partnerCardActive,
                             ]}
-                            onPress={() => setEditUnloadingWorkerId(w.id)}
+                            onPress={() => setEditLoadingWorkerId("")}
                           >
                             <Text
                               style={[
                                 styles.partnerName,
-                                active && styles.partnerNameActive,
+                                !editLoadingWorkerId && styles.partnerNameActive,
                               ]}
                             >
-                              {w.name} (₹{w.unloadingCost || 0}/unit)
+                              No Loading Worker
                             </Text>
                           </Pressable>
-                        );
-                      })}
+                          {(workers || []).map((w: any) => {
+                            const active = editLoadingWorkerId === w.id;
+                            return (
+                              <Pressable
+                                key={w.id}
+                                style={[
+                                  styles.partnerCard,
+                                  active && styles.partnerCardActive,
+                                ]}
+                                onPress={() => {
+                                  setEditLoadingWorkerId(w.id);
+                                  setEditLoadingByDeliveryPartner(false);
+                                }}
+                              >
+                                <Text
+                                  style={[
+                                    styles.partnerName,
+                                    active && styles.partnerNameActive,
+                                  ]}
+                                >
+                                  {w.name} (₹{w.loadingCost || 0}/unit)
+                                </Text>
+                              </Pressable>
+                            );
+                          })}
+                        </View>
+                      </ScrollView>
+                    </>
+                  )}
+
+                  {/* Delivery Partner Unloading Toggle */}
+                  {editDeliveryPartnerId && partnerObj?.hasUnloading ? (
+                    <View style={[styles.dpOptionCard, { marginTop: 14 }]}>
+                      <Pressable
+                        style={[styles.dpToggleRow, editUnloadingByDeliveryPartner && styles.dpToggleRowActive]}
+                        onPress={() => {
+                          const nextVal = !editUnloadingByDeliveryPartner;
+                          setEditUnloadingByDeliveryPartner(nextVal);
+                          if (nextVal) {
+                            setEditUnloadingWorkerId("");
+                            const p = partners.find((x: any) => x.id === editDeliveryPartnerId);
+                            if (p?.hasUnloading) {
+                              setEditCustomPartnerUnloadingRate(String(p.unloadingRate || 0));
+                              setEditCustomPartnerUnloadingRateType(p.unloadingRateType || "per brick");
+                            }
+                          }
+                        }}
+                      >
+                        <View style={{ flexDirection: "row", alignItems: "center", gap: 8, flex: 1 }}>
+                          <MaterialIcons
+                            name={editUnloadingByDeliveryPartner ? "check-box" : "check-box-outline-blank"}
+                            size={22}
+                            color={editUnloadingByDeliveryPartner ? colors.accent.primary : colors.text.muted}
+                          />
+                          <View style={{ flex: 1 }}>
+                            <Text style={styles.dpToggleTitle}>Delivery Partner Handles Unloading</Text>
+                            <Text style={styles.dpToggleSub}>
+                              {partnerObj?.name} {partnerObj?.hasUnloading ? `(Default: ₹${partnerObj.unloadingRate}/${partnerObj.unloadingRateType === "per brick" ? "brick" : "fixed"})` : "(Customizable rate)"}
+                            </Text>
+                          </View>
+                        </View>
+                        <View style={[styles.dpStatusBadge, editUnloadingByDeliveryPartner && styles.dpStatusBadgeActive]}>
+                          <Text style={[styles.dpStatusBadgeText, editUnloadingByDeliveryPartner && styles.dpStatusBadgeTextActive]}>
+                            {editUnloadingByDeliveryPartner ? "Partner Selected" : "Use Worker"}
+                          </Text>
+                        </View>
+                      </Pressable>
+
+                      {editUnloadingByDeliveryPartner && (
+                        <View style={styles.dpRateAdjustRow}>
+                          <View style={{ flexDirection: "row", gap: 8, marginBottom: 8 }}>
+                            {["per brick", "fixed amount"].map((type) => {
+                              const isSel = editCustomPartnerUnloadingRateType === type;
+                              return (
+                                <Pressable
+                                  key={type}
+                                  style={[styles.miniPill, isSel && styles.miniPillActive]}
+                                  onPress={() => setEditCustomPartnerUnloadingRateType(type)}
+                                >
+                                  <Text style={[styles.miniPillText, isSel && styles.miniPillTextActive]}>
+                                    {type === "per brick" ? "Per Brick" : "Fixed Amount"}
+                                  </Text>
+                                </Pressable>
+                              );
+                            })}
+                          </View>
+                          <View style={{ flexDirection: "row", alignItems: "center", gap: 10 }}>
+                            <Text style={styles.dpRateLabel}>
+                              {editCustomPartnerUnloadingRateType === "per brick" ? "Rate (₹/brick):" : "Fixed Amount (₹):"}
+                            </Text>
+                            <TextInput
+                              style={styles.dpRateInput}
+                              value={editCustomPartnerUnloadingRate}
+                              onChangeText={setEditCustomPartnerUnloadingRate}
+                              keyboardType="numeric"
+                              placeholder="0.00"
+                              placeholderTextColor={colors.text.muted}
+                            />
+                          </View>
+                        </View>
+                      )}
                     </View>
-                  </ScrollView>
+                  ) : null}
+
+                  {/* Unloading Worker */}
+                  {!(editUnloadingByDeliveryPartner && partnerObj?.hasUnloading) && (
+                    <>
+                      <Text style={[styles.label, { marginTop: (editDeliveryPartnerId && partnerObj?.hasUnloading) ? 10 : 14 }]}>Assign Unloading Worker</Text>
+                      <ScrollView horizontal showsHorizontalScrollIndicator={false} style={styles.partnersScroll}>
+                        <View style={styles.partnersRow}>
+                          <Pressable
+                            style={[
+                              styles.partnerCard,
+                              !editUnloadingWorkerId && styles.partnerCardActive,
+                            ]}
+                            onPress={() => setEditUnloadingWorkerId("")}
+                          >
+                            <Text
+                              style={[
+                                styles.partnerName,
+                                !editUnloadingWorkerId && styles.partnerNameActive,
+                              ]}
+                            >
+                              No Unloading Worker
+                            </Text>
+                          </Pressable>
+                          {(workers || []).map((w: any) => {
+                            const active = editUnloadingWorkerId === w.id;
+                            return (
+                              <Pressable
+                                key={w.id}
+                                style={[
+                                  styles.partnerCard,
+                                  active && styles.partnerCardActive,
+                                ]}
+                                onPress={() => {
+                                  setEditUnloadingWorkerId(w.id);
+                                  setEditUnloadingByDeliveryPartner(false);
+                                }}
+                              >
+                                <Text
+                                  style={[
+                                    styles.partnerName,
+                                    active && styles.partnerNameActive,
+                                  ]}
+                                >
+                                  {w.name} (₹{w.unloadingCost || 0}/unit)
+                                </Text>
+                              </Pressable>
+                            );
+                          })}
+                        </View>
+                      </ScrollView>
+                    </>
+                  )}
 
                   {/* Billing Calculations */}
                   <View style={styles.divider} />
@@ -4405,6 +4664,16 @@ export default function Orders() {
                             ₹{totalBalanceUnpaid.toLocaleString("en-IN")}
                           </Text>
                         </View>
+                        {editPaidVal > grandTotalWithOldDues && (
+                          <View style={[styles.calcRow, { marginTop: 6, paddingVertical: 4, paddingHorizontal: 8, backgroundColor: colors.accent.success + "15", borderRadius: 6, borderColor: colors.accent.success + "30", borderWidth: 1 }]}>
+                            <Text style={[styles.calcLabel, { color: colors.accent.success, fontWeight: "700" }]}>
+                              ⭐ Advance Credit (To Profile):
+                            </Text>
+                            <Text style={[styles.calcValue, { color: colors.accent.success, fontWeight: "800" }]}>
+                              +₹{(editPaidVal - grandTotalWithOldDues).toLocaleString("en-IN")}
+                            </Text>
+                          </View>
+                        )}
                       </View>
                     );
                   })()}
@@ -6154,6 +6423,94 @@ const getStyles = (theme: any) => {
     filterPillTextActive: {
       color: colors.accent.primary,
       fontWeight: "700",
+    },
+    dpOptionCard: {
+      backgroundColor: colors.bg.primary,
+      borderWidth: 1,
+      borderColor: colors.border.medium,
+      borderRadius: 12,
+      padding: 10,
+      marginBottom: 8,
+    },
+    dpToggleRow: {
+      flexDirection: "row",
+      alignItems: "center",
+      justifyContent: "space-between",
+    },
+    dpToggleRowActive: {},
+    dpToggleTitle: {
+      fontSize: 13,
+      fontWeight: "700",
+      color: colors.text.primary,
+    },
+    dpToggleSub: {
+      fontSize: 11,
+      color: colors.text.muted,
+      marginTop: 1,
+    },
+    dpStatusBadge: {
+      paddingHorizontal: 8,
+      paddingVertical: 3,
+      borderRadius: 6,
+      backgroundColor: colors.bg.card,
+      borderWidth: 1,
+      borderColor: colors.border.subtle,
+    },
+    dpStatusBadgeActive: {
+      backgroundColor: `${colors.accent.primary}18`,
+      borderColor: colors.accent.primary,
+    },
+    dpStatusBadgeText: {
+      fontSize: 10.5,
+      fontWeight: "600",
+      color: colors.text.muted,
+    },
+    dpStatusBadgeTextActive: {
+      color: colors.accent.primary,
+      fontWeight: "800",
+    },
+    dpRateAdjustRow: {
+      marginTop: 10,
+      paddingTop: 10,
+      borderTopWidth: 1,
+      borderTopColor: colors.border.subtle,
+    },
+    miniPill: {
+      paddingHorizontal: 10,
+      paddingVertical: 4,
+      borderRadius: 12,
+      backgroundColor: colors.bg.card,
+      borderWidth: 1,
+      borderColor: colors.border.subtle,
+    },
+    miniPillActive: {
+      backgroundColor: `${colors.accent.primary}18`,
+      borderColor: colors.accent.primary,
+    },
+    miniPillText: {
+      fontSize: 11,
+      fontWeight: "600",
+      color: colors.text.muted,
+    },
+    miniPillTextActive: {
+      color: colors.accent.primary,
+      fontWeight: "700",
+    },
+    dpRateLabel: {
+      fontSize: 12,
+      fontWeight: "600",
+      color: colors.text.secondary,
+    },
+    dpRateInput: {
+      borderWidth: 1,
+      borderColor: colors.border.medium,
+      borderRadius: 8,
+      paddingHorizontal: 8,
+      paddingVertical: 4,
+      fontSize: 13,
+      color: colors.text.primary,
+      backgroundColor: colors.bg.card,
+      width: 90,
     },
   });
 };

@@ -29,6 +29,7 @@ export function formatTransactionAsText(transaction: TransactionData, customTemp
   const hasOldBal = oldBal > 0;
   const gTotal = (transaction.totalAmount || 0) + oldBal;
   const netDue = Math.max(0, gTotal - (transaction.paidAmount || 0));
+  const excessAdv = Math.max(0, (transaction.paidAmount || 0) - gTotal);
 
   const itemsFormatted = items.length > 0
     ? items.map((item, index) => `${index + 1}. *${item.name}*\n   ${item.quantity}${item.unit ? ' ' + item.unit : ''} × ${formatCurrency(item.unitPrice)} = ${formatCurrency(item.totalPrice)}`).join('\n')
@@ -73,6 +74,9 @@ export function formatTransactionAsText(transaction: TransactionData, customTemp
     calcBlock += `⭐ *Total Amount: ${formatCurrency(transaction.totalAmount)}*\n`;
   }
   calcBlock += `• Amount Paid: ${formatCurrency(transaction.paidAmount)}\n`;
+  if (excessAdv > 0) {
+    calcBlock += `⭐ *Advance Credit Added: +${formatCurrency(excessAdv)} (Credited to Customer Profile)*\n`;
+  }
   calcBlock += `🚨 *Balance Remaining: ${formatCurrency(hasOldBal ? netDue : (transaction.pendingAmount || 0))}*`;
 
   if (customTemplate && customTemplate.trim().length > 0) {
@@ -177,6 +181,9 @@ export function formatTransactionAsText(transaction: TransactionData, customTemp
 
   if (transaction.paidAmount !== undefined) {
     text += `• Paid Amount: ${formatCurrency(transaction.paidAmount)}\n`;
+  }
+  if (excessAdv > 0) {
+    text += `⭐ *Advance Credit Added: +${formatCurrency(excessAdv)} (Credited to Customer Profile)*\n`;
   }
 
   const dueLabel = hasOldBal ? 'Total Balance Due' : 'Balance Due';
@@ -427,3 +434,80 @@ export const shareService = {
     }
   },
 };
+
+export function formatPaymentReceiptAsText(payment: any, company: any, customer?: any): string {
+  const companyName = company?.name || company?.businessName || company?.fullName || 'Amman Hollow Bricks';
+  const companyPhone = company?.phone || company?.mobile || '';
+  const customerName = payment?.customerName || customer?.name || 'Valued Customer';
+  const customerPhone = customer?.phone || payment?.customerPhone || '';
+  const isRefund = payment?.type === 'advance_refund' || (payment?.refundAmount && payment?.refundAmount > 0);
+  const amount = Math.abs(Number(payment?.refundAmount || payment?.amountReceived || payment?.amount || 0));
+  const method = payment?.paymentMethod || payment?.paymentMode || 'Cash';
+  const notes = payment?.notes || '';
+  const collector = payment?.collectorName || '';
+  const dateStr = formatDate(payment?.createdAt || payment?.date);
+
+  let msg = `🧾 *${isRefund ? 'ADVANCE REFUND RECEIPT' : 'PAYMENT RECEIPT'}*\n`;
+  msg += `━━━━━━━━━━━━━━━━━━━━━━\n`;
+  msg += `🏢 *${companyName}*\n`;
+  if (companyPhone) msg += `📞 Contact: ${companyPhone}\n`;
+  msg += `━━━━━━━━━━━━━━━━━━━━━━\n\n`;
+
+  msg += `👤 *Client Details:*\n`;
+  msg += `• Name: *${customerName}*\n`;
+  if (customerPhone) msg += `• Phone: ${customerPhone}\n`;
+  msg += `\n`;
+
+  msg += `💳 *Transaction Details:*\n`;
+  msg += `• Status: ${isRefund ? '🔴 Refund Returned' : '🟢 Payment Received'}\n`;
+  msg += `• Date: ${dateStr}\n`;
+  msg += `• Amount: *${formatCurrency(amount)}*\n`;
+  msg += `• Payment Mode: ${method}\n`;
+  if (collector) msg += `• Collected By: ${collector}\n`;
+  if (notes) msg += `• Notes / Ref: ${notes}\n`;
+
+  if (payment?.pendingAfter !== undefined) {
+    const after = Number(payment.pendingAfter);
+    if (after < 0) {
+      msg += `• Current Advance Balance: *${formatCurrency(Math.abs(after))}*\n`;
+    } else if (after === 0) {
+      msg += `• Outstanding Balance: *₹0.00 (Fully Settled)*\n`;
+    } else {
+      msg += `• Outstanding Balance: *${formatCurrency(after)}*\n`;
+    }
+  }
+
+  msg += `\n━━━━━━━━━━━━━━━━━━━━━━\n`;
+  msg += `🙏 *Thank you for your business!*`;
+
+  return msg;
+}
+
+export async function sharePaymentReceipt(payment: any, company: any, customer?: any, directWhatsApp = true): Promise<void> {
+  const text = formatPaymentReceiptAsText(payment, company, customer);
+  const primaryPhoneRaw = (customer?.phoneNumbers?.[0] || customer?.phone || payment?.customerPhone || '').split(/[,/|]+/)[0].trim();
+  const phone = primaryPhoneRaw.replace(/[^0-9]/g, '');
+
+  if (directWhatsApp && phone) {
+    const formattedPhone = phone.length === 10 ? `91${phone}` : phone;
+    const url = `whatsapp://send?phone=${formattedPhone}&text=${encodeURIComponent(text)}`;
+    try {
+      const canOpen = await Linking.canOpenURL(url);
+      if (canOpen) {
+        await Linking.openURL(url);
+        return;
+      }
+    } catch {
+      // Fallback to native share
+    }
+  }
+
+  try {
+    await Share.share({
+      message: text,
+      title: `${payment?.type === 'advance_refund' ? 'Advance Refund' : 'Payment'} Receipt`,
+    });
+  } catch (err: any) {
+    console.error('Share error:', err);
+  }
+}

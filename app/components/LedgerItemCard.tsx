@@ -64,6 +64,11 @@ const LedgerItemCardComponent: React.FC<LedgerItemCardProps> = ({
         </Text>
         {entry.type === "order" && (
           <View style={{ marginTop: 2 }}>
+            {(entry.advanceAmount > 0 || (entry.original?.advanceAmount > 0) || (entry.paymentReceived > entry.orderAmount)) && (
+              <Text style={{ fontSize: 9, color: colors.accent.success, fontWeight: "700" }}>
+                ⭐ Adv: +₹{(entry.advanceAmount || entry.original?.advanceAmount || (entry.paymentReceived - entry.orderAmount)).toLocaleString("en-IN")} (Credited to Profile)
+              </Text>
+            )}
             {entry.deliveryPartnerName && (
               <Text style={{ fontSize: 9, color: colors.text.muted }}>
                 🚚 {entry.deliveryPartnerName}
@@ -129,6 +134,18 @@ const LedgerItemCardComponent: React.FC<LedgerItemCardProps> = ({
             )}
           </View>
         )}
+        {entry.type === "refund" && (
+          <View style={{ marginTop: 2 }}>
+            <Text style={{ fontSize: 9, color: "#D97706", fontWeight: "700" }}>
+              ↩️ Returned to Client ({entry.original?.paymentMethod || "Cash"})
+            </Text>
+            {entry.original?.notes && (
+              <Text style={{ fontSize: 9, color: colors.text.muted }} numberOfLines={1}>
+                📝 {entry.original.notes}
+              </Text>
+            )}
+          </View>
+        )}
       </View>
       <Text style={[styles.cell, { flex: 1.5, textAlign: "right", color: colors.text.secondary }]} numberOfLines={1} adjustsFontSizeToFit>
         {entry.orderAmount > 0 ? `₹${entry.orderAmount.toLocaleString("en-IN")}` : "—"}
@@ -139,7 +156,7 @@ const LedgerItemCardComponent: React.FC<LedgerItemCardProps> = ({
           {
             flex: 1.5,
             textAlign: "right",
-            color: entry.type === "cancellation" ? colors.accent.danger : colors.accent.success,
+            color: (entry.type === "cancellation" || entry.type === "refund") ? colors.accent.danger : colors.accent.success,
             fontWeight: "700",
           },
         ]}
@@ -148,6 +165,8 @@ const LedgerItemCardComponent: React.FC<LedgerItemCardProps> = ({
       >
         {entry.type === "cancellation"
           ? `-₹${Math.abs(entry.balanceChange).toLocaleString("en-IN")}`
+          : entry.type === "refund"
+          ? `-₹${Math.abs(entry.refundAmount || entry.paymentReceived || 0).toLocaleString("en-IN")}`
           : entry.paymentReceived > 0
           ? `₹${entry.paymentReceived.toLocaleString("en-IN")}`
           : entry.discountAmount > 0

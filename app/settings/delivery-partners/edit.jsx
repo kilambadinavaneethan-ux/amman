@@ -31,6 +31,14 @@ function EditDeliveryPartner() {
   const [deliveryRate, setDeliveryRate] = useState("");
   const [minimumRate, setMinimumRate] = useState("");
 
+  const [hasLoading, setHasLoading] = useState(false);
+  const [loadingRateType, setLoadingRateType] = useState("per brick");
+  const [loadingRate, setLoadingRate] = useState("");
+
+  const [hasUnloading, setHasUnloading] = useState(false);
+  const [unloadingRateType, setUnloadingRateType] = useState("per brick");
+  const [unloadingRate, setUnloadingRate] = useState("");
+
   const [saving, setSaving] = useState(false);
   const [error, setError] = useState("");
 
@@ -48,6 +56,12 @@ function EditDeliveryPartner() {
       setDeliveryRateType(partner.deliveryRateType || "fixed amount");
       setDeliveryRate(partner.deliveryRate !== undefined && partner.deliveryRate !== null ? partner.deliveryRate.toString() : "");
       setMinimumRate(partner.minimumRate !== undefined && partner.minimumRate !== null ? partner.minimumRate.toString() : "");
+      setHasLoading(!!partner.hasLoading);
+      setLoadingRateType(partner.loadingRateType || "per brick");
+      setLoadingRate(partner.loadingRate !== undefined && partner.loadingRate !== null ? partner.loadingRate.toString() : "");
+      setHasUnloading(!!partner.hasUnloading);
+      setUnloadingRateType(partner.unloadingRateType || "per brick");
+      setUnloadingRate(partner.unloadingRate !== undefined && partner.unloadingRate !== null ? partner.unloadingRate.toString() : "");
     }
   }, [partner]);
 
@@ -112,6 +126,24 @@ function EditDeliveryPartner() {
       }
     }
 
+    let loadingRateNum = 0;
+    if (hasLoading && loadingRate.trim()) {
+      loadingRateNum = parseFloat(loadingRate);
+      if (isNaN(loadingRateNum) || loadingRateNum < 0) {
+        setError("Loading Rate must be a valid positive number.");
+        return;
+      }
+    }
+
+    let unloadingRateNum = 0;
+    if (hasUnloading && unloadingRate.trim()) {
+      unloadingRateNum = parseFloat(unloadingRate);
+      if (isNaN(unloadingRateNum) || unloadingRateNum < 0) {
+        setError("Unloading Rate must be a valid positive number.");
+        return;
+      }
+    }
+
     setSaving(true);
     try {
       const ok = await updatePartner(partner.id, {
@@ -124,6 +156,12 @@ function EditDeliveryPartner() {
         deliveryRateType,
         deliveryRate: rateNum,
         minimumRate: minRateNum,
+        hasLoading: !!hasLoading,
+        loadingRateType: hasLoading ? loadingRateType : "per brick",
+        loadingRate: hasLoading ? loadingRateNum : 0,
+        hasUnloading: !!hasUnloading,
+        unloadingRateType: hasUnloading ? unloadingRateType : "per brick",
+        unloadingRate: hasUnloading ? unloadingRateNum : 0,
       });
 
       if (ok) {
@@ -316,8 +354,148 @@ function EditDeliveryPartner() {
           editable={!saving}
         />
 
+        {/* Loading Service */}
+        <Text style={styles.sectionDividerTitle}>Loading Service</Text>
+        <View style={styles.statusRow}>
+          {[
+            { label: "No Loading", value: false },
+            { label: "Offers Loading", value: true },
+          ].map((opt) => {
+            const isSelected = hasLoading === opt.value;
+            return (
+              <Pressable
+                key={opt.label}
+                style={[
+                  styles.statusPill,
+                  isSelected && styles.statusActive,
+                ]}
+                onPress={() => setHasLoading(opt.value)}
+                disabled={saving}
+              >
+                <Text style={[styles.statusText, isSelected && styles.statusTextSelected]}>
+                  {opt.label}
+                </Text>
+              </Pressable>
+            );
+          })}
+        </View>
+
+        {hasLoading && (
+          <>
+            <Text style={styles.label}>Loading Rate Type</Text>
+            <View style={styles.statusRow}>
+              {[
+                { label: "Per Brick", value: "per brick" },
+                { label: "Fixed Amount", value: "fixed amount" },
+              ].map((type) => {
+                const isSelected = loadingRateType === type.value;
+                return (
+                  <Pressable
+                    key={type.value}
+                    style={[
+                      styles.statusPill,
+                      isSelected && styles.statusActive,
+                    ]}
+                    onPress={() => setLoadingRateType(type.value)}
+                    disabled={saving}
+                  >
+                    <Text style={[styles.statusText, isSelected && styles.statusTextSelected]}>
+                      {type.label}
+                    </Text>
+                  </Pressable>
+                );
+              })}
+            </View>
+
+            <Text style={styles.label}>
+              {loadingRateType === "per brick"
+                ? "Loading Rate (₹ per Brick)"
+                : "Loading Rate (Fixed ₹)"}
+            </Text>
+            <TextInput
+              style={styles.input}
+              value={loadingRate}
+              onChangeText={setLoadingRate}
+              placeholder={loadingRateType === "per brick" ? "e.g. 0.50" : "e.g. 200.00"}
+              placeholderTextColor={colors.text.muted}
+              keyboardType="numeric"
+              editable={!saving}
+            />
+          </>
+        )}
+
+        {/* Unloading Service */}
+        <Text style={styles.sectionDividerTitle}>Unloading Service</Text>
+        <View style={styles.statusRow}>
+          {[
+            { label: "No Unloading", value: false },
+            { label: "Offers Unloading", value: true },
+          ].map((opt) => {
+            const isSelected = hasUnloading === opt.value;
+            return (
+              <Pressable
+                key={opt.label}
+                style={[
+                  styles.statusPill,
+                  isSelected && styles.statusActive,
+                ]}
+                onPress={() => setHasUnloading(opt.value)}
+                disabled={saving}
+              >
+                <Text style={[styles.statusText, isSelected && styles.statusTextSelected]}>
+                  {opt.label}
+                </Text>
+              </Pressable>
+            );
+          })}
+        </View>
+
+        {hasUnloading && (
+          <>
+            <Text style={styles.label}>Unloading Rate Type</Text>
+            <View style={styles.statusRow}>
+              {[
+                { label: "Per Brick", value: "per brick" },
+                { label: "Fixed Amount", value: "fixed amount" },
+              ].map((type) => {
+                const isSelected = unloadingRateType === type.value;
+                return (
+                  <Pressable
+                    key={type.value}
+                    style={[
+                      styles.statusPill,
+                      isSelected && styles.statusActive,
+                    ]}
+                    onPress={() => setUnloadingRateType(type.value)}
+                    disabled={saving}
+                  >
+                    <Text style={[styles.statusText, isSelected && styles.statusTextSelected]}>
+                      {type.label}
+                    </Text>
+                  </Pressable>
+                );
+              })}
+            </View>
+
+            <Text style={styles.label}>
+              {unloadingRateType === "per brick"
+                ? "Unloading Rate (₹ per Brick)"
+                : "Unloading Rate (Fixed ₹)"}
+            </Text>
+            <TextInput
+              style={styles.input}
+              value={unloadingRate}
+              onChangeText={setUnloadingRate}
+              placeholder={unloadingRateType === "per brick" ? "e.g. 0.50" : "e.g. 200.00"}
+              placeholderTextColor={colors.text.muted}
+              keyboardType="numeric"
+              editable={!saving}
+            />
+          </>
+        )}
+
         {/* Status Toggle */}
-        <Text style={styles.label}>Status</Text>
+        <Text style={[styles.label, { marginTop: 10 }]}>Status</Text>
         <View style={styles.statusRow}>
           {["Active", "Inactive"].map((state) => {
             const isSelected = status === state;
@@ -551,10 +729,20 @@ const getStyles = (theme) => {
     color: "#16a34a",
     fontWeight: "600",
   },
+  sectionDividerTitle: {
+    fontSize: 15,
+    fontWeight: "700",
+    color: colors.text.primary,
+    marginTop: 8,
+    marginBottom: 10,
+    borderTopWidth: 1,
+    borderTopColor: colors.border.subtle,
+    paddingTop: 14,
+  },
   statusRow: {
     flexDirection: "row",
     gap: 12,
-    marginBottom: 24,
+    marginBottom: 20,
   },
   statusPill: {
     flex: 1,

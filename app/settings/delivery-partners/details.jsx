@@ -447,7 +447,10 @@ function PartnerDetailsScreen() {
       )
       .map((o) => {
         const dt = o.createdAt instanceof Date ? o.createdAt : o.createdAt?.toDate ? o.createdAt.toDate() : new Date(o.createdAt);
-        const charge = Number(o.shipmentCharge || o.deliveryRate || 0);
+        const baseCharge = Number(o.shipmentCharge || o.deliveryRate || 0);
+        const partnerLoadingFee = o.loadingByDeliveryPartner ? Number(o.loadingCharge || 0) : 0;
+        const partnerUnloadingFee = o.unloadingByDeliveryPartner ? Number(o.unloadingCharge || 0) : 0;
+        const charge = baseCharge + partnerLoadingFee + partnerUnloadingFee;
         return {
           id: `order-trip-${o.id}`,
           orderId: o.id,
@@ -1827,6 +1830,24 @@ function PartnerDetailsScreen() {
                   <MaterialIcons name="place" size={13} color={colors.text.secondary} />
                   <Text style={styles.infoChipText} numberOfLines={1}>
                     {partner.address}
+                  </Text>
+                </View>
+              ) : null}
+
+              {partner.hasLoading ? (
+                <View style={[styles.infoChip, { backgroundColor: isDark ? "#1e3a8a30" : "#eff6ff", borderColor: isDark ? "#3b82f640" : "#bfdbfe" }]}>
+                  <MaterialIcons name="inventory-2" size={13} color="#2563eb" />
+                  <Text style={[styles.infoChipText, { color: isDark ? "#60a5fa" : "#1d4ed8" }]}>
+                    Loading: {partner.loadingRateType === "per brick" ? `₹${(Number(partner.loadingRate) || 0).toFixed(2)}/brick` : `₹${(Number(partner.loadingRate) || 0).toFixed(2)} Fixed`}
+                  </Text>
+                </View>
+              ) : null}
+
+              {partner.hasUnloading ? (
+                <View style={[styles.infoChip, { backgroundColor: isDark ? "#581c8730" : "#faf5ff", borderColor: isDark ? "#a855f740" : "#e9d5ff" }]}>
+                  <MaterialIcons name="move-to-inbox" size={13} color="#7c3aed" />
+                  <Text style={[styles.infoChipText, { color: isDark ? "#c084fc" : "#6d28d9" }]}>
+                    Unloading: {partner.unloadingRateType === "per brick" ? `₹${(Number(partner.unloadingRate) || 0).toFixed(2)}/brick` : `₹${(Number(partner.unloadingRate) || 0).toFixed(2)} Fixed`}
                   </Text>
                 </View>
               ) : null}

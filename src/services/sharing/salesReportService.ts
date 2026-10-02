@@ -1041,15 +1041,23 @@ export async function exportSalesReportPdf(
 ): Promise<boolean> {
   try {
     const html = generateSalesReportHtml(reportData, company, config);
-    const { uri } = await Print.printToFileAsync({
+    const printResult = await Print.printToFileAsync({
       html,
-      base64: false,
+      base64: true,
     });
 
     if (await Sharing.isAvailableAsync()) {
       const filename = `SalesReport_${reportData.filter.period}_${Date.now()}.pdf`;
-      const targetUri = `${FileSystem.documentDirectory}${filename}`;
-      await FileSystem.copyAsync({ from: uri, to: targetUri });
+      const baseDir = FileSystem.cacheDirectory || FileSystem.documentDirectory;
+      const targetUri = `${baseDir}${filename}`;
+
+      if (printResult.base64) {
+        await FileSystem.writeAsStringAsync(targetUri, printResult.base64, {
+          encoding: FileSystem.EncodingType.Base64,
+        });
+      } else {
+        await FileSystem.copyAsync({ from: printResult.uri, to: targetUri });
+      }
 
       await Sharing.shareAsync(targetUri, {
         UTI: '.pdf',
@@ -1058,7 +1066,7 @@ export async function exportSalesReportPdf(
       });
       return true;
     } else {
-      Alert.alert('Sharing Unavailable', 'PDF generated at: ' + uri);
+      Alert.alert('Sharing Unavailable', 'PDF generated at: ' + printResult.uri);
       return true;
     }
   } catch (error: any) {

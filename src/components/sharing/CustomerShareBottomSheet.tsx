@@ -14,9 +14,10 @@ import {
 import { MaterialIcons } from '@expo/vector-icons';
 import { captureRef } from 'react-native-view-shot';
 import * as Sharing from 'expo-sharing';
-import { CustomerShareData, ShareSettings, InvoiceTemplate, DEFAULT_SHARE_SETTINGS, DEFAULT_INVOICE_TEMPLATE } from '../../types/sharing';
+import { CustomerShareData, ShareSettings, InvoiceTemplate, DEFAULT_SHARE_SETTINGS, DEFAULT_INVOICE_TEMPLATE, AppaEstimateBillSettings, DEFAULT_APPA_ESTIMATE_BILL_SETTINGS } from '../../types/sharing';
 import { customerShareService } from '../../services/sharing/customerShareService';
 import { CustomerStatementView } from './CustomerStatementView';
+import { AppaEstimateBillView, AppaBillTheme, APPA_BILL_THEMES } from './AppaEstimateBillView';
 import { shareSettingsService } from '../../services/sharing/shareSettingsService';
 import { invoiceTemplateService } from '../../services/sharing/invoiceTemplateService';
 import { ShareSettingsModal } from './ShareSettingsModal';
@@ -40,6 +41,11 @@ export function CustomerShareBottomSheet({
   isDark = false,
 }: CustomerShareBottomSheetProps) {
   const [activeTab, setActiveTab] = useState<TabType>('IMAGE');
+  const [statementType, setStatementType] = useState<'standard' | 'appa_estimate'>('appa_estimate');
+  const [appaTheme, setAppaTheme] = useState<AppaBillTheme>('classic');
+  const [appaEditModalVisible, setAppaEditModalVisible] = useState(false);
+  const [billNo, setBillNo] = useState('1');
+  const [customAppaSettings, setCustomAppaSettings] = useState<AppaEstimateBillSettings>(DEFAULT_APPA_ESTIMATE_BILL_SETTINGS);
   const [settings, setSettings] = useState<ShareSettings>(DEFAULT_SHARE_SETTINGS);
   const [template, setTemplate] = useState<InvoiceTemplate>(DEFAULT_INVOICE_TEMPLATE);
   const [loading, setLoading] = useState(false);
@@ -56,7 +62,7 @@ export function CustomerShareBottomSheet({
   const [includeDueDates, setIncludeDueDates] = useState(false);
   const [includeSummary, setIncludeSummary] = useState(true);
   const [includeLedger, setIncludeLedger] = useState(true);
-  const [salutation, setSalutation] = useState<'None' | 'Mr.' | 'Mrs.' | 'Ms.' | 'M/s' | 'Dr.'>('None');
+  const [salutation, setSalutation] = useState<'None' | 'Mr.' | 'திரு.' | 'Mrs.' | 'திருமதி' | 'Ms.' | 'M/s' | 'Dr.'>('None');
   const [useAvargal, setUseAvargal] = useState<boolean>(false);
   const [editableCustomerName, setEditableCustomerName] = useState<string>('');
 
@@ -65,6 +71,7 @@ export function CustomerShareBottomSheet({
   useEffect(() => {
     if (visible) {
       setActiveTab('IMAGE');
+      setStatementType('appa_estimate');
       setSortOrder('asc');
       setIncludeDueDates(false);
       setOrderCountFilter('all');
@@ -72,11 +79,13 @@ export function CustomerShareBottomSheet({
       loadSettings();
 
       const origName = customerData?.customer?.name || '';
-      const clean = origName.replace(/^(Mr\.|Mrs\.|Ms\.|M\/s|Dr\.)\s+/i, '').replace(/\s+அவர்கள்$/i, '').trim();
+      const clean = origName.replace(/^(Mr\.|Mrs\.|Ms\.|M\/s|Dr\.|திரு\.|திரு|திருமதி)\s+/i, '').replace(/\s+அவர்கள்$/i, '').trim();
       setEditableCustomerName(clean);
 
       if (/^Mr\.\s+/i.test(origName)) setSalutation('Mr.');
+      else if (/^(திரு\.|திரு)\s+/i.test(origName)) setSalutation('திரு.');
       else if (/^Mrs\.\s+/i.test(origName)) setSalutation('Mrs.');
+      else if (/^திருமதி\s+/i.test(origName)) setSalutation('திருமதி');
       else if (/^Ms\.\s+/i.test(origName)) setSalutation('Ms.');
       else if (/^M\/s\s+/i.test(origName)) setSalutation('M/s');
       else if (/^Dr\.\s+/i.test(origName)) setSalutation('Dr.');
@@ -98,6 +107,15 @@ export function CustomerShareBottomSheet({
       ]);
       setSettings(s);
       setTemplate(t);
+      if (t?.appaBillSettings) {
+        setCustomAppaSettings({
+          ...DEFAULT_APPA_ESTIMATE_BILL_SETTINGS,
+          ...t.appaBillSettings,
+        });
+        if (t.appaBillSettings.defaultTheme) {
+          setAppaTheme(t.appaBillSettings.defaultTheme);
+        }
+      }
 
       const effectiveTamil = Boolean(t?.isTamilLanguage ?? s?.isTamilLanguage);
       const effectiveBilingual = Boolean(t?.isBilingual ?? s?.isBilingual);
@@ -229,7 +247,7 @@ export function CustomerShareBottomSheet({
     const totalPaid = sortedLedger.reduce((sum, l) => sum + (l.paid || 0), 0);
 
     const origName = customerData.customer?.name || '';
-    const origClean = origName.replace(/^(Mr\.|Mrs\.|Ms\.|M\/s|Dr\.)\s+/i, '').replace(/\s+அவர்கள்$/i, '').trim();
+    const origClean = origName.replace(/^(Mr\.|Mrs\.|Ms\.|M\/s|Dr\.|திரு\.|திரு|திருமதி)\s+/i, '').replace(/\s+அவர்கள்$/i, '').trim();
     const effectiveBaseName = editableCustomerName !== undefined && editableCustomerName !== null ? editableCustomerName : origClean;
     const cleanName = effectiveBaseName.trim() || origClean || 'Customer';
 
@@ -274,15 +292,22 @@ export function CustomerShareBottomSheet({
 
   useEffect(() => {
     if (visible && settings) {
-      const text = customerShareService.formatCustomerShareText(processedData, company, settings, undefined, template);
+      const activeTemplate: InvoiceTemplate = {
+        ...template,
+        appaBillSettings: {
+          ...template?.appaBillSettings,
+          ...customAppaSettings,
+        } as AppaEstimateBillSettings,
+      };
+      const text = customerShareService.formatCustomerShareText(processedData, company, settings, undefined, activeTemplate, statementType);
       setCustomMessage(text);
     }
-  }, [processedData, visible, settings, template]);
+  }, [processedData, visible, settings, template, statementType, customAppaSettings]);
 
   const handleShareText = async (via: 'whatsapp' | 'sms' | 'copy' | 'share') => {
     setSharing(true);
     try {
-      await customerShareService.shareCustomerAsText(processedData, company, settings, customMessage, via);
+      await customerShareService.shareCustomerAsText(processedData, company, settings, customMessage, via, statementType);
     } finally {
       setSharing(false);
     }
@@ -303,7 +328,7 @@ export function CustomerShareBottomSheet({
       if (await Sharing.isAvailableAsync()) {
         await Sharing.shareAsync(uri, {
           mimeType: 'image/png',
-          dialogTitle: `Statement - ${processedData.customer.name}`,
+          dialogTitle: `${statementType === 'appa_estimate' ? 'Estimate Slip' : 'Statement'} - ${processedData.customer.name}`,
         });
       } else {
         Alert.alert('Image Saved', `Statement image saved to:\n${uri}`);
@@ -319,7 +344,16 @@ export function CustomerShareBottomSheet({
   const handleExportPdf = async () => {
     setSharing(true);
     try {
-      await customerShareService.shareCustomerAsPdf(processedData, company, settings, template);
+      await customerShareService.shareCustomerAsPdf(
+        processedData,
+        company,
+        settings,
+        template,
+        statementType,
+        appaTheme,
+        billNo,
+        customAppaSettings
+      );
     } finally {
       setSharing(false);
     }
@@ -401,6 +435,87 @@ export function CustomerShareBottomSheet({
 
             {/* SECTIONS & FILTERS TOOLBAR */}
             <View style={{ width: '100%', paddingTop: 10, paddingBottom: 6 }}>
+              {/* Statement Type Selector Bar */}
+              <View style={{ flexDirection: 'row', alignItems: 'center', gap: 6, marginBottom: 8 }}>
+                <Text style={{ fontSize: 10, fontWeight: '800', color: subTextColor }}>STATEMENT TYPE:</Text>
+                <ScrollView horizontal showsHorizontalScrollIndicator={false} contentContainerStyle={{ gap: 6 }}>
+                  {[
+                    { id: 'standard', label: '📄 Modern Statement' },
+                    { id: 'appa_estimate', label: '📝 Appa Estimate Bill (அப்பா எஸ்டிமேட்)' },
+                  ].map((st) => (
+                    <Pressable
+                      key={st.id}
+                      onPress={() => setStatementType(st.id as any)}
+                      style={{
+                        paddingHorizontal: 10,
+                        paddingVertical: 4,
+                        borderRadius: 12,
+                        backgroundColor: statementType === st.id ? (st.id === 'appa_estimate' ? '#B91C1C' : accentColor) : (isDark ? '#334155' : '#F1F5F9'),
+                      }}
+                    >
+                      <Text style={{ fontSize: 11, fontWeight: '700', color: statementType === st.id ? '#FFF' : textColor }}>
+                        {st.label}
+                      </Text>
+                    </Pressable>
+                  ))}
+                </ScrollView>
+              </View>
+
+              {/* Appa Estimate Themes & Edit Options Selector Bar */}
+              {statementType === 'appa_estimate' && (
+                <View style={{ marginBottom: 8 }}>
+                  <View style={{ flexDirection: 'row', alignItems: 'center', justifyContent: 'space-between' }}>
+                    <View style={{ flexDirection: 'row', alignItems: 'center', gap: 6, flex: 1 }}>
+                      <Text style={{ fontSize: 10, fontWeight: '800', color: subTextColor }}>BILL THEME:</Text>
+                      <ScrollView horizontal showsHorizontalScrollIndicator={false} contentContainerStyle={{ gap: 6 }}>
+                        {Object.values(APPA_BILL_THEMES).map((th) => {
+                          const isSel = appaTheme === th.id;
+                          return (
+                            <Pressable
+                              key={th.id}
+                              onPress={() => setAppaTheme(th.id)}
+                              style={{
+                                paddingHorizontal: 10,
+                                paddingVertical: 4,
+                                borderRadius: 12,
+                                borderWidth: 1.5,
+                                borderColor: isSel ? th.inkColor : borderColor,
+                                backgroundColor: isSel ? th.headerBg : (isDark ? '#334155' : '#F1F5F9'),
+                              }}
+                            >
+                              <Text style={{ fontSize: 11, fontWeight: '800', color: isSel ? th.inkColor : textColor }}>
+                                {th.label}
+                              </Text>
+                            </Pressable>
+                          );
+                        })}
+                      </ScrollView>
+                    </View>
+
+                    <Pressable
+                      onPress={() => setAppaEditModalVisible(true)}
+                      style={{
+                        flexDirection: 'row',
+                        alignItems: 'center',
+                        gap: 4,
+                        paddingHorizontal: 10,
+                        paddingVertical: 5,
+                        borderRadius: 12,
+                        backgroundColor: '#B91C1C15',
+                        borderWidth: 1,
+                        borderColor: '#B91C1C',
+                        marginLeft: 6,
+                      }}
+                    >
+                      <MaterialIcons name="edit" size={14} color="#B91C1C" />
+                      <Text style={{ fontSize: 11, fontWeight: '800', color: '#B91C1C' }}>
+                        Edit Bill (திருத்து)
+                      </Text>
+                    </Pressable>
+                  </View>
+                </View>
+              )}
+
               {/* Date Filter Bar */}
               <View style={{ flexDirection: 'row', alignItems: 'center', gap: 6, marginBottom: 8 }}>
                 <Text style={{ fontSize: 10, fontWeight: '800', color: subTextColor }}>DATE FILTER:</Text>
@@ -684,7 +799,9 @@ export function CustomerShareBottomSheet({
                   {[
                     { id: 'None', label: 'Default' },
                     { id: 'Mr.', label: 'Mr.' },
+                    { id: 'திரு.', label: 'திரு.' },
                     { id: 'Mrs.', label: 'Mrs.' },
+                    { id: 'திருமதி', label: 'திருமதி' },
                     { id: 'Ms.', label: 'Ms.' },
                     { id: 'M/s', label: 'M/s' },
                     { id: 'Dr.', label: 'Dr.' },
@@ -851,29 +968,60 @@ export function CustomerShareBottomSheet({
             {/* ────────── TAB 2: IMAGE RECEIPT ────────── */}
             {activeTab === 'IMAGE' && (
               <View>
-                <Text style={[styles.inputLabel, { color: subTextColor, marginBottom: 10 }]}>STATEMENT IMAGE PREVIEW</Text>
+                <View style={{ flexDirection: 'row', justifyContent: 'space-between', alignItems: 'center', marginBottom: 10 }}>
+                  <Text style={[styles.inputLabel, { color: subTextColor, marginBottom: 0 }]}>
+                    {statementType === 'appa_estimate' ? 'APPA ESTIMATE BILL (அப்பா எஸ்டிமேட்)' : 'STATEMENT IMAGE PREVIEW'}
+                  </Text>
+                  {statementType === 'appa_estimate' && (
+                    <Text style={{ fontSize: 10, color: subTextColor, fontStyle: 'italic' }}>
+                      👈 Swipe to preview slip 👉
+                    </Text>
+                  )}
+                </View>
                 
-                <CustomerStatementView
-                  ref={viewShotRef}
-                  data={processedData}
-                  company={company}
-                  settings={settings}
-                  template={template}
-                  isDark={isDark}
-                />
+                {statementType === 'appa_estimate' ? (
+                  <ScrollView
+                    horizontal
+                    showsHorizontalScrollIndicator={true}
+                    contentContainerStyle={{ paddingVertical: 4, paddingHorizontal: 2 }}
+                  >
+                    <AppaEstimateBillView
+                      ref={viewShotRef}
+                      data={processedData}
+                      company={company}
+                      settings={settings}
+                      template={template}
+                      isDark={isDark}
+                      billTheme={appaTheme}
+                      billNo={billNo}
+                      appaBillSettings={customAppaSettings}
+                    />
+                  </ScrollView>
+                ) : (
+                  <CustomerStatementView
+                    ref={viewShotRef}
+                    data={processedData}
+                    company={company}
+                    settings={settings}
+                    template={template}
+                    isDark={isDark}
+                  />
+                )}
 
                 <View style={[styles.actionBtnRow, { marginTop: 16 }]}>
                   <Pressable
                     onPress={handleShareImage}
                     disabled={sharing}
-                    style={[styles.primaryActionBtn, { backgroundColor: accentColor }]}
+                    style={[styles.primaryActionBtn, { backgroundColor: statementType === 'appa_estimate' ? '#B91C1C' : accentColor }]}
                   >
                     {sharing ? (
                       <ActivityIndicator color="#FFF" size="small" />
                     ) : (
                       <>
                         <MaterialIcons name="share" size={20} color="#FFF" />
-                        <Text style={styles.primaryActionText}>Share Statement Image</Text>
+                        <Text style={styles.primaryActionText}>
+                          {statementType === 'appa_estimate' ? 'Share Appa Estimate Slip' : 'Share Statement Image'}
+                        </Text>
                       </>
                     )}
                   </Pressable>
@@ -887,9 +1035,13 @@ export function CustomerShareBottomSheet({
                 <View style={[styles.pdfIconBg, { backgroundColor: '#EF444415' }]}>
                   <MaterialIcons name="picture-as-pdf" size={48} color="#EF4444" />
                 </View>
-                <Text style={[styles.pdfTitle, { color: textColor }]}>Formal Account Statement (PDF)</Text>
+                <Text style={[styles.pdfTitle, { color: textColor }]}>
+                  {statementType === 'appa_estimate' ? 'Appa Estimate Bill (PDF)' : 'Formal Account Statement (PDF)'}
+                </Text>
                 <Text style={[styles.pdfDesc, { color: subTextColor }]}>
-                  Generates an A4 Customer Statement with full ledger history table, itemized order records, payments, running balance, and signature.
+                  {statementType === 'appa_estimate'
+                    ? 'Generates a traditional A4 Estimate Bill slip matching the physical bill book layout with Tamil invocation, header, 6-column ledger grid, and signature.'
+                    : 'Generates an A4 Customer Statement with full ledger history table, itemized order records, payments, running balance, and signature.'}
                 </Text>
 
                 <Pressable
@@ -902,7 +1054,9 @@ export function CustomerShareBottomSheet({
                   ) : (
                     <>
                       <MaterialIcons name="picture-as-pdf" size={20} color="#FFF" />
-                      <Text style={styles.primaryActionText}>Export & Share PDF</Text>
+                      <Text style={styles.primaryActionText}>
+                        {statementType === 'appa_estimate' ? 'Export & Share Appa Estimate PDF' : 'Export & Share PDF'}
+                      </Text>
                     </>
                   )}
                 </Pressable>
@@ -923,6 +1077,252 @@ export function CustomerShareBottomSheet({
         }}
         isDark={isDark}
       />
+
+      {/* Appa Estimate Bill On-The-Fly Edit Options Modal */}
+      <Modal
+        visible={appaEditModalVisible}
+        transparent
+        animationType="slide"
+        onRequestClose={() => setAppaEditModalVisible(false)}
+      >
+        <View style={styles.modalOverlay}>
+          <View style={[styles.editModalContainer, { backgroundColor: cardBg, borderColor, width: '92%', maxWidth: 480, maxHeight: '88%' }]}>
+            {/* Header */}
+            <View style={[styles.editModalHeader, { borderBottomColor: borderColor }]}>
+              <View style={{ flexDirection: 'row', alignItems: 'center', gap: 8 }}>
+                <MaterialIcons name="edit-note" size={24} color="#B91C1C" />
+                <View>
+                  <Text style={[styles.editModalTitle, { color: textColor }]}>
+                    Edit Estimate Bill (பில் திருத்து)
+                  </Text>
+                  <Text style={{ fontSize: 10, color: subTextColor }}>
+                    Customize options for this statement
+                  </Text>
+                </View>
+              </View>
+              <Pressable onPress={() => setAppaEditModalVisible(false)} hitSlop={8}>
+                <MaterialIcons name="close" size={22} color={textColor} />
+              </Pressable>
+            </View>
+
+            <ScrollView style={{ paddingVertical: 10 }} showsVerticalScrollIndicator={false}>
+              {/* Bill No */}
+              <View style={{ marginBottom: 12 }}>
+                <Text style={[styles.inputLabel, { color: subTextColor }]}>Bill Number (நெ. / பில் எண்)</Text>
+                <TextInput
+                  value={billNo}
+                  onChangeText={setBillNo}
+                  placeholder="1"
+                  placeholderTextColor={subTextColor}
+                  style={[styles.editInput, { backgroundColor: isDark ? '#0F172A' : '#F8FAFC', color: textColor, borderColor }]}
+                />
+              </View>
+
+              {/* Invocation */}
+              <View style={{ marginBottom: 12 }}>
+                <Text style={[styles.inputLabel, { color: subTextColor }]}>Divine Invocation (கடவுள் வாழ்த்து)</Text>
+                <TextInput
+                  value={customAppaSettings.invocationText}
+                  onChangeText={(val) => setCustomAppaSettings((prev) => ({ ...prev, invocationText: val }))}
+                  placeholder="|| ஸ்ரீ சொக்கநாச்சி அம்மன் துணை ||"
+                  placeholderTextColor={subTextColor}
+                  style={[styles.editInput, { backgroundColor: isDark ? '#0F172A' : '#F8FAFC', color: textColor, borderColor }]}
+                />
+                <View style={{ flexDirection: 'row', alignItems: 'center', justifyContent: 'space-between', marginTop: 8 }}>
+                  <Text style={{ fontSize: 11, fontWeight: '700', color: subTextColor }}>Font Size: {customAppaSettings.invocationFontSize || 14}px</Text>
+                  <View style={{ flexDirection: 'row', gap: 6 }}>
+                    {[12, 14, 16, 18, 20, 22].map((sz) => {
+                      const isSel = (customAppaSettings.invocationFontSize || 14) === sz;
+                      return (
+                        <Pressable
+                          key={sz}
+                          onPress={() => setCustomAppaSettings((prev) => ({ ...prev, invocationFontSize: sz }))}
+                          style={{
+                            paddingHorizontal: 8,
+                            paddingVertical: 3,
+                            borderRadius: 6,
+                            backgroundColor: isSel ? '#B91C1C' : (isDark ? '#334155' : '#E2E8F0'),
+                          }}
+                        >
+                          <Text style={{ fontSize: 11, fontWeight: '700', color: isSel ? '#FFF' : textColor }}>{sz}</Text>
+                        </Pressable>
+                      );
+                    })}
+                  </View>
+                </View>
+              </View>
+
+              {/* Contact Phone Numbers */}
+              <View style={{ marginBottom: 12 }}>
+                <View style={{ flexDirection: 'row', justifyContent: 'space-between', alignItems: 'center', marginBottom: 6 }}>
+                  <Text style={[styles.inputLabel, { color: subTextColor, marginBottom: 0 }]}>Company Phones (தொடர்பு எண்கள்)</Text>
+                  <Pressable
+                    onPress={() => {
+                      const current = (customAppaSettings.phoneNumbers && customAppaSettings.phoneNumbers.length > 0)
+                        ? [...customAppaSettings.phoneNumbers]
+                        : (customAppaSettings.customPhones?.trim()
+                            ? customAppaSettings.customPhones.split(/[•,]/).map(p => p.trim()).filter(Boolean)
+                            : ['99430 51509', '99430 51209']);
+                      current.push('');
+                      setCustomAppaSettings((prev) => ({
+                        ...prev,
+                        phoneNumbers: current,
+                        customPhones: current.filter(Boolean).join(' • '),
+                      }));
+                    }}
+                    style={{
+                      flexDirection: 'row',
+                      alignItems: 'center',
+                      gap: 2,
+                      paddingHorizontal: 8,
+                      paddingVertical: 3,
+                      borderRadius: 6,
+                      backgroundColor: isDark ? '#334155' : '#E2E8F0',
+                    }}
+                  >
+                    <MaterialIcons name="add" size={14} color={textColor} />
+                    <Text style={{ fontSize: 10, fontWeight: '700', color: textColor }}>+ Add Phone</Text>
+                  </Pressable>
+                </View>
+                {(() => {
+                  const currentList = (customAppaSettings.phoneNumbers && customAppaSettings.phoneNumbers.length > 0)
+                    ? customAppaSettings.phoneNumbers
+                    : (customAppaSettings.customPhones?.trim()
+                        ? customAppaSettings.customPhones.split(/[•,]/).map(p => p.trim()).filter(Boolean)
+                        : ['99430 51509', '99430 51209']);
+                  return (
+                    <View style={{ gap: 6 }}>
+                      {currentList.map((ph, idx) => (
+                        <View key={idx} style={{ flexDirection: 'row', alignItems: 'center', gap: 6 }}>
+                          <TextInput
+                            value={ph}
+                            onChangeText={(val) => {
+                              const updated = [...currentList];
+                              updated[idx] = val;
+                              setCustomAppaSettings((prev) => ({
+                                ...prev,
+                                phoneNumbers: updated,
+                                customPhones: updated.filter(Boolean).join(' • '),
+                              }));
+                            }}
+                            placeholder={`Phone ${idx + 1}`}
+                            placeholderTextColor={subTextColor}
+                            keyboardType="phone-pad"
+                            style={[styles.editInput, { flex: 1, backgroundColor: isDark ? '#0F172A' : '#F8FAFC', color: textColor, borderColor, height: 38 }]}
+                          />
+                          {currentList.length > 1 && (
+                            <Pressable
+                              onPress={() => {
+                                const updated = [...currentList];
+                                updated.splice(idx, 1);
+                                setCustomAppaSettings((prev) => ({
+                                  ...prev,
+                                  phoneNumbers: updated,
+                                  customPhones: updated.filter(Boolean).join(' • '),
+                                }));
+                              }}
+                              style={{ padding: 6 }}
+                              hitSlop={6}
+                            >
+                              <MaterialIcons name="delete-outline" size={18} color="#EF4444" />
+                            </Pressable>
+                          )}
+                        </View>
+                      ))}
+                    </View>
+                  );
+                })()}
+              </View>
+
+
+
+              {/* Column Headings */}
+              <View style={{ marginBottom: 12 }}>
+                <Text style={[styles.inputLabel, { color: subTextColor }]}>Column Headings (அட்டவணை பத்திகள்)</Text>
+                <View style={{ gap: 6 }}>
+                  <TextInput
+                    value={customAppaSettings.columnLabels?.description}
+                    onChangeText={(val) => setCustomAppaSettings((prev) => ({
+                      ...prev,
+                      columnLabels: { ...(prev.columnLabels || {}), description: val }
+                    }))}
+                    placeholder="Particulars: விபரம் (பொருட்கள் / கூலி)"
+                    placeholderTextColor={subTextColor}
+                    style={[styles.editInput, { height: 38, backgroundColor: isDark ? '#0F172A' : '#F8FAFC', color: textColor, borderColor }]}
+                  />
+                  <View style={{ flexDirection: 'row', gap: 6 }}>
+                    <TextInput
+                      value={customAppaSettings.columnLabels?.debit}
+                      onChangeText={(val) => setCustomAppaSettings((prev) => ({
+                        ...prev,
+                        columnLabels: { ...(prev.columnLabels || {}), debit: val }
+                      }))}
+                      placeholder="Debit: பற்று (+)"
+                      placeholderTextColor={subTextColor}
+                      style={[styles.editInput, { flex: 1, height: 38, backgroundColor: isDark ? '#0F172A' : '#F8FAFC', color: textColor, borderColor }]}
+                    />
+                    <TextInput
+                      value={customAppaSettings.columnLabels?.credit}
+                      onChangeText={(val) => setCustomAppaSettings((prev) => ({
+                        ...prev,
+                        columnLabels: { ...(prev.columnLabels || {}), credit: val }
+                      }))}
+                      placeholder="Credit: வரவு (-)"
+                      placeholderTextColor={subTextColor}
+                      style={[styles.editInput, { flex: 1, height: 38, backgroundColor: isDark ? '#0F172A' : '#F8FAFC', color: textColor, borderColor }]}
+                    />
+                  </View>
+                </View>
+              </View>
+
+              {/* Signatory text */}
+              <View style={{ marginBottom: 12 }}>
+                <Text style={[styles.inputLabel, { color: subTextColor }]}>Authorized Signatory (கையொப்பம்)</Text>
+                <TextInput
+                  value={customAppaSettings.signatoryText}
+                  onChangeText={(val) => setCustomAppaSettings((prev) => ({ ...prev, signatoryText: val }))}
+                  placeholder="அங்கீகரிக்கப்பட்ட கையொப்பம்"
+                  placeholderTextColor={subTextColor}
+                  style={[styles.editInput, { backgroundColor: isDark ? '#0F172A' : '#F8FAFC', color: textColor, borderColor }]}
+                />
+              </View>
+            </ScrollView>
+
+            {/* Action Buttons */}
+            <View style={{ flexDirection: 'row', gap: 8, marginTop: 12, paddingTop: 10, borderTopWidth: 1, borderTopColor: borderColor }}>
+              <Pressable
+                onPress={() => {
+                  setCustomAppaSettings({
+                    ...DEFAULT_APPA_ESTIMATE_BILL_SETTINGS,
+                    ...(template?.appaBillSettings || {}),
+                  });
+                  setBillNo('1');
+                }}
+                style={{
+                  paddingVertical: 10,
+                  paddingHorizontal: 12,
+                  borderRadius: 10,
+                  backgroundColor: isDark ? '#334155' : '#E2E8F0',
+                }}
+              >
+                <Text style={{ fontSize: 12, fontWeight: '700', color: textColor }}>Reset Defaults</Text>
+              </Pressable>
+              <Pressable
+                onPress={() => setAppaEditModalVisible(false)}
+                style={{
+                  flex: 1,
+                  paddingVertical: 10,
+                  borderRadius: 10,
+                  backgroundColor: '#B91C1C',
+                  alignItems: 'center',
+                }}
+              >
+                <Text style={{ fontSize: 13, fontWeight: '800', color: '#FFF' }}>Apply (பயன்படுத்து)</Text>
+              </Pressable>
+            </View>
+          </View>
+        </View>
+      </Modal>
     </Modal>
   );
 }
@@ -1069,5 +1469,32 @@ const styles = StyleSheet.create({
     textAlign: 'center',
     paddingHorizontal: 20,
     lineHeight: 18,
+  },
+  editModalContainer: {
+    borderRadius: 16,
+    borderWidth: 1,
+    padding: 16,
+    elevation: 6,
+    alignSelf: 'center',
+    marginBottom: 'auto',
+    marginTop: 'auto',
+  },
+  editModalHeader: {
+    flexDirection: 'row',
+    justifyContent: 'space-between',
+    alignItems: 'center',
+    paddingBottom: 10,
+    borderBottomWidth: 1,
+  },
+  editModalTitle: {
+    fontSize: 15,
+    fontWeight: '800',
+  },
+  editInput: {
+    height: 40,
+    borderRadius: 8,
+    borderWidth: 1,
+    paddingHorizontal: 10,
+    fontSize: 13,
   },
 });

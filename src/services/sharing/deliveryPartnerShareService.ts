@@ -1,5 +1,6 @@
 import * as Print from 'expo-print';
 import * as Sharing from 'expo-sharing';
+import * as FileSystem from 'expo-file-system/legacy';
 import { Share, Alert, Linking } from 'react-native';
 
 export interface DeliveryTripItem {
@@ -675,16 +676,45 @@ export class DeliveryPartnerShareService {
   ): Promise<void> {
     try {
       const html = this.generateDeliveryPartnerStatementHtml(data, company, periodLabel);
-      const { uri } = await Print.printToFileAsync({ html });
+      const printResult = await Print.printToFileAsync({
+        html,
+        base64: true,
+      });
+
+      // In Android / Expo Go, temporary files from Print.printToFileAsync reside in the root cache,
+      // which triggers 'Not allowed to read file under given URL' in ExpoSharing and is unreadable by FileSystem.copyAsync.
+      // Writing base64 directly into FileSystem.cacheDirectory places the file inside the app sandbox safely.
+      const baseDir = FileSystem.cacheDirectory || FileSystem.documentDirectory;
+      let shareUri = printResult.uri;
+
+      if (baseDir) {
+        const sanitizedName = (data.partner.name || 'Partner').replace(/[/\\?%*:|"<>]/g, '_');
+        const filename = `PartnerStatement_${sanitizedName}_${Date.now()}.pdf`;
+        const targetUri = `${baseDir}${filename}`;
+
+        if (printResult.base64) {
+          await FileSystem.writeAsStringAsync(targetUri, printResult.base64, {
+            encoding: FileSystem.EncodingType.Base64,
+          });
+          shareUri = targetUri;
+        } else {
+          try {
+            await FileSystem.copyAsync({ from: printResult.uri, to: targetUri });
+            shareUri = targetUri;
+          } catch (copyErr) {
+            console.warn('Fallback copyAsync failed, using raw URI:', copyErr);
+          }
+        }
+      }
 
       if (await Sharing.isAvailableAsync()) {
-        await Sharing.shareAsync(uri, {
+        await Sharing.shareAsync(shareUri, {
           mimeType: 'application/pdf',
-          dialogTitle: `Statement - ${data.partner.name}.pdf`,
+          dialogTitle: `Statement - ${data.partner.name}`,
           UTI: 'com.adobe.pdf',
         });
       } else {
-        Alert.alert('PDF Created', `PDF statement saved at:\n${uri}`);
+        Alert.alert('PDF Created', `PDF statement saved at:\n${shareUri}`);
       }
     } catch (err: any) {
       console.error('Export partner PDF error:', err);

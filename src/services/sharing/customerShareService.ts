@@ -1,7 +1,8 @@
 import { Share, Linking, Alert, Clipboard, Platform } from 'react-native';
 import * as Sharing from 'expo-sharing';
 import * as Print from 'expo-print';
-import { CustomerShareData, ShareSettings, InvoiceTemplate, DEFAULT_CUSTOMER_MESSAGE_TEMPLATE, formatCustomerPhonesDisplay, formatCustomerPhoneNumbers } from '../../types/sharing';
+import * as FileSystem from 'expo-file-system/legacy';
+import { CustomerShareData, ShareSettings, InvoiceTemplate, DEFAULT_CUSTOMER_MESSAGE_TEMPLATE, formatCustomerPhonesDisplay, formatCustomerPhoneNumbers, AppaEstimateBillSettings, DEFAULT_APPA_ESTIMATE_BILL_SETTINGS } from '../../types/sharing';
 import { getInvoiceLabels } from '../../utils/invoiceLocalization';
 
 function formatCurrency(amount: number): string {
@@ -25,8 +26,87 @@ export const customerShareService = {
     company: any = {},
     settings: ShareSettings,
     customTemplate?: string,
-    template?: InvoiceTemplate
+    template?: InvoiceTemplate,
+    formatType: 'standard' | 'appa_estimate' = 'standard'
   ): string {
+    if (formatType === 'appa_estimate') {
+      const cfg: AppaEstimateBillSettings = {
+        ...DEFAULT_APPA_ESTIMATE_BILL_SETTINGS,
+        ...(template?.appaBillSettings || {}),
+      };
+      const rawCompanyPhone = cfg.customPhones?.trim() || company.phone || '99430 51509';
+      const altPhone = cfg.customPhones?.trim() ? '' : (company.alternatePhone || '99430 51209');
+      const phones = [rawCompanyPhone, altPhone].filter(Boolean).join(', ');
+      const compName = cfg.customCompanyName?.trim() || company.name || 'அம்மன் ஹாலோ பிரிக்ஸ்';
+      const compAddress = cfg.customAddress?.trim() || company.address;
+      const custName = data.customer.name.endsWith('அவர்கள்') ? data.customer.name : `${data.customer.name} அவர்கள்`;
+      const netDue = data.summary.netBalanceDue;
+      const invocation = cfg.invocationText || '|| ஸ்ரீ சொக்கநாச்சி அம்மன் துணை ||';
+      const estTitle = cfg.titleEnglish || 'ESTEEMATE';
+
+      let msg = `🌸 *${invocation}*\n`;
+      msg += `📝 *${estTitle}*\n`;
+      msg += `📞 ${phones}\n`;
+      msg += `🏢 *${compName}*\n`;
+      if (compAddress) msg += `📍 ${compAddress}\n`;
+      msg += `━━━━━━━━━━━━━━━━━━━━━━\n`;
+      msg += `👤 *திரு. ${custName}*\n`;
+      if (data.customer.address) msg += `📍 ${data.customer.address}\n`;
+      msg += `📅 தேதி: ${formatDate(new Date())}\n`;
+      msg += `━━━━━━━━━━━━━━━━━━━━━━\n`;
+      msg += `📋 *கணக்கு விவரங்கள் (பற்று - வரவு):*\n\n`;
+
+      const ledger = data.ledger || [];
+      ledger.forEach((l, idx) => {
+        const dmy = formatDate(l.date);
+        if (l.type === 'order') {
+          msg += `${idx + 1}. [${dmy}] *${l.description}*\n`;
+          if (l.items && l.items.length > 0) {
+            l.items.forEach((it) => {
+              const r = it.rate || (it.total && it.quantity ? it.total / it.quantity : 0);
+              msg += `   • ${it.name} - ${it.quantity}X${r} = ${Math.round(it.total).toLocaleString('en-IN')}\n`;
+            });
+          }
+          msg += `   🔴 பற்று: +${formatCurrency(l.amount)} | பாக்கி: ${formatCurrency(l.balance)}\n\n`;
+        } else if (l.type === 'payment') {
+          msg += `${idx + 1}. [${dmy}] 💳 ${l.description || 'ரொக்கம் வரவு'}${l.notes ? ' (' + l.notes + ')' : ''}\n`;
+          msg += `   🟢 வரவு: -${formatCurrency(l.paid)} | பாக்கி: ${formatCurrency(l.balance)}\n\n`;
+        } else {
+          msg += `${idx + 1}. [${dmy}] 📌 ${l.description}: +${formatCurrency(l.amount)}\n\n`;
+        }
+      });
+
+      const totalDebit = ledger.filter((l) => l.type === 'order' || l.type === 'opening').reduce((s, l) => s + (l.amount || 0), 0);
+      const totalCredit = ledger.reduce((s, l) => s + (l.paid || 0), 0);
+
+      msg += `━━━━━━━━━━━━━━━━━━━━━━\n`;
+      msg += `📊 *மொத்த பற்று:* ${formatCurrency(totalDebit)}\n`;
+      msg += `💵 *மொத்த வரவு:* ${formatCurrency(totalCredit)}\n`;
+      msg += `💰 *இறுதி பாக்கி:* ${netDue > 0 ? formatCurrency(netDue) : netDue < 0 ? `+${formatCurrency(Math.abs(netDue))} (முன்பணம் வரவு)` : 'கணக்கு முடிந்தது ✅'}\n`;
+      msg += `━━━━━━━━━━━━━━━━━━━━━━\n`;
+
+      const showBank = (cfg.showBankDetails !== false) && (settings?.includeBankDetails !== false);
+      const activeBankAcc = settings?.bankAccounts?.find((a: any) => a.id === settings.selectedBankAccountId) || settings?.bankAccounts?.[0];
+      const bankName = settings?.bankName || activeBankAcc?.bankName || template?.bankName || company?.bankName || '';
+      const accountNo = settings?.accountNo || activeBankAcc?.accountNo || template?.accountNo || company?.accountNo || '';
+      const ifscCode = settings?.ifscCode || activeBankAcc?.ifscCode || template?.ifscCode || company?.ifscCode || '';
+      const accountHolderName = settings?.accountHolderName || activeBankAcc?.accountHolderName || template?.accountHolderName || company?.accountHolderName || '';
+      const hasBankInfo = !!(bankName || accountNo || ifscCode || accountHolderName);
+
+      if (showBank && hasBankInfo) {
+        msg += `🏦 *வங்கி விவரங்கள் (Bank Details):*\n`;
+        if (accountHolderName) msg += `• பெயர்: ${accountHolderName}\n`;
+        if (bankName) msg += `• வங்கி: ${bankName}\n`;
+        if (accountNo) msg += `• A/C எண்: ${accountNo}\n`;
+        if (ifscCode) msg += `• IFSC: ${ifscCode}\n`;
+        msg += `━━━━━━━━━━━━━━━━━━━━━━\n`;
+      }
+
+      msg += `நன்றி! மீண்டும் வருக! 🙏\n`;
+      msg += `*For ${compName}*`;
+      return msg;
+    }
+
     const isTamil = Boolean(settings?.isTamilLanguage ?? template?.isTamilLanguage);
     const isBilingual = Boolean(settings?.isBilingual ?? template?.isBilingual);
     const customTamil = (settings?.customTamilLabels || template?.customTamilLabels) as any;
@@ -127,10 +207,11 @@ export const customerShareService = {
     company: any,
     settings: ShareSettings,
     customTemplate?: string,
-    via: 'whatsapp' | 'sms' | 'copy' | 'share' = 'whatsapp'
+    via: 'whatsapp' | 'sms' | 'copy' | 'share' = 'whatsapp',
+    formatType: 'standard' | 'appa_estimate' = 'standard'
   ): Promise<boolean> {
     try {
-      const text = this.formatCustomerShareText(data, company, settings, customTemplate);
+      const text = this.formatCustomerShareText(data, company, settings, customTemplate, undefined, formatType);
       const primaryPhoneRaw = (data.customer.phoneNumbers?.[0] || data.customer.phone || '').split(/[,/|]+/)[0].trim();
       const cleanPhone = primaryPhoneRaw.replace(/[^0-9]/g, '');
 
@@ -420,27 +501,372 @@ export const customerShareService = {
   },
 
   /**
+   * Generate HTML for Traditional Appa Estimate Bill Slip
+   */
+  generateAppaEstimateHtml(
+    data: CustomerShareData,
+    company: any = {},
+    settings: ShareSettings,
+    template: InvoiceTemplate,
+    billNo: string = '1',
+    billTheme: string = 'classic',
+    customAppaSettings?: Partial<AppaEstimateBillSettings>
+  ): string {
+    const cfg: AppaEstimateBillSettings = {
+      ...DEFAULT_APPA_ESTIMATE_BILL_SETTINGS,
+      ...(template?.appaBillSettings || {}),
+      ...(customAppaSettings || {}),
+    };
+
+    let companyPhonesList: string[] = [];
+    if (cfg.phoneNumbers && Array.isArray(cfg.phoneNumbers) && cfg.phoneNumbers.some((p) => p.trim())) {
+      companyPhonesList = cfg.phoneNumbers.map((p) => p.trim()).filter(Boolean);
+    } else if (cfg.customPhones?.trim()) {
+      companyPhonesList = cfg.customPhones.split(/[•,]/).map((p) => p.trim()).filter(Boolean);
+    } else {
+      const rawCompanyPhone = company.phone || '99430 51509';
+      const altPhone = company.alternatePhone || '99430 51209';
+      companyPhonesList = [rawCompanyPhone, altPhone].filter(Boolean);
+    }
+    const companyPhones = companyPhonesList.join(' • ');
+
+    const companyName = cfg.customCompanyName?.trim() || company.name || 'அம்மன் ஹாலோ பிரிக்ஸ்';
+    const companyAddress = cfg.customAddress?.trim() || company.address || '11, கரூர் மெயின் ரோடு, வெங்கமேடு, தளவாபாளையம், Po. புகழூர் D.T - 638153';
+
+    const customerName = data.customer.name || 'வாடிக்கையாளர்';
+    const customerAddress = data.customer.address || '';
+    const customerPhones = formatCustomerPhonesDisplay(data.customer.phone, data.customer.phoneNumbers);
+
+    const effectiveInvocation = cfg.invocationText || '|| ஸ்ரீ சொக்கநாச்சி அம்மன் துணை ||';
+    const titleEnglish = cfg.titleEnglish || 'ESTEEMATE';
+    const titleTamil = cfg.titleTamil || 'மதிப்பீட்டு பில் / ESTIMATE BILL';
+
+
+    const ledger = data.ledger || [];
+    const totalDebit = ledger
+      .filter((l) => l.type === 'order' || l.type === 'opening')
+      .reduce((sum, l) => sum + (l.amount || 0), 0);
+    const totalCredit = ledger.reduce((sum, l) => sum + (l.paid || 0), 0);
+    const netDue = data.summary.netBalanceDue;
+    const isPaid = (netDue || 0) <= 0;
+
+    const themePalettes: Record<string, any> = {
+      classic: { paperBg: '#F6F2E5', cardBg: '#FFFDF7', inkColor: '#0F2942', subTextColor: '#475569', lineColor: '#0F2942', gridLineColor: '#2563EB44', highlightColor: '#B91C1C', headerBg: '#EFE7D0', totalRowBg: '#E9E0C4', stampColor: '#B91C1C', dueBg: '#FEE2E2', dueColor: '#B91C1C' },
+      blue: { paperBg: '#F1F5F9', cardBg: '#FFFFFF', inkColor: '#1E3A8A', subTextColor: '#3B82F6', lineColor: '#1E3A8A', gridLineColor: '#3B82F644', highlightColor: '#DC2626', headerBg: '#DBEAFE', totalRowBg: '#BFDBFE', stampColor: '#1D4ED8', dueBg: '#FEF2F2', dueColor: '#DC2626' },
+      sepia: { paperBg: '#F2E8D5', cardBg: '#FAF3E3', inkColor: '#451A03', subTextColor: '#78350F', lineColor: '#451A03', gridLineColor: '#92400E44', highlightColor: '#991B1B', headerBg: '#E7D8BC', totalRowBg: '#DECBA9', stampColor: '#991B1B', dueBg: '#FEE2E2', dueColor: '#991B1B' },
+      emerald: { paperBg: '#ECFDF5', cardBg: '#F7FEFA', inkColor: '#064E3B', subTextColor: '#047857', lineColor: '#064E3B', gridLineColor: '#05966944', highlightColor: '#B91C1C', headerBg: '#D1FAE5', totalRowBg: '#A7F3D0', stampColor: '#047857', dueBg: '#FEF2F2', dueColor: '#DC2626' },
+      dark: { paperBg: '#090D16', cardBg: '#0F172A', inkColor: '#F8FAFC', subTextColor: '#94A3B8', lineColor: '#64748B', gridLineColor: '#334155', highlightColor: '#F87171', headerBg: '#1E293B', totalRowBg: '#334155', stampColor: '#38BDF8', dueBg: '#450A0A', dueColor: '#FCA5A5' },
+    };
+
+    const t = themePalettes[billTheme] || themePalettes.classic;
+
+    const nameStr = customerName || '';
+    const nameHasAvargal = nameStr.endsWith('அவர்கள்');
+    const mainCustomerName = nameHasAvargal ? nameStr.replace(/\s*அவர்கள்$/, '').trim() : nameStr;
+    const honorificColor = cfg.customerHonorificColor || t.subTextColor;
+    const honorificSize = cfg.customerHonorificFontSize || 12;
+    const customerNameHtml = nameHasAvargal
+      ? `${mainCustomerName} <span class="customer-avargal" style="font-size: ${honorificSize}px; font-weight: 700; color: ${honorificColor}; margin-left: 3px;">அவர்கள்</span>`
+      : mainCustomerName;
+    const todayDate = formatDate(new Date());
+    const invocationColor = cfg.invocationColor || t.highlightColor;
+
+    // QR code setup
+    const showQr = (cfg.showQrCode !== false) && settings?.includeQrCode !== false && !isPaid;
+    const targetUpi = (settings?.upiId || company?.upiId || '').trim();
+    const payeeName = encodeURIComponent((company?.name || 'Business').trim());
+    const txNote = encodeURIComponent(`Bill for ${customerName}`.trim());
+    const upiPayload = targetUpi
+      ? `upi://pay?pa=${targetUpi}&pn=${payeeName}&cu=INR&tn=${txNote}`
+      : `Customer Statement: ${customerName} | Balance: ${netDue}`;
+    const qrSrc = (template?.useCustomQrCode && template?.customQrCodeUri)
+      ? template.customQrCodeUri
+      : `https://api.qrserver.com/v1/create-qr-code/?size=140x140&data=${encodeURIComponent(upiPayload)}`;
+
+    // Bank Details setup
+    const showBank = (cfg.showBankDetails !== false) && (settings?.includeBankDetails !== false);
+    const activeBankAcc = settings?.bankAccounts?.find((a: any) => a.id === settings.selectedBankAccountId) || settings?.bankAccounts?.[0];
+    const bankName = settings?.bankName || activeBankAcc?.bankName || template?.bankName || company?.bankName || '';
+    const accountNo = settings?.accountNo || activeBankAcc?.accountNo || template?.accountNo || company?.accountNo || '';
+    const ifscCode = settings?.ifscCode || activeBankAcc?.ifscCode || template?.ifscCode || company?.ifscCode || '';
+    const accountHolderName = settings?.accountHolderName || activeBankAcc?.accountHolderName || template?.accountHolderName || company?.accountHolderName || '';
+    const hasBankInfo = !!(bankName || accountNo || ifscCode || accountHolderName);
+
+    // Signature image URI
+    const effectiveSignatureUri = cfg.signatureImageUri || (template as any)?.signatureImageUri || company?.signatureUrl || '';
+
+    // Company Logo setup (top-left)
+    const effectiveLogoUri = cfg.companyLogoUri || company?.logoUrl || '';
+    const showLogo = (cfg.showCompanyLogo !== false) && Boolean(effectiveLogoUri);
+
+    const rowsHtml = ledger.map((item, index) => {
+      const isOrder = item.type === 'order';
+      const isPayment = item.type === 'payment';
+      const isOpening = item.type === 'opening';
+
+      const d = item.date instanceof Date ? item.date : new Date(item.date);
+      const dmy = !isNaN(d.getTime()) ? `${String(d.getDate()).padStart(2, '0')}.${String(d.getMonth() + 1).padStart(2, '0')}.${String(d.getFullYear()).slice(-2)}` : '';
+
+      const debitVal = (isOrder || isOpening) ? item.amount : 0;
+      const creditVal = isPayment ? item.paid : 0;
+
+      let particulars = '';
+      if (isOpening) {
+        particulars = `<span style="color: ${t.highlightColor}; font-weight: 800;">முந்தைய பாக்கி (Old Balance)</span>`;
+      } else if (isPayment) {
+        particulars = `<span style="color: #047857; font-weight: 800;">💳 ${item.description || 'ரொக்கம் வரவு'}</span>${item.notes ? ` <span style="font-size: 11px; color: ${t.subTextColor}; font-style: italic;">(${item.notes})</span>` : ''}`;
+      } else {
+        if (item.items && item.items.length > 0) {
+          particulars = item.items.map(it => {
+            const r = it.rate || (it.total && it.quantity ? it.total / it.quantity : 0);
+            return `<div>• <strong>${it.name}</strong> - ${it.quantity}X${r} = <strong>${Math.round(it.total).toLocaleString('en-IN')}</strong></div>`;
+          }).join('');
+        } else {
+          particulars = `<strong>${item.description || 'ஆர்டர் விபரம்'}</strong>`;
+        }
+        const extras: string[] = [];
+        if (item.shipmentCharge) extras.push(`வண்டி வாடகை: ₹${item.shipmentCharge}`);
+        if (item.loadingCharge) extras.push(`ஏற்று கூலி: ₹${item.loadingCharge}`);
+        if (item.unloadingCharge) extras.push(`இறக்கு கூலி: ₹${item.unloadingCharge}`);
+        if (item.notes) extras.push(item.notes);
+        if (extras.length > 0) {
+          particulars += `<div style="font-size: 10px; color: ${t.subTextColor}; margin-top: 2px;">(${extras.join(', ')})</div>`;
+        }
+      }
+
+      return `
+        <tr style="border-bottom: 1px solid ${t.gridLineColor}; font-size: 12px; ${index % 2 === 1 ? `background-color: ${t.headerBg}30;` : ''}">
+          <td style="padding: 7px 4px; text-align: center; border-right: 1px solid ${t.gridLineColor}; font-weight: 700;">${index + 1}</td>
+          <td style="padding: 7px 4px; text-align: center; border-right: 1px solid ${t.gridLineColor}; white-space: nowrap; font-size: 11px;">${dmy}</td>
+          <td style="padding: 7px 8px; border-right: 1px solid ${t.gridLineColor};">${particulars}</td>
+          <td style="padding: 7px 6px; text-align: right; border-right: 1px solid ${t.gridLineColor}; color: ${debitVal ? t.highlightColor : t.subTextColor}; font-weight: ${debitVal ? '800' : '400'};">${debitVal ? formatCurrency(debitVal) : '-'}</td>
+          <td style="padding: 7px 6px; text-align: right; border-right: 1px solid ${t.gridLineColor}; color: ${creditVal ? '#047857' : t.subTextColor}; font-weight: ${creditVal ? '800' : '400'};">${creditVal ? formatCurrency(creditVal) : '-'}</td>
+          <td style="padding: 7px 6px; text-align: right; font-weight: 600;">${item.balance !== undefined ? formatCurrency(item.balance) : '-'}</td>
+        </tr>
+      `;
+    }).join('');
+
+    return `
+      <!DOCTYPE html>
+      <html>
+      <head>
+        <meta charset="utf-8" />
+        <title>ESTEEMATE - ${customerName}</title>
+        <style>
+          @page { size: A4; margin: 12mm; }
+          body { font-family: 'Helvetica Neue', Helvetica, Arial, sans-serif; color: ${t.inkColor}; margin: 0; padding: 10px; background: #FFFFFF; }
+          .outer-frame { border: 2.5px solid ${t.lineColor}; border-radius: 8px; padding: 3px; background: ${t.paperBg}; }
+          .top-bar { position: relative; text-align: center; margin-bottom: 6px; min-height: 24px; }
+          .top-logo { position: absolute; left: 0; top: 0; }
+          .logo-img { max-width: 75px; max-height: 68px; object-fit: contain; border-radius: 6px; }
+          .invocation { color: ${invocationColor}; font-weight: 900; font-size: ${cfg.invocationFontSize || 15}px; letter-spacing: 0.6px; display: inline-block; }
+          .top-phones { position: absolute; right: 0; top: 0; font-size: 13px; font-weight: 800; color: ${t.inkColor}; text-align: right; }
+          .company-name { font-size: ${cfg.companyNameFontSize || 21}px; font-weight: 900; color: ${cfg.companyNameColor || t.inkColor}; margin: 0 0 2px 0; }
+          .company-address { font-size: ${cfg.companyAddressFontSize || 12}px; color: ${cfg.companyAddressColor || t.subTextColor}; line-height: 1.4; }
+          .title-row { margin-bottom: 8px; text-align: center; }
+          .estimate-title { font-size: ${cfg.titleEnglishFontSize || 30}px; font-weight: 900; letter-spacing: 2px; color: ${cfg.titleEnglishColor || t.inkColor}; margin: 0; line-height: 1; text-align: center; }
+          .estimate-sub { font-size: ${cfg.titleTamilFontSize || 11}px; font-weight: 700; color: ${cfg.titleTamilColor || t.subTextColor}; margin-top: 2px; text-align: center; }
+          .stamp-badge { border: 2px dashed ${t.stampColor}; border-radius: 6px; padding: 4px 10px; text-align: center; transform: rotate(-3deg); }
+          .stamp-title { font-size: 13px; font-weight: 900; color: ${t.stampColor}; letter-spacing: 1px; }
+          .stamp-sub { font-size: 9px; font-weight: 800; color: ${t.stampColor}; }
+          .meta-row { display: flex; justify-content: space-between; border-top: 1px solid ${t.lineColor}; border-bottom: 1px solid ${t.lineColor}; padding: 6px 8px; margin-bottom: 10px; font-size: 13px; font-weight: 800; background: ${t.headerBg}40; border-radius: 4px; }
+          .customer-box { border-bottom: 1px solid ${t.gridLineColor}; padding-bottom: 8px; margin-bottom: 12px; font-size: 13px; }
+          .customer-name { font-size: 16px; font-weight: 900; color: ${t.inkColor}; }
+          table { width: 100%; border-collapse: collapse; border: 1.5px solid ${t.lineColor}; margin-bottom: 8px; border-radius: 4px; overflow: hidden; }
+          th { background: ${t.headerBg}; color: ${t.inkColor}; font-size: 12px; font-weight: 900; padding: 8px 4px; border-bottom: 1.5px solid ${t.lineColor}; border-right: 1px solid ${t.lineColor}; text-align: center; }
+          th:last-child { border-right: none; }
+          .total-row { background: ${t.totalRowBg}; font-weight: 900; border-top: 1.5px solid ${t.lineColor}; font-size: 13px; }
+          .total-row td { padding: 8px 6px; border-right: 1px solid ${t.lineColor}; }
+          .total-row td:last-child { border-right: none; }
+          .double-line { border-top: 1px solid ${t.lineColor}; border-bottom: 1px solid ${t.lineColor}; height: 3px; margin: 2px 0 8px 0; }
+          .net-due-box { display: flex; justify-content: space-between; align-items: center; padding: 10px 14px; border-radius: 6px; margin-bottom: 16px; font-size: 15px; font-weight: 900; background: ${netDue > 0 ? t.dueBg : '#ECFDF5'}; color: ${netDue > 0 ? t.dueColor : '#047857'}; border: 1.5px solid ${netDue > 0 ? t.dueColor : '#10B981'}; }
+          .footer-box { display: flex; justify-content: space-between; align-items: flex-end; margin-top: 14px; }
+          .footer-note { font-size: 11.5px; font-weight: 700; }
+          .payment-row { display: flex; gap: 10px; align-items: flex-start; margin-bottom: 8px; flex-wrap: wrap; }
+          .qr-block { display: flex; align-items: center; gap: 10px; border: 1px solid ${t.lineColor}; border-radius: 6px; padding: 6px 10px; background: ${t.headerBg}30; width: fit-content; }
+          .bank-block { border: 1px solid ${t.lineColor}; border-radius: 6px; padding: 6px 10px; background: ${t.headerBg}30; min-width: 170px; max-width: 240px; }
+          .bank-title { font-size: 10px; font-weight: 800; color: ${t.highlightColor}; margin-bottom: 2px; }
+          .bank-row { font-size: 9px; line-height: 13px; color: ${t.inkColor}; }
+          .qr-img { width: 55px; height: 55px; border-radius: 4px; }
+          .seal-box { text-align: center; padding: 6px 10px; min-width: 140px; }
+
+          .sig-line { width: 120px; border-bottom: 1px solid ${t.lineColor}; margin: 0 auto 3px auto; }
+          .sig-label { font-size: 10px; font-weight: 800; color: ${t.inkColor}; }
+        </style>
+      </head>
+      <body>
+        <div class="outer-frame">
+          <div class="inner-frame">
+            <div class="top-bar">
+              ${showLogo && effectiveLogoUri ? `
+                <div class="top-logo">
+                  <img src="${effectiveLogoUri}" class="logo-img" />
+                </div>
+              ` : ''}
+              <div class="invocation">${effectiveInvocation}</div>
+              <div class="top-phones">
+                ${companyPhonesList.map((p, idx) => `<div>${idx === 0 ? '📞 ' : ''}${p}</div>`).join('')}
+              </div>
+            </div>
+            <div class="company-block">
+              <div class="company-name">${companyName}</div>
+              <div class="company-address">${companyAddress}</div>
+            </div>
+            <div class="title-row">
+              <div class="estimate-title">${titleEnglish}</div>
+              <div class="estimate-sub">${titleTamil}</div>
+            </div>
+            <div class="meta-row" style="justify-content: flex-end;">
+              <div>தேதி: ${todayDate}</div>
+            </div>
+            <div class="customer-box">
+              <div class="customer-name">${customerNameHtml}</div>
+              ${customerAddress ? `<div style="margin-top: 3px; color: ${t.subTextColor};">📍 ${customerAddress}</div>` : ''}
+              ${customerPhones ? `<div style="margin-top: 3px; color: ${t.subTextColor};">📱 ${customerPhones}</div>` : ''}
+            </div>
+            <table>
+              <thead>
+                <tr>
+                  <th style="width: 40px;">${cfg.columnLabels?.sno || 'வ. எண்'}<br/><span style="font-size: 9px; font-weight: normal;">S.No</span></th>
+                  <th style="width: 70px;">${cfg.columnLabels?.date || 'தேதி'}<br/><span style="font-size: 9px; font-weight: normal;">Date</span></th>
+                  <th>${cfg.columnLabels?.description || 'விபரம் (பொருட்கள் / கூலி விவரம்)'}<br/><span style="font-size: 9px; font-weight: normal;">Particulars</span></th>
+                  <th style="width: 85px;">${cfg.columnLabels?.debit || 'பற்று (+)'}<br/><span style="font-size: 9px; font-weight: normal; color: ${t.highlightColor};">Debit</span></th>
+                  <th style="width: 85px;">${cfg.columnLabels?.credit || 'வரவு (-)'}<br/><span style="font-size: 9px; font-weight: normal; color: #047857;">Credit</span></th>
+                  <th style="width: 80px;">${cfg.columnLabels?.balance || 'பாக்கி'}<br/><span style="font-size: 9px; font-weight: normal;">Balance</span></th>
+                </tr>
+              </thead>
+              <tbody>
+                ${rowsHtml}
+                <tr class="total-row">
+                  <td colspan="3" style="text-align: center;">மொத்தம் (ACCOUNT TOTALS)</td>
+                  <td style="text-align: right; color: ${t.highlightColor};">${formatCurrency(totalDebit)}</td>
+                  <td style="text-align: right; color: #047857;">${formatCurrency(totalCredit)}</td>
+                  <td style="text-align: right; color: ${netDue > 0 ? t.highlightColor : t.inkColor}; font-weight: 900;">${formatCurrency(netDue)}</td>
+                </tr>
+              </tbody>
+            </table>
+
+            <div class="double-line"></div>
+
+            <div class="net-due-box">
+              <div>
+                <div>${netDue > 0 ? 'இறுதி பாக்கி (NET BALANCE DUE):' : netDue < 0 ? 'முன்பணம் வரவு (CUSTOMER ADVANCE):' : 'கணக்கு முடிந்தது (SETTLED):'}</div>
+              </div>
+              <div style="font-size: 20px;">${formatCurrency(Math.abs(netDue))}</div>
+            </div>
+
+            <div class="footer-box">
+              <div style="flex: 1;">
+                ${(showQr && targetUpi) || (showBank && hasBankInfo) ? `
+                  <div class="payment-row">
+                    ${showQr && targetUpi ? `
+                      <div class="qr-block">
+                        <img src="${qrSrc}" class="qr-img" />
+                        <div>
+                          <div style="font-size: 11px; font-weight: 800;">GPay / PhonePe / UPI</div>
+                          <div style="font-size: 10px; color: ${t.subTextColor};">${targetUpi}</div>
+                          <div style="font-size: 10px; font-weight: 800; color: ${t.highlightColor}; margin-top: 2px;">ஸ்கேன் செய்து கட்டவும் ↗</div>
+                        </div>
+                      </div>
+                    ` : ''}
+                    ${showBank && hasBankInfo ? `
+                      <div class="bank-block">
+                        <div class="bank-title">🏦 வங்கி விவரங்கள் (Bank Details)</div>
+                        ${accountHolderName ? `<div class="bank-row">பெயர்: <strong>${accountHolderName}</strong></div>` : ''}
+                        ${bankName ? `<div class="bank-row">வங்கி: <strong>${bankName}</strong></div>` : ''}
+                        ${accountNo ? `<div class="bank-row">A/C எண்: <strong style="letter-spacing: 0.5px;">${accountNo}</strong></div>` : ''}
+                        ${ifscCode ? `<div class="bank-row">IFSC: <strong style="letter-spacing: 0.5px;">${ifscCode}</strong></div>` : ''}
+                      </div>
+                    ` : ''}
+                  </div>
+                ` : ''}
+                ${cfg.showGoodsAcknowledgment !== false ? (
+                  cfg.footerNotes ? (
+                    cfg.footerNotes.split('\n').filter(Boolean).map(line =>
+                      `<div class="footer-note" style="margin-bottom: 2px;">${line.trim().startsWith('•') ? line.trim() : `• ${line.trim()}`}</div>`
+                    ).join('')
+                  ) : `
+                    <div class="footer-note">• சரக்குகள் சரியான முறையில் கிடைக்கப்பெற்றது.</div>
+                    <div class="footer-note" style="color: ${t.subTextColor};">• தங்களின் மேலான ஆதரவிற்கு மிக்க நன்றி! மீண்டும் வருக!</div>
+                  `
+                ) : ''}
+              </div>
+              <div class="seal-box">
+
+                ${effectiveSignatureUri ? `
+                  <div style="text-align: center; margin-bottom: 2px;">
+                    <img src="${effectiveSignatureUri}" style="max-height: 44px; max-width: 130px; object-fit: contain;" />
+                  </div>
+                ` : ''}
+                <div class="sig-line"></div>
+                <div class="sig-label">${cfg.signatoryText || 'அங்கீகரிக்கப்பட்ட கையொப்பம்'}</div>
+                <div style="font-size: 8.5px; color: ${t.subTextColor};">Authorized Signatory</div>
+              </div>
+            </div>
+          </div>
+        </div>
+      </body>
+      </html>
+    `;
+  },
+
+  /**
    * Share Customer Account Statement as PDF
    */
   async shareCustomerAsPdf(
     data: CustomerShareData,
     company: any,
     settings: ShareSettings,
-    template: InvoiceTemplate
+    template: InvoiceTemplate,
+    formatType: 'standard' | 'appa_estimate' = 'standard',
+    billTheme: string = 'classic',
+    billNo: string = '1',
+    customAppaSettings?: Partial<AppaEstimateBillSettings>
   ): Promise<boolean> {
     try {
-      const html = this.generateCustomerStatementHtml(data, company, settings, template);
-      const { uri } = await Print.printToFileAsync({ html });
+      const html = formatType === 'appa_estimate'
+        ? this.generateAppaEstimateHtml(data, company, settings, template, billNo, billTheme, customAppaSettings)
+        : this.generateCustomerStatementHtml(data, company, settings, template);
+      const printResult = await Print.printToFileAsync({
+        html,
+        base64: true,
+      });
+
+      // In Android / Expo Go, temporary files from Print.printToFileAsync reside in the root cache,
+      // which triggers 'Not allowed to read file under given URL' in ExpoSharing and is unreadable by FileSystem.copyAsync.
+      // Writing base64 directly into FileSystem.cacheDirectory places the file inside the app sandbox safely.
+      const baseDir = FileSystem.cacheDirectory || FileSystem.documentDirectory;
+      let shareUri = printResult.uri;
+
+      if (baseDir) {
+        const sanitizedName = (data.customer.name || 'Customer').replace(/[/\\?%*:|"<>]/g, '_');
+        const filename = `${formatType === 'appa_estimate' ? 'Estimate' : 'Statement'}_${sanitizedName}_${Date.now()}.pdf`;
+        const targetUri = `${baseDir}${filename}`;
+
+        if (printResult.base64) {
+          await FileSystem.writeAsStringAsync(targetUri, printResult.base64, {
+            encoding: FileSystem.EncodingType.Base64,
+          });
+          shareUri = targetUri;
+        } else {
+          try {
+            await FileSystem.copyAsync({ from: printResult.uri, to: targetUri });
+            shareUri = targetUri;
+          } catch (copyErr) {
+            console.warn('Fallback copyAsync failed, using raw URI:', copyErr);
+          }
+        }
+      }
 
       if (await Sharing.isAvailableAsync()) {
-        await Sharing.shareAsync(uri, {
+        await Sharing.shareAsync(shareUri, {
           mimeType: 'application/pdf',
-          dialogTitle: `Statement - ${data.customer.name}.pdf`,
+          dialogTitle: `${formatType === 'appa_estimate' ? 'Estimate' : 'Statement'} - ${data.customer.name}`,
           UTI: 'com.adobe.pdf',
         });
         return true;
       } else {
-        Alert.alert('PDF Created', `PDF Statement generated at:\n${uri}`);
+        Alert.alert('PDF Created', `PDF Statement generated at:\n${shareUri}`);
         return true;
       }
     } catch (err: any) {

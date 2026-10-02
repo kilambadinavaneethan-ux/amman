@@ -37,7 +37,7 @@ export function TransactionShareBottomSheet({
   const [showSettingsModal, setShowSettingsModal] = useState(false);
   const [loading, setLoading] = useState(false);
   const [loadingText, setLoadingText] = useState('');
-  const [salutation, setSalutation] = useState<'None' | 'Mr.' | 'Mrs.' | 'Ms.' | 'M/s' | 'Dr.'>('None');
+  const [salutation, setSalutation] = useState<'None' | 'Mr.' | 'திரு.' | 'Mrs.' | 'திருமதி' | 'Ms.' | 'M/s' | 'Dr.'>('None');
   const [useAvargal, setUseAvargal] = useState<boolean>(false);
   const [isTamil, setIsTamil] = useState<boolean>(false);
 
@@ -66,7 +66,9 @@ export function TransactionShareBottomSheet({
 
       const origName = transaction.customer?.name || '';
       if (/^Mr\.\s+/i.test(origName)) setSalutation('Mr.');
+      else if (/^(திரு\.|திரு)\s+/i.test(origName)) setSalutation('திரு.');
       else if (/^Mrs\.\s+/i.test(origName)) setSalutation('Mrs.');
+      else if (/^திருமதி\s+/i.test(origName)) setSalutation('திருமதி');
       else if (/^Ms\.\s+/i.test(origName)) setSalutation('Ms.');
       else if (/^M\/s\s+/i.test(origName)) setSalutation('M/s');
       else if (/^Dr\.\s+/i.test(origName)) setSalutation('Dr.');
@@ -116,7 +118,7 @@ export function TransactionShareBottomSheet({
     if (!transaction) return null;
     const origName = transaction.customer?.name || '';
     const cleanName = origName
-      .replace(/^(Mr\.|Mrs\.|Ms\.|M\/s|Dr\.)\s+/i, '')
+      .replace(/^(Mr\.|Mrs\.|Ms\.|M\/s|Dr\.|திரு\.|திரு|திருமதி)\s+/i, '')
       .replace(/\s+அவர்கள்$/i, '')
       .trim();
 
@@ -350,7 +352,9 @@ export function TransactionShareBottomSheet({
                 {[
                   { id: 'None', label: 'Default' },
                   { id: 'Mr.', label: 'Mr.' },
+                  { id: 'திரு.', label: 'திரு.' },
                   { id: 'Mrs.', label: 'Mrs.' },
+                  { id: 'திருமதி', label: 'திருமதி' },
                   { id: 'Ms.', label: 'Ms.' },
                   { id: 'M/s', label: 'M/s' },
                   { id: 'Dr.', label: 'Dr.' },

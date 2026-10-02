@@ -65,7 +65,7 @@ export default function Customers() {
   const { profile: userProfile } = useContext(UserContext) as any;
   const { collectors } = useContext(CollectorContext) as any;
   const { orders } = useContext(OrderContext) as any;
-  const { payments, addPayment } = useContext(PaymentContext) as any;
+  const { payments, addPayment, refundCustomerAdvance } = useContext(PaymentContext) as any;
   const { workers } = useContext(WorkerContext) as any;
   const { suppliers } = useContext(RawMaterialSupplierContext) as any;
   const { partners } = useContext(DeliveryPartnerContext) as any;
@@ -144,6 +144,15 @@ export default function Customers() {
   const [payDate, setPayDate] = useState<Date>(new Date());
   const [isPayCalendarOpen, setIsPayCalendarOpen] = useState<boolean>(false);
   const [isSavingPayment, setIsSavingPayment] = useState(false);
+
+  // Refund Advance Modal states
+  const [isRefundModalOpen, setIsRefundModalOpen] = useState(false);
+  const [refundAmount, setRefundAmount] = useState("");
+  const [refundMethod, setRefundMethod] = useState("Cash");
+  const [refundNotes, setRefundNotes] = useState("");
+  const [refundDate, setRefundDate] = useState<Date>(new Date());
+  const [isRefundCalendarOpen, setIsRefundCalendarOpen] = useState<boolean>(false);
+  const [isSavingRefund, setIsSavingRefund] = useState(false);
 
   // Summary Details Modal states
   const [isSummaryModalOpen, setIsSummaryModalOpen] = useState(false);
@@ -295,6 +304,63 @@ export default function Customers() {
       Alert.alert("Success", "Payment & balance discount logged successfully.");
     } else {
       Alert.alert("Transaction Failed", "Could not complete payment transaction. Please try again.");
+    }
+  };
+
+  const openRefundModal = (customer: any) => {
+    setSelectedCustomer(customer);
+    const balanceNum = Number(customer.totalPending !== undefined ? customer.totalPending : customer.balance || 0);
+    const availableAdvance = balanceNum < 0 ? Math.abs(balanceNum) : 0;
+    setRefundAmount(availableAdvance > 0 ? String(availableAdvance) : "");
+    setRefundMethod("Cash");
+    setRefundNotes("");
+    setRefundDate(new Date());
+    setIsRefundModalOpen(true);
+  };
+
+  const handleSaveRefund = async () => {
+    if (!selectedCustomer || isSavingRefund) return;
+    const amountNum = parseFloat(refundAmount) || 0;
+    if (amountNum <= 0) {
+      Alert.alert("Invalid Amount", "Please enter a valid refund amount greater than 0.");
+      return;
+    }
+
+    const currentPending = Number(
+      (selectedCustomer as any).totalPending !== undefined
+        ? (selectedCustomer as any).totalPending
+        : (selectedCustomer as any).balance || 0
+    );
+    const availableAdvance = currentPending < 0 ? Math.abs(currentPending) : 0;
+
+    if (amountNum > availableAdvance) {
+      Alert.alert(
+        "Refund Exceeds Advance",
+        `Refund amount (₹${amountNum.toLocaleString("en-IN")}) cannot exceed available advance credit of ₹${availableAdvance.toLocaleString("en-IN")}.`
+      );
+      return;
+    }
+
+    setIsSavingRefund(true);
+    const result = await refundCustomerAdvance({
+      customerId: (selectedCustomer as any).id,
+      customerName: (selectedCustomer as any).name,
+      refundAmount: amountNum,
+      paymentMethod: refundMethod,
+      notes: refundNotes.trim(),
+      createdAt: refundDate,
+    });
+    setIsSavingRefund(false);
+
+    if (result) {
+      setIsRefundModalOpen(false);
+      setRefundAmount("");
+      setRefundNotes("");
+      setRefundDate(new Date());
+      setSelectedCustomer(null);
+      Alert.alert("Success", `Advance refund of ₹${amountNum.toLocaleString("en-IN")} recorded successfully.`);
+    } else {
+      Alert.alert("Transaction Failed", "Could not process advance refund. Please try again.");
     }
   };
 
@@ -1269,8 +1335,8 @@ setContactsVisible(true);
                     </View>
                     <View style={styles.customerInfo}>
                       <View style={{ flexDirection: "row", alignItems: "center", justifyContent: "space-between", paddingRight: 4 }}>
-                        <View style={{ flexDirection: "row", alignItems: "center", flexWrap: "wrap", gap: 6, flex: 1, marginRight: 8 }}>
-                          <Text selectable={true} style={styles.customerName} numberOfLines={2}>{customer.name || "Unnamed Client"}</Text>
+                        <View style={{ flexDirection: "row", alignItems: "center", flexWrap: "wrap", gap: 6, flex: 1, marginRight: 6 }}>
+                          <Text selectable={true} style={styles.customerName}>{customer.name || "Unnamed Client"}</Text>
                           {customer.badgeText && customer.entityType !== "customer" && (
                             <View style={{
                               backgroundColor: `${customer.badgeColor || colors.accent.primary}18`,
@@ -1414,22 +1480,41 @@ setContactsVisible(true);
                       </Text>
                     </View>
                     <View style={styles.actionButtonsRow}>
-                      <Pressable
-                        style={styles.payDueCardBtn}
-                        onPress={() => openPayModal(customer)}
-                      >
-                        <MaterialIcons name="payments" size={14} color={colors.accent.success} />
-                        <Text style={styles.payDueCardBtnText}>
-                          {Number(customer.balance) < 0 ? "Advance" : "Pay"}
-                        </Text>
-                      </Pressable>
-                      <Pressable
-                        style={styles.addDueCardBtn}
-                        onPress={() => openDueModal(customer)}
-                      >
-                        <MaterialIcons name="event" size={14} color={colors.accent.primary} />
-                        <Text style={styles.addDueCardBtnText}>Add Due</Text>
-                      </Pressable>
+                      {Number(customer.balance) < 0 ? (
+                        <>
+                          <Pressable
+                            style={styles.payDueCardBtn}
+                            onPress={() => openPayModal(customer)}
+                          >
+                            <MaterialIcons name="add" size={14} color={colors.accent.success} />
+                            <Text style={styles.payDueCardBtnText}>Advance</Text>
+                          </Pressable>
+                          <Pressable
+                            style={styles.refundCardBtn}
+                            onPress={() => openRefundModal(customer)}
+                          >
+                            <MaterialIcons name="assignment-return" size={14} color="#D97706" />
+                            <Text style={styles.refundCardBtnText}>Refund</Text>
+                          </Pressable>
+                        </>
+                      ) : (
+                        <>
+                          <Pressable
+                            style={styles.payDueCardBtn}
+                            onPress={() => openPayModal(customer)}
+                          >
+                            <MaterialIcons name="payments" size={14} color={colors.accent.success} />
+                            <Text style={styles.payDueCardBtnText}>Pay</Text>
+                          </Pressable>
+                          <Pressable
+                            style={styles.addDueCardBtn}
+                            onPress={() => openDueModal(customer)}
+                          >
+                            <MaterialIcons name="event" size={14} color={colors.accent.primary} />
+                            <Text style={styles.addDueCardBtnText}>Add Due</Text>
+                          </Pressable>
+                        </>
+                      )}
                       <Pressable
                         style={styles.deleteButton}
                         onPress={() => handleDeleteCustomer(customer.id)}
@@ -1815,6 +1900,294 @@ setContactsVisible(true);
         }}
         onClose={() => setIsPayCalendarOpen(false)}
         title="Select Payment Date"
+      />
+
+      {/* Refund Advance Modal */}
+      <Modal
+        visible={isRefundModalOpen}
+        animationType="slide"
+        transparent={true}
+        onRequestClose={() => setIsRefundModalOpen(false)}
+      >
+        <KeyboardAvoidingView
+          behavior={Platform.OS === "ios" ? "padding" : "height"}
+          style={styles.modalBackdrop}
+        >
+          <Pressable style={styles.modalOverlay} onPress={() => setIsRefundModalOpen(false)} />
+          <View style={[styles.modalContent, { maxHeight: "90%" }]}>
+            <View style={styles.modalHeader}>
+              <View style={{ flexDirection: "row", alignItems: "center", gap: 8 }}>
+                <View style={{ width: 36, height: 36, borderRadius: 18, backgroundColor: "#FEF3C7", alignItems: "center", justifyContent: "center" }}>
+                  <MaterialIcons name="assignment-return" size={20} color="#D97706" />
+                </View>
+                <View>
+                  <Text style={styles.modalTitle}>Refund Advance Credit</Text>
+                  <Text style={{ fontSize: 11, color: colors.text.muted }}>
+                    Return advance balance back to customer
+                  </Text>
+                </View>
+              </View>
+              <Pressable style={styles.modalCloseBtn} onPress={() => setIsRefundModalOpen(false)}>
+                <MaterialIcons name="close" size={24} color={colors.text.muted} />
+              </Pressable>
+            </View>
+
+            <ScrollView showsVerticalScrollIndicator={false} style={{ flex: 1 }} keyboardShouldPersistTaps="handled">
+              {selectedCustomer && (() => {
+                const balNum = Number(
+                  (selectedCustomer as any).totalPending !== undefined
+                    ? (selectedCustomer as any).totalPending
+                    : (selectedCustomer as any).balance || 0
+                );
+                const availableAdvance = balNum < 0 ? Math.abs(balNum) : 0;
+                const amtNum = parseFloat(refundAmount) || 0;
+                const remainingAdv = Math.max(0, availableAdvance - amtNum);
+                const isOverLimit = amtNum > availableAdvance;
+
+                return (
+                  <>
+                    {/* Customer & Available Credit Card */}
+                    <View style={{
+                      backgroundColor: "#ECFDF5",
+                      borderColor: "#A7F3D0",
+                      borderWidth: 1,
+                      borderRadius: 12,
+                      padding: 14,
+                      marginBottom: 16,
+                      flexDirection: "row",
+                      justifyContent: "space-between",
+                      alignItems: "center"
+                    }}>
+                      <View>
+                        <Text style={{ fontSize: 13, fontWeight: "700", color: "#065F46" }}>
+                          {(selectedCustomer as any).name}
+                        </Text>
+                        <Text style={{ fontSize: 11, color: "#047857", marginTop: 2 }}>
+                          Available Advance Credit
+                        </Text>
+                      </View>
+                      <View style={{ alignItems: "flex-end" }}>
+                        <Text style={{ fontSize: 18, fontWeight: "800", color: "#059669" }}>
+                          ₹{availableAdvance.toLocaleString("en-IN")}
+                        </Text>
+                        <Pressable
+                          style={{
+                            marginTop: 4,
+                            backgroundColor: "#059669",
+                            paddingHorizontal: 8,
+                            paddingVertical: 3,
+                            borderRadius: 6
+                          }}
+                          onPress={() => setRefundAmount(String(availableAdvance))}
+                        >
+                          <Text style={{ fontSize: 10, fontWeight: "700", color: "#FFFFFF" }}>Full Refund</Text>
+                        </Pressable>
+                      </View>
+                    </View>
+
+                    {/* Refund Amount Input */}
+                    <Text style={styles.modalFormLabel}>Refund Amount (₹) *</Text>
+                    <TextInput
+                      style={[
+                        styles.modalFormInput,
+                        isOverLimit && { borderColor: colors.accent.danger }
+                      ]}
+                      value={refundAmount}
+                      onChangeText={setRefundAmount}
+                      placeholder="Enter amount to refund"
+                      keyboardType="numeric"
+                      placeholderTextColor={colors.text.muted}
+                    />
+
+                    {isOverLimit && (
+                      <Text style={{ fontSize: 11, color: colors.accent.danger, marginTop: -8, marginBottom: 10, fontWeight: "600" }}>
+                        ⚠️ Refund cannot exceed available advance of ₹{availableAdvance.toLocaleString("en-IN")}.
+                      </Text>
+                    )}
+
+                    {/* Preset Chips */}
+                    <View style={{ flexDirection: "row", gap: 6, marginBottom: 14, flexWrap: "wrap" }}>
+                      {[500, 1000, 2000].filter(val => val < availableAdvance).map((preset) => (
+                        <Pressable
+                          key={preset}
+                          style={{
+                            paddingVertical: 4,
+                            paddingHorizontal: 10,
+                            borderRadius: 16,
+                            backgroundColor: colors.bg.primary,
+                            borderWidth: 1,
+                            borderColor: colors.border.medium
+                          }}
+                          onPress={() => setRefundAmount(String(preset))}
+                        >
+                          <Text style={{ fontSize: 11, fontWeight: "600", color: colors.text.secondary }}>
+                            ₹{preset}
+                          </Text>
+                        </Pressable>
+                      ))}
+                      <Pressable
+                        style={{
+                          paddingVertical: 4,
+                          paddingHorizontal: 10,
+                          borderRadius: 16,
+                          backgroundColor: "#FEF3C7",
+                          borderWidth: 1,
+                          borderColor: "#FCD34D"
+                        }}
+                        onPress={() => setRefundAmount(String(availableAdvance))}
+                      >
+                        <Text style={{ fontSize: 11, fontWeight: "700", color: "#B45309" }}>
+                          Full (₹{availableAdvance.toLocaleString("en-IN")})
+                        </Text>
+                      </Pressable>
+                    </View>
+
+                    {/* Refund Method */}
+                    <Text style={styles.modalFormLabel}>Payment / Refund Method *</Text>
+                    <View style={styles.modalPresetsRow}>
+                      {["Cash", "UPI", "Bank Transfer", "Cheque"].map((m) => {
+                        const active = refundMethod === m;
+                        return (
+                          <Pressable
+                            key={m}
+                            style={[
+                              styles.modalPresetBtn,
+                              active && { backgroundColor: "#D97706", borderColor: "#D97706" }
+                            ]}
+                            onPress={() => setRefundMethod(m)}
+                          >
+                            <Text style={[styles.modalPresetText, active && { color: "#FFFFFF" }]}>
+                              {m}
+                            </Text>
+                          </Pressable>
+                        );
+                      })}
+                    </View>
+
+                    {/* Refund Date */}
+                    <Text style={styles.modalFormLabel}>Refund Date *</Text>
+                    <Pressable
+                      style={{
+                        flexDirection: "row",
+                        alignItems: "center",
+                        justifyContent: "space-between",
+                        backgroundColor: colors.bg.primary,
+                        borderWidth: 1,
+                        borderColor: colors.border.medium,
+                        borderRadius: 10,
+                        paddingHorizontal: 12,
+                        paddingVertical: 10,
+                        marginBottom: 14,
+                      }}
+                      onPress={() => setIsRefundCalendarOpen(true)}
+                    >
+                      <View style={{ flexDirection: "row", alignItems: "center", gap: 8 }}>
+                        <MaterialIcons name="event" size={20} color="#D97706" />
+                        <Text style={{ fontSize: 14, fontWeight: "600", color: colors.text.primary }}>
+                          {refundDate.toLocaleDateString("en-IN", { day: "2-digit", month: "short", year: "numeric" })}
+                        </Text>
+                      </View>
+                      <Text style={{ fontSize: 12, fontWeight: "700", color: "#D97706" }}>Change Date</Text>
+                    </Pressable>
+
+                    {/* Notes */}
+                    <Text style={styles.modalFormLabel}>Refund Reason / Notes (Optional)</Text>
+                    <TextInput
+                      style={styles.modalFormInput}
+                      value={refundNotes}
+                      onChangeText={setRefundNotes}
+                      placeholder="e.g. Returned via UPI, client request"
+                      placeholderTextColor={colors.text.muted}
+                    />
+
+                    {/* Live Preview Summary Box */}
+                    <View style={{
+                      backgroundColor: colors.bg.primary,
+                      borderRadius: 10,
+                      padding: 12,
+                      marginVertical: 14,
+                      borderWidth: 1,
+                      borderColor: colors.border.subtle,
+                      gap: 6
+                    }}>
+                      <Text style={{ fontSize: 11, fontWeight: "700", color: colors.text.muted, textTransform: "uppercase" }}>
+                        Settlement Preview
+                      </Text>
+                      <View style={{ flexDirection: "row", justifyContent: "space-between" }}>
+                        <Text style={{ fontSize: 12, color: colors.text.secondary }}>Available Advance Credit:</Text>
+                        <Text style={{ fontSize: 12, fontWeight: "600", color: colors.accent.success }}>
+                          ₹{availableAdvance.toLocaleString("en-IN")}
+                        </Text>
+                      </View>
+                      {amtNum > 0 && (
+                        <View style={{ flexDirection: "row", justifyContent: "space-between" }}>
+                          <Text style={{ fontSize: 12, color: colors.text.secondary }}>(-) Refund Amount:</Text>
+                          <Text style={{ fontSize: 12, fontWeight: "600", color: "#D97706" }}>
+                            -₹{amtNum.toLocaleString("en-IN")}
+                          </Text>
+                        </View>
+                      )}
+                      <View style={{ height: 1, backgroundColor: colors.border.subtle, marginVertical: 4 }} />
+                      <View style={{ flexDirection: "row", justifyContent: "space-between", alignItems: "center" }}>
+                        <Text style={{ fontSize: 13, fontWeight: "700", color: colors.text.primary }}>
+                          Remaining Advance:
+                        </Text>
+                        <Text style={{
+                          fontSize: 14,
+                          fontWeight: "800",
+                          color: remainingAdv > 0 ? colors.accent.success : colors.text.primary
+                        }}>
+                          {remainingAdv === 0 && amtNum > 0 ? "₹0 (Cleared)" : `₹${remainingAdv.toLocaleString("en-IN")}`}
+                        </Text>
+                      </View>
+                    </View>
+
+                    {/* Action buttons */}
+                    <View style={styles.modalFormActions}>
+                      <Pressable
+                        style={[styles.modalFormActionBtn, styles.modalCancelBtn]}
+                        onPress={() => setIsRefundModalOpen(false)}
+                        disabled={isSavingRefund}
+                      >
+                        <Text style={styles.modalCancelBtnText}>Cancel</Text>
+                      </Pressable>
+                      <Pressable
+                        style={[
+                          styles.modalFormActionBtn,
+                          styles.modalSaveBtn,
+                          { backgroundColor: isOverLimit || amtNum <= 0 ? colors.text.muted : "#D97706" }
+                        ]}
+                        onPress={handleSaveRefund}
+                        disabled={isSavingRefund || isOverLimit || amtNum <= 0}
+                      >
+                        {isSavingRefund ? (
+                          <ActivityIndicator size="small" color="#FFFFFF" />
+                        ) : (
+                          <View style={{ flexDirection: "row", alignItems: "center", gap: 6 }}>
+                            <MaterialIcons name="assignment-return" size={16} color="#FFFFFF" />
+                            <Text style={styles.modalSaveBtnText}>Confirm Refund</Text>
+                          </View>
+                        )}
+                      </Pressable>
+                    </View>
+                  </>
+                );
+              })()}
+            </ScrollView>
+          </View>
+        </KeyboardAvoidingView>
+      </Modal>
+
+      {/* Refund Calendar Modal */}
+      <EasyCalendarModal
+        visible={isRefundCalendarOpen}
+        date={refundDate}
+        onSelectDate={(d) => {
+          setRefundDate(d);
+          setIsRefundCalendarOpen(false);
+        }}
+        onClose={() => setIsRefundCalendarOpen(false)}
+        title="Select Refund Date"
       />
 
       {/* Full Customer-Wise Summary Details Modal */}
@@ -2366,10 +2739,10 @@ const getStyles = (theme: any) => {
     marginLeft: 14,
   },
   customerName: {
-    fontSize: 16,
+    fontSize: 15.5,
     fontWeight: "800",
     color: colors.text.primary,
-    lineHeight: 22,
+    flexShrink: 1,
   },
   customerPhone: {
     color: colors.text.muted,
@@ -2396,37 +2769,42 @@ const getStyles = (theme: any) => {
     flexDirection: "row",
     justifyContent: "space-between",
     alignItems: "center",
+    flexWrap: "wrap",
+    gap: 8,
+    paddingTop: 2,
   },
   balanceCol: {
-    flexDirection: "row",
-    alignItems: "center",
-    gap: 6,
+    flexDirection: "column",
+    justifyContent: "center",
+    gap: 2,
+    flexShrink: 0,
+    minWidth: 85,
   },
   footerLabel: {
-    fontSize: 12,
+    fontSize: 11,
     color: colors.text.muted,
     fontWeight: "600",
   },
   footerValue: {
-    fontSize: 14,
-    fontWeight: "700",
+    fontSize: 15,
+    fontWeight: "800",
     color: colors.text.primary,
   },
   deleteButton: {
     flexDirection: "row",
     alignItems: "center",
-    gap: 4,
+    gap: 3,
     borderWidth: 1.5,
     borderColor: "#fee2e2",
     borderRadius: 8,
-    paddingVertical: 4,
+    paddingVertical: 5,
     paddingHorizontal: 8,
     backgroundColor: "#fff5f5",
   },
   deleteButtonText: {
     color: colors.accent.danger,
     fontWeight: "700",
-    fontSize: 12,
+    fontSize: 11.5,
   },
   subLabel: {
     fontSize: 11,
@@ -2515,55 +2893,73 @@ const getStyles = (theme: any) => {
   actionButtonsRow: {
     flexDirection: "row",
     alignItems: "center",
-    gap: 8,
+    gap: 6,
+    flexWrap: "wrap",
+    justifyContent: "flex-end",
   },
   shareStatementCardBtn: {
     flexDirection: "row",
     alignItems: "center",
-    gap: 4,
+    gap: 3,
     borderWidth: 1.5,
     borderColor: `${colors.accent.primary}40`,
     borderRadius: 8,
-    paddingVertical: 4,
+    paddingVertical: 5,
     paddingHorizontal: 8,
     backgroundColor: `${colors.accent.primary}18`,
   },
   shareStatementCardBtnText: {
     color: colors.accent.primary,
     fontWeight: "700",
-    fontSize: 12,
+    fontSize: 11.5,
   },
   addDueCardBtn: {
     flexDirection: "row",
     alignItems: "center",
-    gap: 4,
+    gap: 3,
     borderWidth: 1.5,
     borderColor: "#6C5CE740",
     borderRadius: 8,
-    paddingVertical: 4,
+    paddingVertical: 5,
     paddingHorizontal: 8,
     backgroundColor: "#6C5CE720",
   },
   addDueCardBtnText: {
     color: colors.accent.primary,
     fontWeight: "700",
-    fontSize: 12,
+    fontSize: 11.5,
   },
   payDueCardBtn: {
     flexDirection: "row",
     alignItems: "center",
-    gap: 4,
+    gap: 3,
     borderWidth: 1.5,
     borderColor: `${colors.accent.success}40`,
     borderRadius: 8,
-    paddingVertical: 4,
+    paddingVertical: 5,
     paddingHorizontal: 8,
     backgroundColor: `${colors.accent.success}20`,
   },
   payDueCardBtnText: {
     color: colors.accent.success,
     fontWeight: "700",
-    fontSize: 12,
+    fontSize: 11.5,
+  },
+  refundCardBtn: {
+    flexDirection: "row",
+    alignItems: "center",
+    gap: 3,
+    borderWidth: 1.5,
+    borderColor: "#D9770650",
+    borderRadius: 8,
+    paddingVertical: 5,
+    paddingHorizontal: 8,
+    backgroundColor: "#D9770618",
+  },
+  refundCardBtnText: {
+    color: "#D97706",
+    fontWeight: "700",
+    fontSize: 11.5,
   },
   modalBackdrop: {
     flex: 1,

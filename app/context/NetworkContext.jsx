@@ -21,8 +21,11 @@ export function NetworkProvider({ children }) {
   const prevOnlineRef = useRef(true);
 
   useEffect(() => {
+    let isMounted = true;
+
     // Subscribe to network state updates
     const unsubscribe = NetInfo.addEventListener((state) => {
+      if (!isMounted) return;
       const connected = !!(state.isConnected && state.isInternetReachable !== false);
       const prevOnline = prevOnlineRef.current;
 
@@ -38,16 +41,18 @@ export function NetworkProvider({ children }) {
         // Wait for all queued Firestore writes to sync
         waitForPendingWrites(db)
           .then(() => {
+            if (!isMounted) return;
             setHasPendingWrites(false);
             setIsSyncing(false);
           })
           .catch(() => {
+            if (!isMounted) return;
             setIsSyncing(false);
           });
 
         if (wasOfflineTimer.current) clearTimeout(wasOfflineTimer.current);
         wasOfflineTimer.current = setTimeout(() => {
-          setWasOffline(false);
+          if (isMounted) setWasOffline(false);
         }, 4000);
       }
 
@@ -59,13 +64,15 @@ export function NetworkProvider({ children }) {
 
     // Fetch initial state
     NetInfo.fetch().then((state) => {
+      if (!isMounted) return;
       const connected = !!(state.isConnected && state.isInternetReachable !== false);
       setIsOnline(connected);
       setNetworkType(state.type || "unknown");
       prevOnlineRef.current = connected;
-    });
+    }).catch(() => {});
 
     return () => {
+      isMounted = false;
       unsubscribe();
       if (wasOfflineTimer.current) clearTimeout(wasOfflineTimer.current);
     };

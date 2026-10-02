@@ -175,8 +175,16 @@ export function PaymentProvider({ children }) {
           );
           const totalPaidBefore = Number(customerData.totalPaid || 0);
 
-          const pendingAfter = pendingBefore + totalBalanceReduction;
-          const totalPaidAfter = Math.max(0, totalPaidBefore - amtRec);
+          let pendingAfter;
+          let totalPaidAfter;
+          if (paymentData.type === "advance_refund") {
+            const refundAmt = Number(paymentData.refundAmount || Math.abs(paymentData.amountReceived || 0));
+            pendingAfter = pendingBefore - refundAmt;
+            totalPaidAfter = totalPaidBefore + refundAmt;
+          } else {
+            pendingAfter = pendingBefore + totalBalanceReduction;
+            totalPaidAfter = Math.max(0, totalPaidBefore - amtRec);
+          }
           const advanceAmount = pendingAfter < 0 ? Math.abs(pendingAfter) : 0;
 
           batch.update(customerRef, {
@@ -196,6 +204,80 @@ export function PaymentProvider({ children }) {
     } catch (error) {
       console.error("deletePayment error:", error);
       return false;
+    }
+  }, []);
+
+  const refundCustomerAdvance = useCallback(async (refundData) => {
+    try {
+      const { customerId, customerName, refundAmount, paymentMethod, notes, createdAt } = refundData;
+      const customerRef = doc(db, "customers", customerId);
+      const customerDoc = await getDoc(customerRef);
+      if (!customerDoc.exists()) {
+        throw new Error("Customer record does not exist.");
+      }
+
+      const customerData = customerDoc.data();
+      const pendingBefore = Number(
+        customerData.totalPending !== undefined
+          ? customerData.totalPending
+          : customerData.balance || 0,
+      );
+      const availableAdvance = Math.abs(Math.min(0, pendingBefore));
+      const refundAmt = Number(refundAmount || 0);
+
+      if (refundAmt <= 0) {
+        throw new Error("Refund amount must be greater than zero.");
+      }
+      if (refundAmt > availableAdvance) {
+        throw new Error(`Refund cannot exceed available advance of ₹${availableAdvance.toLocaleString("en-IN")}.`);
+      }
+
+      const pendingAfter = pendingBefore + refundAmt;
+      const advanceAmount = pendingAfter < 0 ? Math.abs(pendingAfter) : 0;
+      const totalPaidBefore = Number(customerData.totalPaid || 0);
+      const totalPaidAfter = Math.max(0, totalPaidBefore - refundAmt);
+
+      const batch = writeBatch(db);
+
+      batch.update(customerRef, {
+        balance: pendingAfter,
+        totalPending: pendingAfter,
+        advanceAmount: advanceAmount,
+        totalPaid: totalPaidAfter,
+        lastTransactionDate: new Date(),
+      });
+
+      const paymentColRef = collection(db, "payments");
+      const paymentDocRef = doc(paymentColRef);
+      const paymentId = paymentDocRef.id;
+
+      let refundDate = normalizeDateValue(createdAt);
+      if (!refundDate || isNaN(refundDate.getTime())) refundDate = new Date();
+
+      batch.set(paymentDocRef, {
+        customerId,
+        customerName: customerName || customerData.name || "Customer",
+        type: "advance_refund",
+        amountReceived: -refundAmt,
+        refundAmount: refundAmt,
+        discountAmount: 0,
+        pendingBefore,
+        pendingAfter,
+        advanceAmount,
+        paymentMethod: paymentMethod || "Cash",
+        notes: notes ? notes.trim() : "Advance Refund returned to customer",
+        createdAt: refundDate,
+        date: refundDate,
+        paymentDate: refundDate,
+        collectorId: customerData.collectorId || null,
+        collectorName: customerData.collectorName || null,
+      });
+
+      await batch.commit();
+      return paymentId;
+    } catch (error) {
+      console.error("refundCustomerAdvance error:", error);
+      return null;
     }
   }, []);
 
@@ -308,10 +390,11 @@ export function PaymentProvider({ children }) {
       payments,
       loading,
       addPayment,
+      refundCustomerAdvance,
       editPayment,
       deletePayment,
     }),
-    [payments, loading, addPayment, editPayment, deletePayment],
+    [payments, loading, addPayment, refundCustomerAdvance, editPayment, deletePayment],
   );
 
   return (

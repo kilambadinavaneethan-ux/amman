@@ -274,9 +274,106 @@ export const DEFAULT_SHARE_SETTINGS: ShareSettings = {
 export type HeaderLayout = 'classic' | 'modern' | 'minimal' | 'centered';
 export type TableStyle = 'striped' | 'bordered' | 'clean' | 'minimal';
 export type InvoiceFontFamily = 'Helvetica' | 'Georgia' | 'Courier' | 'Arial' | 'Times';
-export type BorderStyle = 'solid' | 'dashed' | 'none';
+export type BorderStyle = 'solid' | 'dashed' | 'double' | 'none';
+export type TableDensity = 'compact' | 'normal' | 'relaxed';
+export type PageMargin = 'compact' | 'normal' | 'wide';
+export type AppaBillTheme = 'classic' | 'blue' | 'sepia' | 'emerald' | 'dark';
+
+export interface AppaEstimateBillSettings {
+  invocationText: string;
+  invocationColor?: string;
+  invocationFontSize?: number;
+  titleEnglish: string;
+  titleEnglishColor?: string;
+  titleEnglishFontSize?: number;
+  titleTamil: string;
+  titleTamilColor?: string;
+  titleTamilFontSize?: number;
+  customerHonorificColor?: string;
+  customerHonorificFontSize?: number;
+  showStamp: boolean;
+  stampTextTop: string;
+  stampTextBottom: string;
+  customCompanyName?: string;
+  showCompanyLogo?: boolean;
+  companyLogoUri?: string;
+  companyNameColor?: string;
+  companyNameFontSize?: number;
+  customAddress?: string;
+  companyAddressColor?: string;
+  companyAddressFontSize?: number;
+  customPhones?: string;
+  phoneNumbers?: string[];
+  defaultTheme: AppaBillTheme;
+  showQrCode: boolean;
+  showBankDetails?: boolean;
+  showGoodsAcknowledgment?: boolean;
+  showSignature?: boolean;
+  signatureImageUri?: string;
+  columnLabels: {
+    sno?: string;
+    date?: string;
+    description?: string;
+    debit?: string;
+    credit?: string;
+    balance?: string;
+    qty?: string;
+    rate?: string;
+    amount?: string;
+  };
+  signatoryText: string;
+  footerNotes?: string;
+}
+
+export const DEFAULT_APPA_ESTIMATE_BILL_SETTINGS: AppaEstimateBillSettings = {
+  invocationText: '|| ஸ்ரீ சொக்கநாச்சி அம்மன் துணை ||',
+  invocationColor: '#B91C1C',
+  invocationFontSize: 14,
+  titleEnglish: 'ESTEEMATE',
+  titleEnglishColor: '#0F172A',
+  titleEnglishFontSize: 28,
+  titleTamil: 'மதிப்பீட்டு பில் / ESTIMATE BILL',
+  titleTamilColor: '#475569',
+  titleTamilFontSize: 11,
+  customerHonorificColor: '#64748B',
+  customerHonorificFontSize: 12,
+  showStamp: false,
+  stampTextTop: 'ESTIMATE',
+  stampTextBottom: 'மதிப்பீடு',
+  customCompanyName: '',
+  showCompanyLogo: true,
+  companyLogoUri: '',
+  companyNameColor: '#0F172A',
+  companyNameFontSize: 20,
+  customAddress: '',
+  companyAddressColor: '#475569',
+  companyAddressFontSize: 12,
+  customPhones: '',
+  phoneNumbers: ['99430 51509', '99430 51209'],
+  defaultTheme: 'classic',
+  showQrCode: true,
+  showBankDetails: true,
+  showGoodsAcknowledgment: true,
+  showSignature: true,
+  signatureImageUri: '',
+  columnLabels: {
+    sno: 'வ. எண்',
+    date: 'தேதி',
+    description: 'விபரம் (பொருட்கள் / கூலி)',
+    debit: 'பற்று (+)',
+    credit: 'வரவு (-)',
+    balance: 'பாக்கி',
+    qty: 'அளவு',
+    rate: 'விலை',
+    amount: 'தொகை',
+  },
+  signatoryText: 'அங்கீகரிக்கப்பட்ட கையொப்பம்',
+  footerNotes: '• சரக்குகள் சரியான முறையில் கிடைக்கப்பெற்றது.\n• தங்களின் மேலான ஆதரவிற்கு மிக்க நன்றி! மீண்டும் வருக!',
+};
 
 export interface InvoiceTemplate {
+  // Appa Estimate Bill Dedicated Settings
+  appaBillSettings?: AppaEstimateBillSettings;
   // Localization
   isTamilLanguage?: boolean;
   isBilingual?: boolean;
@@ -284,7 +381,13 @@ export interface InvoiceTemplate {
   tamilTerminologyPreset?: 'brick_construction' | 'standard';
   customTamilLabels?: Record<string, string>;
 
-  // Header
+  // Header & Divine Invocation / Tagline
+  showInvocation?: boolean;
+  invocationText?: string;
+  invocationColor?: string;
+  showCompanyTagline?: boolean;
+  companyTagline?: string;
+  logoSize?: 'small' | 'medium' | 'large';
   headerLayout: HeaderLayout;
   showCompanyLogo: boolean;
   showCompanyName: boolean;
@@ -309,11 +412,19 @@ export interface InvoiceTemplate {
 
   // Items Table
   tableStyle: TableStyle;
+  tableDensity?: TableDensity;
   showItemIndex: boolean;
   showItemUnit: boolean;
   showItemRate: boolean;
   tableHeaderBg: string;
   tableHeaderTextColor: string;
+  customColumnLabels?: {
+    index?: string;
+    item?: string;
+    qty?: string;
+    rate?: string;
+    amount?: string;
+  };
 
   // Summary / Totals & Charges
   showSubtotal: boolean;
@@ -328,10 +439,16 @@ export interface InvoiceTemplate {
   showBalanceDue: boolean;
   showPaymentStatus: boolean;
 
-  // Footer
+  // Footer, Terms, Notes & Signature
   showNotes: boolean;
+  defaultNotes?: string;
   showTerms: boolean;
+  termsAndConditions?: string;
   showSignature: boolean;
+  signatureTitle?: string;
+  signatoryName?: string;
+  showRubberSeal?: boolean;
+  rubberSealText?: string;
   showQrCode: boolean;
   useCustomQrCode?: boolean;
   customQrCodeUri?: string;
@@ -344,8 +461,14 @@ export interface InvoiceTemplate {
   bankAccounts?: BankAccount[];
   selectedBankAccountId?: string;
   showThankYouNote: boolean;
+  thankYouNote?: string;
   showFooterBranding: boolean;
   footerBrandingText: string;
+
+  // Watermark
+  watermarkEnabled?: boolean;
+  watermarkText?: string;
+  watermarkOpacity?: number;
 
   // Typography
   fontFamily: InvoiceFontFamily;
@@ -353,14 +476,21 @@ export interface InvoiceTemplate {
   headingColor: string;
   bodyTextColor: string;
 
-  // Layout
+  // Layout & Formatting
   accentColor: string;
   borderStyle: BorderStyle;
   borderColor: string;
   pageBackground: string;
+  paperSize?: 'A4' | 'LETTER' | 'THERMAL_80MM';
+  pageMargin?: PageMargin;
+  currencySymbol?: string;
+  decimalPlaces?: number;
 }
 
 export const DEFAULT_INVOICE_TEMPLATE: InvoiceTemplate = {
+  // Appa Estimate Bill Dedicated Settings
+  appaBillSettings: DEFAULT_APPA_ESTIMATE_BILL_SETTINGS,
+
   // Localization
   isTamilLanguage: false,
   isBilingual: false,
@@ -369,6 +499,12 @@ export const DEFAULT_INVOICE_TEMPLATE: InvoiceTemplate = {
   customTamilLabels: {},
 
   // Header
+  showInvocation: false,
+  invocationText: 'ஸ்ரீ சொக்கநாச்சி அம்மன் துணை',
+  invocationColor: '#B91C1C',
+  showCompanyTagline: false,
+  companyTagline: '',
+  logoSize: 'medium',
   headerLayout: 'classic',
   showCompanyLogo: true,
   showCompanyName: true,
@@ -393,6 +529,7 @@ export const DEFAULT_INVOICE_TEMPLATE: InvoiceTemplate = {
 
   // Items Table
   tableStyle: 'striped',
+  tableDensity: 'normal',
   showItemIndex: true,
   showItemUnit: true,
   showItemRate: true,
@@ -414,8 +551,14 @@ export const DEFAULT_INVOICE_TEMPLATE: InvoiceTemplate = {
 
   // Footer
   showNotes: true,
+  defaultNotes: '',
   showTerms: true,
+  termsAndConditions: '1. Goods once sold will not be taken back.\n2. Payment due within 15 days from date of invoice.',
   showSignature: true,
+  signatureTitle: 'Authorized Signatory',
+  signatoryName: '',
+  showRubberSeal: false,
+  rubberSealText: '★ முத்திரை / SEAL ★',
   showQrCode: true,
   useCustomQrCode: false,
   customQrCodeUri: '',
@@ -428,8 +571,14 @@ export const DEFAULT_INVOICE_TEMPLATE: InvoiceTemplate = {
   bankAccounts: [],
   selectedBankAccountId: '',
   showThankYouNote: true,
+  thankYouNote: 'Thank you for your business! 🙏',
   showFooterBranding: false,
   footerBrandingText: '',
+
+  // Watermark
+  watermarkEnabled: false,
+  watermarkText: 'CONFIDENTIAL',
+  watermarkOpacity: 0.12,
 
   // Typography
   fontFamily: 'Helvetica',
@@ -442,6 +591,10 @@ export const DEFAULT_INVOICE_TEMPLATE: InvoiceTemplate = {
   borderStyle: 'solid',
   borderColor: '#E2E8F0',
   pageBackground: '#FFFFFF',
+  paperSize: 'A4',
+  pageMargin: 'normal',
+  currencySymbol: '₹',
+  decimalPlaces: 2,
 };
 
 export interface InvoicePreset {
