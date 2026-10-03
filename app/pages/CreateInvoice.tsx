@@ -155,12 +155,14 @@ export default function CreateInvoice() {
       if (partner.hasLoading) {
         setCustomPartnerLoadingRate(String(partner.loadingRate || 0));
         setCustomPartnerLoadingRateType(partner.loadingRateType || "per brick");
+        setLoadingByDeliveryPartner(true);
       } else {
         setLoadingByDeliveryPartner(false);
       }
       if (partner.hasUnloading) {
         setCustomPartnerUnloadingRate(String(partner.unloadingRate || 0));
         setCustomPartnerUnloadingRateType(partner.unloadingRateType || "per brick");
+        setUnloadingByDeliveryPartner(true);
       } else {
         setUnloadingByDeliveryPartner(false);
       }

@@ -1009,6 +1009,7 @@ export default function CustomerProfile() {
   const [editProfileNotes, setEditProfileNotes] = useState("");
   const [editProfileOpeningBalance, setEditProfileOpeningBalance] = useState("");
   const [isSavingProfile, setIsSavingProfile] = useState(false);
+  const [isResettingProfile, setIsResettingProfile] = useState(false);
   const [editProfileIsSpecial, setEditProfileIsSpecial] = useState(false);
   const [editProfileMarkings, setEditProfileMarkings] = useState<string[]>([]);
   const [editProfileCustomMarking, setEditProfileCustomMarking] = useState("");
@@ -1138,6 +1139,78 @@ export default function CustomerProfile() {
     } finally {
       setIsSavingProfile(false);
     }
+  };
+
+  const handleResetProfileBalance = () => {
+    if (isLocked) {
+      Alert.alert(
+        "🔒 Screen Locked",
+        "Customer View Mode is active. Unlock screen to reset profile balance."
+      );
+      return;
+    }
+    if (!customer) return;
+
+    Alert.alert(
+      "Reset Profile Balance",
+      `Are you sure you want to reset the financial balance for "${customer.name}"? Total pending, total paid, and balance will be reset to ₹0.`,
+      [
+        { text: "Cancel", style: "cancel" },
+        {
+          text: "Reset to ₹0",
+          style: "destructive",
+          onPress: async () => {
+            setIsResettingProfile(true);
+            try {
+              let updatePayload: any = {
+                balance: 0,
+                totalPending: 0,
+                totalPaid: 0,
+                advanceAmount: 0,
+                updatedAt: new Date(),
+              };
+
+              if (customer.entityType === "delivery_partner") {
+                updatePayload = {
+                  totalPayable: 0,
+                  totalPaid: 0,
+                  totalPending: 0,
+                  balance: 0,
+                  updatedAt: new Date(),
+                };
+              } else if (customer.entityType === "worker") {
+                updatePayload = {
+                  totalPending: 0,
+                  totalPaid: 0,
+                  totalWages: 0,
+                  balance: 0,
+                  updatedAt: new Date(),
+                };
+              } else if (customer.entityType === "supplier") {
+                updatePayload = {
+                  balance: 0,
+                  totalPending: 0,
+                  totalPaid: 0,
+                  updatedAt: new Date(),
+                };
+              }
+
+              const success = await updateCustomerDetails(customer.id, updatePayload);
+              if (success) {
+                Alert.alert("Success", `Financial balance for "${customer.name}" has been reset to ₹0.`);
+              } else {
+                Alert.alert("Error", "Failed to reset profile balance. Please try again.");
+              }
+            } catch (error) {
+              console.error("Error resetting customer profile balance:", error);
+              Alert.alert("Error", "An unexpected error occurred while resetting balance.");
+            } finally {
+              setIsResettingProfile(false);
+            }
+          },
+        },
+      ]
+    );
   };
 
   // Edit items state variables
@@ -4245,13 +4318,39 @@ export default function CustomerProfile() {
         <View style={styles.section}>
           <View style={{ flexDirection: "row", justifyContent: "space-between", alignItems: "center", borderBottomWidth: 1, borderBottomColor: colors.border.subtle, paddingBottom: 8, marginBottom: 14 }}>
             <Text style={{ fontSize: 14, fontWeight: "700", color: colors.text.primary, textTransform: "uppercase", letterSpacing: 0.5 }}>Client Profile Info</Text>
-            <Pressable
-              style={{ flexDirection: "row", alignItems: "center", paddingVertical: 4, paddingHorizontal: 8, borderRadius: 6, backgroundColor: colors.accent.primary + "15" }}
-              onPress={handleOpenEditProfile}
-            >
-              <MaterialIcons name="edit" size={14} color={colors.accent.primary} style={{ marginRight: 4 }} />
-              <Text style={{ fontSize: 12, fontWeight: "600", color: colors.accent.primary }}>Edit Profile</Text>
-            </Pressable>
+            <View style={{ flexDirection: "row", alignItems: "center", gap: 8 }}>
+              <Pressable
+                disabled={isResettingProfile}
+                style={{
+                  flexDirection: "row",
+                  alignItems: "center",
+                  paddingVertical: 4,
+                  paddingHorizontal: 8,
+                  borderRadius: 6,
+                  backgroundColor: colors.accent.warning + "18",
+                  borderColor: colors.accent.warning + "45",
+                  borderWidth: 1,
+                  opacity: isResettingProfile ? 0.6 : 1,
+                }}
+                onPress={handleResetProfileBalance}
+              >
+                {isResettingProfile ? (
+                  <ActivityIndicator size="small" color={colors.accent.warning} style={{ marginRight: 4 }} />
+                ) : (
+                  <MaterialIcons name="restart-alt" size={14} color={colors.accent.warning} style={{ marginRight: 4 }} />
+                )}
+                <Text style={{ fontSize: 12, fontWeight: "600", color: colors.accent.warning }}>
+                  {isResettingProfile ? "Resetting..." : "Reset Profile"}
+                </Text>
+              </Pressable>
+              <Pressable
+                style={{ flexDirection: "row", alignItems: "center", paddingVertical: 4, paddingHorizontal: 8, borderRadius: 6, backgroundColor: colors.accent.primary + "15" }}
+                onPress={handleOpenEditProfile}
+              >
+                <MaterialIcons name="edit" size={14} color={colors.accent.primary} style={{ marginRight: 4 }} />
+                <Text style={{ fontSize: 12, fontWeight: "600", color: colors.accent.primary }}>Edit Profile</Text>
+              </Pressable>
+            </View>
           </View>
           {(Number(customer.balance || 0) < 0 || Number(customer.advanceAmount || 0) > 0) && (
             <View style={[styles.infoBlock, { backgroundColor: colors.accent.success + "0C", paddingHorizontal: 10, borderRadius: 8, marginVertical: 2, borderBottomWidth: 1, borderBottomColor: colors.accent.success + "25" }]}>

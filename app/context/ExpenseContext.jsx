@@ -11,7 +11,7 @@ import {
     writeBatch,
 } from "firebase/firestore";
 import { getDownloadURL, ref, uploadBytes } from "firebase/storage";
-import { createContext, useEffect, useState, useMemo } from "react";
+import { createContext, useEffect, useState, useMemo, useCallback, useRef } from "react";
 import { db, normalizeDateValue, storage } from "../../src/config/firebase";
 
 export const ExpenseContext = createContext(null);
@@ -19,6 +19,8 @@ export const ExpenseContext = createContext(null);
 export function ExpenseProvider({ children }) {
   const [expenses, setExpenses] = useState([]);
   const [loading, setLoading] = useState(true);
+  const expensesRef = useRef(expenses);
+  useEffect(() => { expensesRef.current = expenses; }, [expenses]);
 
   // New collections state
   const [expensePayments, setExpensePayments] = useState([]);
@@ -28,28 +30,59 @@ export function ExpenseProvider({ children }) {
   const [budgetsLoading, setBudgetsLoading] = useState(true);
   const [recurringLoading, setRecurringLoading] = useState(true);
 
-  // ─── Expenses Listener (existing) ───
+  // ─── Expenses Listener (incremental updates via docChanges) ───
+  const isInitialExpensesLoadRef = useRef(true);
   useEffect(() => {
     setLoading(true);
+    isInitialExpensesLoadRef.current = true;
     const expensesCollection = collection(db, "expenses");
     const q = query(expensesCollection, orderBy("expenseDate", "desc"));
+
+    const normalizeExpenseDoc = (doc) => {
+      const data = doc.data();
+      return {
+        id: doc.id,
+        ...data,
+        expenseDate: normalizeDateValue(data.expenseDate),
+        createdAt: normalizeDateValue(data.createdAt),
+      };
+    };
 
     const unsubscribe = onSnapshot(
       q,
       (snapshot) => {
-        const dbExpenses = snapshot.docs.map((doc) => {
-          const data = doc.data();
-          return {
-            id: doc.id,
-            ...data,
-            expenseDate: normalizeDateValue(data.expenseDate),
-            createdAt: normalizeDateValue(data.createdAt),
-          };
+        if (isInitialExpensesLoadRef.current) {
+          isInitialExpensesLoadRef.current = false;
+          const initial = snapshot.docs.map(normalizeExpenseDoc);
+          setExpenses(initial);
+          setLoading(false);
+          return;
+        }
+
+        const changes = snapshot.docChanges();
+        if (changes.length === 0) return;
+
+        setExpenses((prev) => {
+          const map = new Map(prev.map((e) => [e.id, e]));
+          changes.forEach((change) => {
+            if (change.type === "added" || change.type === "modified") {
+              map.set(change.doc.id, normalizeExpenseDoc(change.doc));
+            } else if (change.type === "removed") {
+              map.delete(change.doc.id);
+            }
+          });
+          const updated = Array.from(map.values());
+          updated.sort((a, b) => {
+            const timeA = a.expenseDate instanceof Date ? a.expenseDate.getTime() : 0;
+            const timeB = b.expenseDate instanceof Date ? b.expenseDate.getTime() : 0;
+            return timeB - timeA;
+          });
+          return updated;
         });
-        setExpenses(dbExpenses);
         setLoading(false);
       },
       (error) => {
+        console.warn("Expenses listener error:", error);
         setLoading(false);
       },
     );
@@ -57,28 +90,59 @@ export function ExpenseProvider({ children }) {
     return () => unsubscribe();
   }, []);
 
-  // ─── Expense Payments Listener ───
+  // ─── Expense Payments Listener (incremental updates via docChanges) ───
+  const isInitialPaymentsLoadRef = useRef(true);
   useEffect(() => {
     setPaymentsLoading(true);
+    isInitialPaymentsLoadRef.current = true;
     const paymentsCollection = collection(db, "expense_payments");
     const q = query(paymentsCollection, orderBy("paidAt", "desc"));
+
+    const normalizePaymentDoc = (d) => {
+      const data = d.data();
+      return {
+        id: d.id,
+        ...data,
+        paidAt: normalizeDateValue(data.paidAt),
+        createdAt: normalizeDateValue(data.createdAt),
+      };
+    };
 
     const unsubscribe = onSnapshot(
       q,
       (snapshot) => {
-        const dbPayments = snapshot.docs.map((d) => {
-          const data = d.data();
-          return {
-            id: d.id,
-            ...data,
-            paidAt: normalizeDateValue(data.paidAt),
-            createdAt: normalizeDateValue(data.createdAt),
-          };
+        if (isInitialPaymentsLoadRef.current) {
+          isInitialPaymentsLoadRef.current = false;
+          const initial = snapshot.docs.map(normalizePaymentDoc);
+          setExpensePayments(initial);
+          setPaymentsLoading(false);
+          return;
+        }
+
+        const changes = snapshot.docChanges();
+        if (changes.length === 0) return;
+
+        setExpensePayments((prev) => {
+          const map = new Map(prev.map((p) => [p.id, p]));
+          changes.forEach((change) => {
+            if (change.type === "added" || change.type === "modified") {
+              map.set(change.doc.id, normalizePaymentDoc(change.doc));
+            } else if (change.type === "removed") {
+              map.delete(change.doc.id);
+            }
+          });
+          const updated = Array.from(map.values());
+          updated.sort((a, b) => {
+            const timeA = a.paidAt instanceof Date ? a.paidAt.getTime() : 0;
+            const timeB = b.paidAt instanceof Date ? b.paidAt.getTime() : 0;
+            return timeB - timeA;
+          });
+          return updated;
         });
-        setExpensePayments(dbPayments);
         setPaymentsLoading(false);
       },
       (error) => {
+        console.warn("Expense payments listener error:", error);
         setPaymentsLoading(false);
       },
     );
@@ -138,7 +202,7 @@ export function ExpenseProvider({ children }) {
   }, []);
 
   // ─── Image Upload (existing) ───
-  const uploadExpenseImage = async (uri) => {
+  const uploadExpenseImage = useCallback(async (uri) => {
     if (!uri) return "";
     if (uri.startsWith("http://") || uri.startsWith("https://")) {
       return uri;
@@ -158,10 +222,10 @@ export function ExpenseProvider({ children }) {
       // Offline or upload failed — return local URI so the expense can still be created
       return uri;
     }
-  };
+  }, []);
 
   // ─── Expense CRUD (existing, preserved) ───
-  const addExpense = async (expenseData) => {
+  const addExpense = useCallback(async (expenseData) => {
     try {
       let finalImageUrl = "";
       if (expenseData.billImageUri) {
@@ -200,9 +264,9 @@ export function ExpenseProvider({ children }) {
     } catch (error) {
       return null;
     }
-  };
+  }, [uploadExpenseImage]);
 
-  const updateExpense = async (id, expenseData) => {
+  const updateExpense = useCallback(async (id, expenseData) => {
     try {
       let finalImageUrl = expenseData.billImageUrl || "";
       if (expenseData.billImageUri) {
@@ -242,9 +306,9 @@ export function ExpenseProvider({ children }) {
     } catch (error) {
       return false;
     }
-  };
+  }, [uploadExpenseImage]);
 
-  const deleteExpense = async (id) => {
+  const deleteExpense = useCallback(async (id) => {
     try {
       const expenseRef = doc(db, "expenses", id);
       await deleteDoc(expenseRef);
@@ -252,10 +316,10 @@ export function ExpenseProvider({ children }) {
     } catch (error) {
       return false;
     }
-  };
+  }, []);
 
   // ─── Expense Payments CRUD (NEW) ───
-  const addExpensePayment = async (expenseId, paymentData) => {
+  const addExpensePayment = useCallback(async (expenseId, paymentData) => {
     try {
       const expenseRef = doc(db, "expenses", expenseId);
       const expenseSnap = await getDoc(expenseRef);
@@ -300,9 +364,9 @@ export function ExpenseProvider({ children }) {
     } catch (error) {
       return false;
     }
-  };
+  }, []);
 
-  const undoExpensePayment = async (paymentId) => {
+  const undoExpensePayment = useCallback(async (paymentId) => {
     try {
       const paymentRef = doc(db, "expense_payments", paymentId);
       const paymentSnap = await getDoc(paymentRef);
@@ -345,10 +409,10 @@ export function ExpenseProvider({ children }) {
     } catch (error) {
       return false;
     }
-  };
+  }, []);
 
   // ─── Budget CRUD (NEW) ───
-  const setBudget = async (category, monthlyLimit) => {
+  const setBudget = useCallback(async (category, monthlyLimit) => {
     try {
       // Check if budget already exists for this category
       const existing = expenseBudgets.find((b) => b.category === category);
@@ -369,24 +433,24 @@ export function ExpenseProvider({ children }) {
     } catch (error) {
       return false;
     }
-  };
+  }, [expenseBudgets]);
 
-  const deleteBudget = async (budgetId) => {
+  const deleteBudget = useCallback(async (budgetId) => {
     try {
       await deleteDoc(doc(db, "expense_budgets", budgetId));
       return true;
     } catch (error) {
       return false;
     }
-  };
+  }, []);
 
-  const getBudget = (category) => {
+  const getBudget = useCallback((category) => {
     const budget = expenseBudgets.find((b) => b.category === category);
     return budget ? Number(budget.monthlyLimit || 0) : 0;
-  };
+  }, [expenseBudgets]);
 
   // ─── Recurring Expenses CRUD (NEW) ───
-  const addRecurringExpense = async (data) => {
+  const addRecurringExpense = useCallback(async (data) => {
     try {
       const payload = {
         title: data.title || "",
@@ -407,9 +471,9 @@ export function ExpenseProvider({ children }) {
     } catch (error) {
       return null;
     }
-  };
+  }, []);
 
-  const updateRecurringExpense = async (id, data) => {
+  const updateRecurringExpense = useCallback(async (id, data) => {
     try {
       const recRef = doc(db, "recurring_expenses", id);
       await updateDoc(recRef, {
@@ -427,18 +491,18 @@ export function ExpenseProvider({ children }) {
     } catch (error) {
       return false;
     }
-  };
+  }, []);
 
-  const deleteRecurringExpense = async (id) => {
+  const deleteRecurringExpense = useCallback(async (id) => {
     try {
       await deleteDoc(doc(db, "recurring_expenses", id));
       return true;
     } catch (error) {
       return false;
     }
-  };
+  }, []);
 
-  const logRecurringExpense = async (recurringId) => {
+  const logRecurringExpense = useCallback(async (recurringId) => {
     const template = recurringExpenses.find((r) => r.id === recurringId);
     if (!template) return null;
 
@@ -477,12 +541,12 @@ export function ExpenseProvider({ children }) {
     }
 
     return newExpenseId;
-  };
+  }, [recurringExpenses, addExpense, updateRecurringExpense]);
 
   // ─── Helper Functions (NEW) ───
-  const getTodayExpenses = () => {
+  const getTodayExpenses = useCallback(() => {
     const todayStr = new Date().toDateString();
-    return expenses
+    return (expensesRef.current || [])
       .filter((e) => {
         const d =
           e.expenseDate instanceof Date
@@ -491,32 +555,32 @@ export function ExpenseProvider({ children }) {
         return d.toDateString() === todayStr;
       })
       .reduce((sum, e) => sum + Number(e.amount || 0), 0);
-  };
+  }, []);
 
-  const getMonthlyExpenses = (month, year) => {
-    return expenses.filter((e) => {
+  const getMonthlyExpenses = useCallback((month, year) => {
+    return (expensesRef.current || []).filter((e) => {
       const d =
         e.expenseDate instanceof Date ? e.expenseDate : new Date(e.expenseDate);
       return d.getMonth() === month && d.getFullYear() === year;
     });
-  };
+  }, []);
 
-  const getCategoryTotals = (monthExpenses) => {
-    const list = monthExpenses || expenses;
+  const getCategoryTotals = useCallback((monthExpenses) => {
+    const list = monthExpenses || expensesRef.current || [];
     return list.reduce((acc, e) => {
       const cat = e.category || "Miscellaneous";
       acc[cat] = (acc[cat] || 0) + Number(e.amount || 0);
       return acc;
     }, {});
-  };
+  }, []);
 
-  const getExpensesByDateRange = (startDate, endDate) => {
-    return expenses.filter((e) => {
+  const getExpensesByDateRange = useCallback((startDate, endDate) => {
+    return (expensesRef.current || []).filter((e) => {
       const d =
         e.expenseDate instanceof Date ? e.expenseDate : new Date(e.expenseDate);
       return d >= startDate && d <= endDate;
     });
-  };
+  }, []);
 
   const todayExpenses = useMemo(() => {
     return getTodayExpenses();

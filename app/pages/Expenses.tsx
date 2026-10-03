@@ -123,6 +123,12 @@ export default function Expenses() {
   const [selectedCategoryFilter, setSelectedCategoryFilter] = useState("All");
   const [selectedPeriodFilter, setSelectedPeriodFilter] = useState<"All" | "Today" | "Week" | "Month">("All");
   const [sortOrder, setSortOrder] = useState<"latest" | "oldest">("latest");
+  const [displayLimit, setDisplayLimit] = useState(30);
+
+  // Reset pagination window when filters change
+  useEffect(() => {
+    setDisplayLimit(30);
+  }, [searchQuery, selectedCategoryFilter, selectedPeriodFilter, sortOrder]);
 
   // Selected Expense for Detail View
   const [selectedExpense, setSelectedExpense] = useState<any>(null);
@@ -268,7 +274,7 @@ export default function Expenses() {
     return { paidExpenses: paid, balanceExpenses: balance };
   }, [filteredExpenses]);
 
-  const renderExpenseCard = (expense: any, index: number) => {
+  const renderExpenseCard = useCallback((expense: any, index: number) => {
     const catInfo = CATEGORY_CONFIG[expense.category] || CATEGORY_CONFIG["Miscellaneous"];
     const expDate = expense.expenseDate instanceof Date ? expense.expenseDate : new Date(expense.expenseDate);
     const isBalance = expense.status === "Balance" || expense.paymentMethod === "Balance" || (expense.remainingAmount !== undefined && expense.remainingAmount > 0);
@@ -335,7 +341,7 @@ export default function Expenses() {
         </Pressable>
       </Animated.View>
     );
-  };
+  }, [styles, colors, setSelectedExpense, setIsDetailModalOpen]);
 
   // Image Picking
   const handlePickImage = async () => {
@@ -743,7 +749,32 @@ export default function Expenses() {
                       </View>
                     </View>
                     <View style={styles.listSectionItems}>
-                      {balanceExpenses.map((expense: any, index: number) => renderExpenseCard(expense, index))}
+                      {balanceExpenses.slice(0, displayLimit).map((expense: any, index: number) => renderExpenseCard(expense, index))}
+                      {balanceExpenses.length > displayLimit && (
+                        <Pressable
+                          style={({ pressed }) => [
+                            {
+                              flexDirection: "row",
+                              alignItems: "center",
+                              justifyContent: "center",
+                              backgroundColor: colors.bg.card,
+                              borderColor: colors.border.subtle,
+                              borderWidth: 1,
+                              borderRadius: 10,
+                              paddingVertical: 10,
+                              marginTop: 8,
+                              gap: 6,
+                            },
+                            pressed && { opacity: 0.75 },
+                          ]}
+                          onPress={() => setDisplayLimit((prev) => prev + 30)}
+                        >
+                          <MaterialIcons name="expand-more" size={18} color={colors.accent.primary} />
+                          <Text style={{ fontSize: 12.5, fontWeight: "700", color: colors.accent.primary }}>
+                            Show More Pending Dues ({balanceExpenses.length - displayLimit} more)
+                          </Text>
+                        </Pressable>
+                      )}
                     </View>
                   </View>
                 )}
@@ -760,7 +791,32 @@ export default function Expenses() {
                       </View>
                     </View>
                     <View style={styles.listSectionItems}>
-                      {paidExpenses.map((expense: any, index: number) => renderExpenseCard(expense, index))}
+                      {paidExpenses.slice(0, displayLimit).map((expense: any, index: number) => renderExpenseCard(expense, index))}
+                      {paidExpenses.length > displayLimit && (
+                        <Pressable
+                          style={({ pressed }) => [
+                            {
+                              flexDirection: "row",
+                              alignItems: "center",
+                              justifyContent: "center",
+                              backgroundColor: colors.bg.card,
+                              borderColor: colors.border.subtle,
+                              borderWidth: 1,
+                              borderRadius: 10,
+                              paddingVertical: 10,
+                              marginTop: 8,
+                              gap: 6,
+                            },
+                            pressed && { opacity: 0.75 },
+                          ]}
+                          onPress={() => setDisplayLimit((prev) => prev + 30)}
+                        >
+                          <MaterialIcons name="expand-more" size={18} color={colors.accent.primary} />
+                          <Text style={{ fontSize: 12.5, fontWeight: "700", color: colors.accent.primary }}>
+                            Show More Paid Expenses ({paidExpenses.length - displayLimit} more)
+                          </Text>
+                        </Pressable>
+                      )}
                     </View>
                   </View>
                 )}

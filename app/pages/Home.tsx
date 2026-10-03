@@ -468,25 +468,35 @@ export default function Home() {
     return result;
   }, [customers, workers, suppliers, deliveryPartners, colors]);
 
-  const totalUnpaidBalancesSum = useMemo(() => {
-    return unifiedCustomers.reduce((sum: number, item: any) => sum + Number(item.displayBalance || 0), 0);
-  }, [unifiedCustomers]);
+  const { totalUnpaidBalancesSum, unpaidCustomersList, summaryMetrics } = useMemo(() => {
+    const list: any[] = [];
+    let sum = 0;
+    let overdueCount = 0;
+    let highestBalance = 0;
 
-  const unpaidCustomersList = useMemo(() => {
-    return unifiedCustomers.filter((c: any) => Number(c.displayBalance || 0) > 0);
-  }, [unifiedCustomers]);
+    for (let i = 0; i < (unifiedCustomers || []).length; i++) {
+      const c = unifiedCustomers[i];
+      const bal = Number(c.displayBalance || 0);
+      if (bal > 0) {
+        list.push(c);
+        sum += bal;
+        if (bal > highestBalance) highestBalance = bal;
+        const lastDue = getLastDueDate(c);
+        if (lastDue && getDueDateStatus(lastDue) === "Overdue") {
+          overdueCount++;
+        }
+      }
+    }
 
-  const summaryMetrics = useMemo(() => {
-    const totalCount = unpaidCustomersList.length;
-    const totalSum = unpaidCustomersList.reduce((sum: number, c: any) => sum + Number(c.displayBalance || 0), 0);
-    const overdueCount = unpaidCustomersList.filter((c: any) => {
-      const lastDue = getLastDueDate(c);
-      return lastDue && getDueDateStatus(lastDue) === "Overdue";
-    }).length;
-    const highestBalance = unpaidCustomersList.reduce((max: number, c: any) => Math.max(max, Number(c.displayBalance || 0)), 0);
-    const avgBalance = totalCount > 0 ? Math.round(totalSum / totalCount) : 0;
-    return { totalCount, totalSum, overdueCount, highestBalance, avgBalance };
-  }, [unpaidCustomersList]);
+    const totalCount = list.length;
+    const avgBalance = totalCount > 0 ? Math.round(sum / totalCount) : 0;
+
+    return {
+      totalUnpaidBalancesSum: sum,
+      unpaidCustomersList: list,
+      summaryMetrics: { totalCount, totalSum: sum, overdueCount, highestBalance, avgBalance },
+    };
+  }, [unifiedCustomers]);
 
   const filteredUnpaidList = useMemo(() => {
     return unpaidCustomersList.filter((c: any) => {

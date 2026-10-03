@@ -625,12 +625,13 @@ export const customerShareService = {
           particulars = `<strong>${item.description || 'ஆர்டர் விபரம்'}</strong>`;
         }
         const extras: string[] = [];
-        if (item.shipmentCharge) extras.push(`வண்டி வாடகை: ₹${item.shipmentCharge}`);
-        if (item.loadingCharge) extras.push(`ஏற்று கூலி: ₹${item.loadingCharge}`);
-        if (item.unloadingCharge) extras.push(`இறக்கு கூலி: ₹${item.unloadingCharge}`);
+        if (item.shipmentCharge) extras.push(`வண்டி வாடகை: ₹${Number(item.shipmentCharge).toLocaleString('en-IN')}`);
+        if (item.loadingCharge) extras.push(`ஏற்று கூலி: ₹${Number(item.loadingCharge).toLocaleString('en-IN')}`);
+        if (item.unloadingCharge) extras.push(`இறக்கு கூலி: ₹${Number(item.unloadingCharge).toLocaleString('en-IN')}`);
+        if (item.extraAmount) extras.push(`கூடுதல்: ₹${Number(item.extraAmount).toLocaleString('en-IN')}`);
         if (item.notes) extras.push(item.notes);
         if (extras.length > 0) {
-          particulars += `<div style="font-size: 10px; color: ${t.subTextColor}; margin-top: 2px;">(${extras.join(', ')})</div>`;
+          particulars += extras.map(e => `<div style="font-size: 10px; color: ${t.subTextColor}; margin-top: 2px;">• ${e}</div>`).join('');
         }
       }
 
@@ -639,9 +640,9 @@ export const customerShareService = {
           <td style="padding: 7px 4px; text-align: center; border-right: 1px solid ${t.gridLineColor}; font-weight: 700;">${index + 1}</td>
           <td style="padding: 7px 4px; text-align: center; border-right: 1px solid ${t.gridLineColor}; white-space: nowrap; font-size: 11px;">${dmy}</td>
           <td style="padding: 7px 8px; border-right: 1px solid ${t.gridLineColor};">${particulars}</td>
-          <td style="padding: 7px 6px; text-align: right; border-right: 1px solid ${t.gridLineColor}; color: ${debitVal ? t.highlightColor : t.subTextColor}; font-weight: ${debitVal ? '800' : '400'};">${debitVal ? formatCurrency(debitVal) : '-'}</td>
+          <td style="padding: 7px 6px; text-align: right; border-right: 1px solid ${t.gridLineColor}; color: ${debitVal ? '#64748B' : t.subTextColor}; font-weight: ${debitVal ? '700' : '400'};">${debitVal ? formatCurrency(debitVal) : '-'}</td>
           <td style="padding: 7px 6px; text-align: right; border-right: 1px solid ${t.gridLineColor}; color: ${creditVal ? '#047857' : t.subTextColor}; font-weight: ${creditVal ? '800' : '400'};">${creditVal ? formatCurrency(creditVal) : '-'}</td>
-          <td style="padding: 7px 6px; text-align: right; font-weight: 600;">${item.balance !== undefined ? formatCurrency(item.balance) : '-'}</td>
+          <td style="padding: 7px 6px; text-align: right; color: ${item.balance ? t.highlightColor : t.inkColor}; font-weight: 700;">${item.balance !== undefined ? formatCurrency(item.balance) : '-'}</td>
         </tr>
       `;
     }).join('');
@@ -730,18 +731,18 @@ export const customerShareService = {
                   <th style="width: 40px;">${cfg.columnLabels?.sno || 'வ. எண்'}<br/><span style="font-size: 9px; font-weight: normal;">S.No</span></th>
                   <th style="width: 70px;">${cfg.columnLabels?.date || 'தேதி'}<br/><span style="font-size: 9px; font-weight: normal;">Date</span></th>
                   <th>${cfg.columnLabels?.description || 'விபரம் (பொருட்கள் / கூலி விவரம்)'}<br/><span style="font-size: 9px; font-weight: normal;">Particulars</span></th>
-                  <th style="width: 85px;">${cfg.columnLabels?.debit || 'பற்று (+)'}<br/><span style="font-size: 9px; font-weight: normal; color: ${t.highlightColor};">Debit</span></th>
+                  <th style="width: 85px;">${cfg.columnLabels?.debit || 'பற்று (+)'}<br/><span style="font-size: 9px; font-weight: normal; color: #64748B;">Debit</span></th>
                   <th style="width: 85px;">${cfg.columnLabels?.credit || 'வரவு (-)'}<br/><span style="font-size: 9px; font-weight: normal; color: #047857;">Credit</span></th>
-                  <th style="width: 80px;">${cfg.columnLabels?.balance || 'பாக்கி'}<br/><span style="font-size: 9px; font-weight: normal;">Balance</span></th>
+                  <th style="width: 80px;">${cfg.columnLabels?.balance || 'பாக்கி'}<br/><span style="font-size: 9px; font-weight: normal; color: ${t.highlightColor};">Balance</span></th>
                 </tr>
               </thead>
               <tbody>
                 ${rowsHtml}
                 <tr class="total-row">
                   <td colspan="3" style="text-align: center;">மொத்தம் (ACCOUNT TOTALS)</td>
-                  <td style="text-align: right; color: ${t.highlightColor};">${formatCurrency(totalDebit)}</td>
+                  <td style="text-align: right; color: #64748B; font-weight: 800;">${formatCurrency(totalDebit)}</td>
                   <td style="text-align: right; color: #047857;">${formatCurrency(totalCredit)}</td>
-                  <td style="text-align: right; color: ${netDue > 0 ? t.highlightColor : t.inkColor}; font-weight: 900;">${formatCurrency(netDue)}</td>
+                  <td style="text-align: right; color: ${t.highlightColor}; font-weight: 900;">${formatCurrency(netDue)}</td>
                 </tr>
               </tbody>
             </table>

@@ -9,7 +9,7 @@ import {
     where,
     writeBatch,
 } from "firebase/firestore";
-import { createContext, useEffect, useState, useMemo } from "react";
+import { createContext, useEffect, useState, useMemo, useCallback } from "react";
 import { db, normalizeDateValue } from "../../src/config/firebase";
 
 export const RawMaterialContext = createContext(null);
@@ -51,7 +51,7 @@ export function RawMaterialProvider({ children }) {
     return () => unsubscribe();
   }, []);
 
-  const addTransaction = async (txData) => {
+  const addTransaction = useCallback(async (txData) => {
     const uid = "default_user";
     try {
       const batch = writeBatch(db);
@@ -129,7 +129,7 @@ export function RawMaterialProvider({ children }) {
           previousStock: currentStock,
           newStock,
           notes: txData.notes || `Logged raw material ${txData.type}`,
-          date: new Date(),
+          date: txData.date ? new Date(txData.date) : new Date(),
           createdAt: new Date(),
         });
       }
@@ -165,9 +165,9 @@ export function RawMaterialProvider({ children }) {
     } catch (error) {
       throw error;
     }
-  };
+  }, []);
 
-  const deleteTransaction = async (logId) => {
+  const deleteTransaction = useCallback(async (logId) => {
     try {
       const logRef = doc(db, "raw_material_logs", logId);
       const logSnap = await getDoc(logRef);
@@ -260,9 +260,9 @@ export function RawMaterialProvider({ children }) {
     } catch (error) {
       return false;
     }
-  };
+  }, []);
 
-  const updateTransaction = async (logId, updatedData) => {
+  const updateTransaction = useCallback(async (logId, updatedData) => {
     try {
       const logRef = doc(db, "raw_material_logs", logId);
       const logSnap = await getDoc(logRef);
@@ -487,7 +487,7 @@ export function RawMaterialProvider({ children }) {
     } catch (error) {
       return false;
     }
-  };
+  }, []);
 
   const contextValue = useMemo(
     () => ({

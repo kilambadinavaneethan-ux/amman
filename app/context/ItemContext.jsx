@@ -10,7 +10,7 @@ import {
     where,
 } from "firebase/firestore";
 import { getDownloadURL, ref, uploadBytes } from "firebase/storage";
-import { createContext, useEffect, useState, useMemo } from "react";
+import { createContext, useEffect, useState, useMemo, useCallback } from "react";
 import { db, normalizeDateValue, storage } from "../../src/config/firebase";
 
 export const ItemContext = createContext(null);
@@ -52,7 +52,7 @@ export function ItemProvider({ children }) {
     return () => unsubscribe();
   }, []);
 
-  const addItem = async (itemData) => {
+  const addItem = useCallback(async (itemData) => {
     const uid = "default_user";
     try {
       const finalOpeningStock = Number(itemData.openingStock || 0);
@@ -86,9 +86,9 @@ export function ItemProvider({ children }) {
     } catch (error) {
       return null;
     }
-  };
+  }, []);
 
-  const updateItem = async (itemId, itemData) => {
+  const updateItem = useCallback(async (itemId, itemData) => {
     try {
       const itemRef = doc(db, "items", itemId);
       
@@ -139,9 +139,9 @@ export function ItemProvider({ children }) {
     } catch (error) {
       return false;
     }
-  };
+  }, []);
 
-  const deleteItem = async (itemId) => {
+  const deleteItem = useCallback(async (itemId) => {
     try {
       const itemRef = doc(db, "items", itemId);
       await deleteDoc(itemRef);
@@ -149,9 +149,9 @@ export function ItemProvider({ children }) {
     } catch (error) {
       return false;
     }
-  };
+  }, []);
 
-  const uploadItemImage = async (uri) => {
+  const uploadItemImage = useCallback(async (uri) => {
     if (!uri) return null;
     const uid = "default_user";
     try {
@@ -165,7 +165,7 @@ export function ItemProvider({ children }) {
       // Offline or upload failed — return local URI so the item can still be created
       return uri;
     }
-  };
+  }, []);
 
   const contextValue = useMemo(
     () => ({
@@ -176,7 +176,7 @@ export function ItemProvider({ children }) {
       deleteItem,
       uploadItemImage,
     }),
-    [items, loading],
+    [items, loading, addItem, updateItem, deleteItem, uploadItemImage],
   );
 
   return (

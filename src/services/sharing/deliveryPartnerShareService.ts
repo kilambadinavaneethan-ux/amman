@@ -10,6 +10,9 @@ export interface DeliveryTripItem {
   partnerName?: string;
   customerName?: string;
   deliveryCharge: number;
+  baseDeliveryCharge?: number;
+  loadingCharge?: number;
+  unloadingCharge?: number;
   paymentStatus: string;
   deliveredItem?: string;
   notes?: string;
@@ -48,6 +51,9 @@ export interface DeliveryPartnerPurchasedOrderItem {
 export interface PartnerSummary {
   totalTrips: number;
   totalPayable: number;
+  totalBaseTripEarnings?: number;
+  totalLoadingEarnings?: number;
+  totalUnloadingEarnings?: number;
   totalBonuses: number;
   totalPaid: number;
   netPending: number;
@@ -159,7 +165,21 @@ export class DeliveryPartnerShareService {
     msg += `----------------------------------------\n`;
     msg += `📊 *FINANCIAL SUMMARY (DELIVERY SERVICES)*\n`;
     msg += `• *Total Deliveries / Trips:* ${s.totalTrips}\n`;
-    msg += `• *Delivery Earnings (Payable):* ${formatCurrency(s.totalPayable)}\n`;
+    if ((s.totalLoadingEarnings || 0) > 0 || (s.totalUnloadingEarnings || 0) > 0) {
+      const baseEarn = s.totalBaseTripEarnings !== undefined
+        ? s.totalBaseTripEarnings
+        : (s.totalPayable - (s.totalLoadingEarnings || 0) - (s.totalUnloadingEarnings || 0));
+      msg += `• *Base Trip Freight:* ${formatCurrency(baseEarn)}\n`;
+      if ((s.totalLoadingEarnings || 0) > 0) {
+        msg += `• *Loading Charges (Labour):* +${formatCurrency(s.totalLoadingEarnings || 0)}\n`;
+      }
+      if ((s.totalUnloadingEarnings || 0) > 0) {
+        msg += `• *Unloading Charges (Labour):* +${formatCurrency(s.totalUnloadingEarnings || 0)}\n`;
+      }
+      msg += `• *Total Trip Compensation:* ${formatCurrency(s.totalPayable)}\n`;
+    } else {
+      msg += `• *Delivery Earnings (Payable):* ${formatCurrency(s.totalPayable)}\n`;
+    }
     if (s.totalBonuses > 0) {
       msg += `• *Bonus Rewards ⭐:* ${formatCurrency(s.totalBonuses)}\n`;
     }
@@ -208,7 +228,12 @@ export class DeliveryPartnerShareService {
       msg += `📦 *RECENT DELIVERIES (${Math.min(5, data.trips.length)} of ${data.trips.length})*\n`;
       data.trips.slice(0, 5).forEach((t, idx) => {
         const itemStr = t.deliveredItem ? ` (${t.deliveredItem})` : '';
-        msg += `${idx + 1}. ${formatDate(t.createdAt)} - ${t.customerName || 'General Client'}${itemStr}\n   Charge: ${formatCurrency(t.deliveryCharge)}\n`;
+        const hasExtra = (t.loadingCharge || 0) > 0 || (t.unloadingCharge || 0) > 0;
+        const base = t.baseDeliveryCharge ?? (t.deliveryCharge - (t.loadingCharge || 0) - (t.unloadingCharge || 0));
+        const breakdownStr = hasExtra
+          ? `\n   ↳ Breakdown: Trip ${formatCurrency(base)} + Load ${formatCurrency(t.loadingCharge || 0)} + Unload ${formatCurrency(t.unloadingCharge || 0)}`
+          : '';
+        msg += `${idx + 1}. ${formatDate(t.createdAt)} - ${t.customerName || 'General Client'}${itemStr}\n   Total: ${formatCurrency(t.deliveryCharge)}${breakdownStr}\n`;
       });
       if (data.trips.length > 5) {
         msg += `   ... and ${data.trips.length - 5} more trips recorded.\n`;
@@ -291,12 +316,15 @@ export class DeliveryPartnerShareService {
     const isAdvance = s.netPending < 0;
 
     const tripsRows = data.trips.map((t, idx) => {
+      const hasExtra = (t.loadingCharge || 0) > 0 || (t.unloadingCharge || 0) > 0;
+      const base = t.baseDeliveryCharge ?? (t.deliveryCharge - (t.loadingCharge || 0) - (t.unloadingCharge || 0));
       return `
         <tr style="background: ${idx % 2 === 0 ? '#FFFFFF' : '#F8FAFC'};">
           <td style="padding: 9px 10px; border-bottom: 1px solid #E2E8F0; font-size: 11px; color: #475569;">${formatDate(t.createdAt)}</td>
           <td style="padding: 9px 10px; border-bottom: 1px solid #E2E8F0; font-size: 11.5px; font-weight: 600; color: #0F172A;">
             <div>${t.customerName || 'General Client'}</div>
             ${t.deliveredItem ? `<div style="font-size: 10px; color: #64748B; font-weight: 400; margin-top: 2px;">📦 ${t.deliveredItem}</div>` : ''}
+            ${hasExtra ? `<div style="font-size: 9.5px; color: #0284C7; font-weight: 500; margin-top: 2px;">Trip: ${formatCurrency(base)} + Load: ${formatCurrency(t.loadingCharge || 0)} + Unload: ${formatCurrency(t.unloadingCharge || 0)}</div>` : ''}
             ${t.notes ? `<div style="font-size: 9.5px; color: #94A3B8; font-style: italic;">Note: ${t.notes}</div>` : ''}
           </td>
           <td style="padding: 9px 10px; border-bottom: 1px solid #E2E8F0; font-size: 11.5px; text-align: right; font-weight: 700; color: #1E293B;">
@@ -528,6 +556,12 @@ export class DeliveryPartnerShareService {
           <div class="summary-card" style="background: #F0FDF4; border-color: #BBF7D0;">
             <div class="summary-label" style="color: #15803D;">Trip Earnings</div>
             <div class="summary-val" style="color: #16A34A;">${formatCurrency(s.totalPayable)}</div>
+            ${((s.totalLoadingEarnings || 0) > 0 || (s.totalUnloadingEarnings || 0) > 0) ? `
+              <div style="font-size: 8.5px; color: #166534; font-weight: 600; margin-top: 3px;">
+                Trip: ${formatCurrency(s.totalBaseTripEarnings || (s.totalPayable - (s.totalLoadingEarnings || 0) - (s.totalUnloadingEarnings || 0)))}<br/>
+                Load: ${formatCurrency(s.totalLoadingEarnings || 0)} | Unload: ${formatCurrency(s.totalUnloadingEarnings || 0)}
+              </div>
+            ` : ''}
           </div>
           ${s.totalBonuses > 0 ? `
           <div class="summary-card" style="background: #FAF5FF; border-color: #E9D5FF;">
@@ -629,7 +663,11 @@ export class DeliveryPartnerShareService {
         <!-- 3. Deliveries & Trips Table -->
         <div class="section-heading">
           <span>Deliveries & Trips Ledger (${data.trips.length})</span>
-          <span>Total: ${formatCurrency(s.totalPayable)}</span>
+          <span>
+            ${((s.totalLoadingEarnings || 0) > 0 || (s.totalUnloadingEarnings || 0) > 0)
+              ? `Trip: ${formatCurrency(s.totalBaseTripEarnings || (s.totalPayable - (s.totalLoadingEarnings || 0) - (s.totalUnloadingEarnings || 0)))} + Load: ${formatCurrency(s.totalLoadingEarnings || 0)} + Unload: ${formatCurrency(s.totalUnloadingEarnings || 0)} = `
+              : ''}Total: ${formatCurrency(s.totalPayable)}
+          </span>
         </div>
         <table class="data-table">
           <thead>

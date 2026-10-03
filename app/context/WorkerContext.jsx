@@ -56,12 +56,17 @@ export function WorkerProvider({ children }) {
     return () => unsubscribe();
   }, []);
 
-  // Real-time listener for all attendance records
+  // Real-time listener for recent attendance records (last 30 days)
   useEffect(() => {
     const attCol = collection(db, "workerAttendance");
+    // Only load last 30 days of attendance to reduce Firestore reads
+    const thirtyDaysAgo = new Date();
+    thirtyDaysAgo.setDate(thirtyDaysAgo.getDate() - 30);
+    thirtyDaysAgo.setHours(0, 0, 0, 0);
+    const attQuery = query(attCol, where("createdAt", ">=", Timestamp.fromDate(thirtyDaysAgo)));
 
     const unsubscribe = onSnapshot(
-      attCol,
+      attQuery,
       (snapshot) => {
         const records = snapshot.docs.map((d) => ({
           id: d.id,

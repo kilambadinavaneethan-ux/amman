@@ -116,29 +116,67 @@ export function OrderProvider({ children }) {
     }
   };
 
-  // Real-time listener for orders (pure read)
+  // Real-time listener for orders (incremental updates via docChanges)
+  const isInitialLoadRef = useRef(true);
   useEffect(() => {
     setLoading(true);
+    isInitialLoadRef.current = true;
     const ordersCollection = collection(db, "orders");
     const q = query(ordersCollection, orderBy("createdAt", "desc"));
+
+    const normalizeOrderDoc = (docSnapshot) => {
+      const data = docSnapshot.data();
+      const createdAtVal = data.createdAt ? normalizeDateValue(data.createdAt) : null;
+      const orderedDateVal = data.orderedDate ? normalizeDateValue(data.orderedDate) : null;
+      return {
+        id: docSnapshot.id,
+        ...data,
+        createdAt: createdAtVal || orderedDateVal || new Date(),
+        orderedDate: orderedDateVal || createdAtVal || new Date(),
+        completedAt: data.completedAt ? normalizeDateValue(data.completedAt) : null,
+      };
+    };
 
     const unsubscribe = onSnapshot(
       q,
       (snapshot) => {
-        const dbOrders = snapshot.docs.map((docSnapshot) => {
-          const data = docSnapshot.data();
-          const createdAtVal = data.createdAt ? normalizeDateValue(data.createdAt) : null;
-          const orderedDateVal = data.orderedDate ? normalizeDateValue(data.orderedDate) : null;
-
-          return {
-            id: docSnapshot.id,
-            ...data,
-            createdAt: createdAtVal || orderedDateVal || new Date(),
-            orderedDate: orderedDateVal || createdAtVal || new Date(),
-            completedAt: data.completedAt ? normalizeDateValue(data.completedAt) : null,
-          };
-        });
-        setOrders(dbOrders);
+        if (isInitialLoadRef.current) {
+          // First load: map all docs
+          const dbOrders = snapshot.docs.map(normalizeOrderDoc);
+          setOrders(dbOrders);
+          isInitialLoadRef.current = false;
+        } else {
+          // Incremental: only process changed docs
+          const changes = snapshot.docChanges();
+          if (changes.length > 0) {
+            setOrders((prev) => {
+              const updated = [...prev];
+              for (const change of changes) {
+                const orderData = normalizeOrderDoc(change.doc);
+                if (change.type === "added") {
+                  // Check if already exists (can happen with cache)
+                  const existIdx = updated.findIndex((o) => o.id === orderData.id);
+                  if (existIdx === -1) {
+                    updated.unshift(orderData); // desc order, add to front
+                  } else {
+                    updated[existIdx] = orderData;
+                  }
+                } else if (change.type === "modified") {
+                  const idx = updated.findIndex((o) => o.id === orderData.id);
+                  if (idx !== -1) {
+                    updated[idx] = orderData;
+                  }
+                } else if (change.type === "removed") {
+                  const idx = updated.findIndex((o) => o.id === orderData.id);
+                  if (idx !== -1) {
+                    updated.splice(idx, 1);
+                  }
+                }
+              }
+              return updated;
+            });
+          }
+        }
         setLoading(false);
       },
       (error) => {
@@ -246,6 +284,23 @@ export function OrderProvider({ children }) {
     } catch (e) {
       // Ignore
     }
+  };
+
+  const getPartnerTripCompensation = (order) => {
+    if (!order) return { total: 0, base: 0, loading: 0, unloading: 0 };
+    const base = Number(order.shipmentCharge || 0);
+    const loading = (order.loadingByDeliveryPartner || (!order.loadingWorkerId && Number(order.loadingCharge || 0) > 0))
+      ? Number(order.loadingCharge || 0)
+      : 0;
+    const unloading = (order.unloadingByDeliveryPartner || (!order.unloadingWorkerId && Number(order.unloadingCharge || 0) > 0))
+      ? Number(order.unloadingCharge || 0)
+      : 0;
+    return {
+      total: base + loading + unloading,
+      base,
+      loading,
+      unloading,
+    };
   };
 
   const addOrder = useCallback(async (orderData) => {
@@ -398,7 +453,17 @@ export function OrderProvider({ children }) {
       }
 
       // 4. Create delivery trip and update partner balances if deliveryPartnerId is assigned (ONLY if completed)
-      if (deliveryPartnerId && orderPayload.shipmentCharge > 0 && orderPayload.status === "completed") {
+      const partnerTripComp = getPartnerTripCompensation({
+        ...orderPayload,
+        loadingByDeliveryPartner: orderData.loadingByDeliveryPartner,
+        unloadingByDeliveryPartner: orderData.unloadingByDeliveryPartner,
+        loadingCharge: orderData.loadingCharge,
+        unloadingCharge: orderData.unloadingCharge,
+        loadingWorkerId: orderData.loadingWorkerId,
+        unloadingWorkerId: orderData.unloadingWorkerId,
+      });
+
+      if (deliveryPartnerId && partnerTripComp.total > 0 && orderPayload.status === "completed") {
         try {
           let itemStr = "";
           if (Array.isArray(finalItems) && finalItems.length > 0) {
@@ -425,7 +490,10 @@ export function OrderProvider({ children }) {
             partnerId: deliveryPartnerId,
             customerName: customerName || "General Client",
             orderId: docRef.id,
-            deliveryCharge: Number(orderPayload.shipmentCharge),
+            deliveryCharge: partnerTripComp.total,
+            baseDeliveryCharge: partnerTripComp.base,
+            loadingCharge: partnerTripComp.loading,
+            unloadingCharge: partnerTripComp.unloading,
             paymentStatus: "Pending",
             deliveredItem: itemStr,
             itemName: finalItemName || "",
@@ -436,8 +504,8 @@ export function OrderProvider({ children }) {
 
           const partnerRef = doc(db, "deliveryPartners", deliveryPartnerId);
           await updateDoc(partnerRef, {
-            totalPayable: increment(Number(orderPayload.shipmentCharge)),
-            totalPending: increment(Number(orderPayload.shipmentCharge)),
+            totalPayable: increment(partnerTripComp.total),
+            totalPending: increment(partnerTripComp.total),
             updatedAt: new Date(),
           });
         } catch (tripError) {
@@ -622,21 +690,25 @@ export function OrderProvider({ children }) {
         }
 
         // Only create delivery trip and increment partner balance if restored to completed
-        if (status === "completed" && deliveryPartnerId && Number(shipmentCharge) > 0) {
+        const partnerTripComp = getPartnerTripCompensation(orderData);
+        if (status === "completed" && deliveryPartnerId && partnerTripComp.total > 0) {
           try {
             await addDoc(collection(db, "deliveryTrips"), {
               partnerId: deliveryPartnerId,
               customerName: customerName || "General Client",
               orderId: orderId,
-              deliveryCharge: Number(shipmentCharge),
+              deliveryCharge: partnerTripComp.total,
+              baseDeliveryCharge: partnerTripComp.base,
+              loadingCharge: partnerTripComp.loading,
+              unloadingCharge: partnerTripComp.unloading,
               paymentStatus: "Pending",
               createdAt: new Date(),
             });
 
             const partnerRef = doc(db, "deliveryPartners", deliveryPartnerId);
             await updateDoc(partnerRef, {
-              totalPayable: increment(Number(shipmentCharge)),
-              totalPending: increment(Number(shipmentCharge)),
+              totalPayable: increment(partnerTripComp.total),
+              totalPending: increment(partnerTripComp.total),
               updatedAt: new Date(),
             });
           } catch (tripError) {
@@ -681,7 +753,8 @@ export function OrderProvider({ children }) {
           }
 
           // Transitioning to COMPLETED: Create delivery trip and increment partner balances
-          if (deliveryPartnerId && Number(shipmentCharge) > 0) {
+          const partnerTripComp = getPartnerTripCompensation(orderData);
+          if (deliveryPartnerId && partnerTripComp.total > 0) {
             try {
               // Ensure trip doesn't already exist for this order
               const tripsRef = collection(db, "deliveryTrips");
@@ -714,7 +787,10 @@ export function OrderProvider({ children }) {
                   partnerId: deliveryPartnerId,
                   customerName: customerName || "General Client",
                   orderId: orderId,
-                  deliveryCharge: Number(shipmentCharge),
+                  deliveryCharge: partnerTripComp.total,
+                  baseDeliveryCharge: partnerTripComp.base,
+                  loadingCharge: partnerTripComp.loading,
+                  unloadingCharge: partnerTripComp.unloading,
                   paymentStatus: "Pending",
                   deliveredItem: itemStr,
                   itemName: orderData.itemName || "",
@@ -725,8 +801,8 @@ export function OrderProvider({ children }) {
 
                 const partnerRef = doc(db, "deliveryPartners", deliveryPartnerId);
                 await updateDoc(partnerRef, {
-                  totalPayable: increment(Number(shipmentCharge)),
-                  totalPending: increment(Number(shipmentCharge)),
+                  totalPayable: increment(partnerTripComp.total),
+                  totalPending: increment(partnerTripComp.total),
                   updatedAt: new Date(),
                 });
               }
@@ -1105,8 +1181,10 @@ export function OrderProvider({ children }) {
       const isNewCompleted = !isNewCancelled && newOrderData.status === "completed";
       const oldPartnerId = isOldCompleted ? oldOrderData.deliveryPartnerId : null;
       const newPartnerId = isNewCompleted ? newOrderData.deliveryPartnerId : null;
-      const oldShipment = isOldCompleted ? Number(oldOrderData.shipmentCharge || 0) : 0;
-      const newShipment = isNewCompleted ? Number(newOrderData.shipmentCharge || 0) : 0;
+      const oldTripComp = isOldCompleted ? getPartnerTripCompensation(oldOrderData) : { total: 0, base: 0, loading: 0, unloading: 0 };
+      const newTripComp = isNewCompleted ? getPartnerTripCompensation(newOrderData) : { total: 0, base: 0, loading: 0, unloading: 0 };
+      const oldShipment = oldTripComp.total;
+      const newShipment = newTripComp.total;
 
       if (!isOldCompleted && isNewCompleted) {
         if (newPartnerId && newShipment > 0) {
@@ -1122,6 +1200,9 @@ export function OrderProvider({ children }) {
             customerName: newOrderData.customerName || "General Client",
             orderId: orderId,
             deliveryCharge: newShipment,
+            baseDeliveryCharge: newTripComp.base,
+            loadingCharge: newTripComp.loading,
+            unloadingCharge: newTripComp.unloading,
             paymentStatus: "Pending",
             createdAt: new Date(),
           });
@@ -1168,6 +1249,9 @@ export function OrderProvider({ children }) {
                 for (const tripDoc of querySnapshot.docs) {
                   await updateDoc(tripDoc.ref, {
                     deliveryCharge: newShipment,
+                    baseDeliveryCharge: newTripComp.base,
+                    loadingCharge: newTripComp.loading,
+                    unloadingCharge: newTripComp.unloading,
                     customerName: newOrderData.customerName || "General Client",
                   });
                 }
@@ -1177,6 +1261,9 @@ export function OrderProvider({ children }) {
                   customerName: newOrderData.customerName || "General Client",
                   orderId: orderId,
                   deliveryCharge: newShipment,
+                  baseDeliveryCharge: newTripComp.base,
+                  loadingCharge: newTripComp.loading,
+                  unloadingCharge: newTripComp.unloading,
                   paymentStatus: "Pending",
                   createdAt: new Date(),
                 });
@@ -1187,6 +1274,10 @@ export function OrderProvider({ children }) {
               const querySnapshot = await getDocsOfflineSafe(q);
               for (const tripDoc of querySnapshot.docs) {
                 await updateDoc(tripDoc.ref, {
+                  deliveryCharge: newShipment,
+                  baseDeliveryCharge: newTripComp.base,
+                  loadingCharge: newTripComp.loading,
+                  unloadingCharge: newTripComp.unloading,
                   customerName: newOrderData.customerName || "General Client",
                 });
               }
@@ -1222,6 +1313,9 @@ export function OrderProvider({ children }) {
               customerName: newOrderData.customerName || "General Client",
               orderId: orderId,
               deliveryCharge: newShipment,
+              baseDeliveryCharge: newTripComp.base,
+              loadingCharge: newTripComp.loading,
+              unloadingCharge: newTripComp.unloading,
               paymentStatus: "Pending",
               createdAt: new Date(),
             });
@@ -1383,12 +1477,21 @@ export function OrderProvider({ children }) {
     }
   }, []);
 
-  const getTodaySales = () => {
+  const { todaySales, todayOrdersCount } = useMemo(() => {
     const today = new Date();
     today.setHours(0, 0, 0, 0);
     const todayTime = today.getTime();
 
-    return (orders || []).reduce((sum, o) => {
+    let sales = 0;
+    let count = 0;
+
+    for (let i = 0; i < (orders || []).length; i++) {
+      const o = orders[i];
+      const createdDate = o.createdAt instanceof Date ? o.createdAt : new Date(o.createdAt || Date.now());
+      if (createdDate.getTime() >= todayTime) {
+        count++;
+      }
+
       const orderItems = Array.isArray(o.items) && o.items.length > 0 ? o.items : [];
       const totalQty = orderItems.length > 0
         ? orderItems.reduce((acc, itm) => acc + Number(itm.quantity || 0), 0)
@@ -1397,45 +1500,29 @@ export function OrderProvider({ children }) {
       const isCancelled = o.status === "cancelled";
       const isFullyCompleted = !isCancelled && (o.status === "completed" || (totalQty > 0 && deliveredQty >= totalQty));
 
-      if (!isFullyCompleted) return sum;
-
-      let completedTimeVal = o.createdAt;
-      if (Array.isArray(o.deliveries) && o.deliveries.length > 0) {
-        const lastDel = o.deliveries[o.deliveries.length - 1];
-        if (lastDel && lastDel.date) {
-          completedTimeVal = lastDel.date;
+      if (isFullyCompleted) {
+        let completedTimeVal = o.createdAt;
+        if (Array.isArray(o.deliveries) && o.deliveries.length > 0) {
+          const lastDel = o.deliveries[o.deliveries.length - 1];
+          if (lastDel && lastDel.date) {
+            completedTimeVal = lastDel.date;
+          }
+        } else if (o.updatedAt) {
+          completedTimeVal = o.updatedAt;
         }
-      } else if (o.updatedAt) {
-        completedTimeVal = o.updatedAt;
+
+        const compDate = completedTimeVal instanceof Date
+          ? completedTimeVal
+          : (typeof completedTimeVal?.toDate === "function" ? completedTimeVal.toDate() : new Date(completedTimeVal));
+        compDate.setHours(0, 0, 0, 0);
+
+        if (compDate.getTime() === todayTime) {
+          sales += Number(o.total || 0);
+        }
       }
+    }
 
-      const compDate = completedTimeVal instanceof Date
-        ? completedTimeVal
-        : (typeof completedTimeVal?.toDate === "function" ? completedTimeVal.toDate() : new Date(completedTimeVal));
-      compDate.setHours(0, 0, 0, 0);
-
-      if (compDate.getTime() === todayTime) {
-        return sum + Number(o.total || 0);
-      }
-      return sum;
-    }, 0);
-  };
-
-  const getTodayOrdersCount = () => {
-    const today = new Date();
-    today.setHours(0, 0, 0, 0);
-    return (orders || []).filter((o) => {
-      const d = o.createdAt instanceof Date ? o.createdAt : new Date(o.createdAt || Date.now());
-      return d >= today;
-    }).length;
-  };
-
-  const todaySales = useMemo(() => {
-    return getTodaySales();
-  }, [orders]);
-
-  const todayOrdersCount = useMemo(() => {
-    return getTodayOrdersCount();
+    return { todaySales: sales, todayOrdersCount: count };
   }, [orders]);
 
   const contextValue = useMemo(

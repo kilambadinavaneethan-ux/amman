@@ -8,6 +8,7 @@ import { UserContext } from "../../context/UserContext";
 import { RawMaterialSupplierContext } from "../../context/RawMaterialSupplierContext";
 import ProtectedRoute from "../../components/ProtectedRoute";
 import BackButton from "../../components/BackButton";
+import EasyCalendarModal from "../../components/EasyCalendarModal";
 import { useTheme } from "../../context/ThemeContext";
 
 function RawMaterialDetailsScreen() {
@@ -37,6 +38,8 @@ function RawMaterialDetailsScreen() {
   const [txQty, setTxQty] = useState("");
   const [txCost, setTxCost] = useState("");
   const [txNotes, setTxNotes] = useState("");
+  const [txDate, setTxDate] = useState(new Date());
+  const [isCalendarOpen, setIsCalendarOpen] = useState(false);
   const [activeLogId, setActiveLogId] = useState(null);
   const [editingLog, setEditingLog] = useState(null);
 
@@ -189,6 +192,7 @@ function RawMaterialDetailsScreen() {
 
   const handleOpenPurchase = () => {
     setEditingLog(null);
+    setTxDate(new Date());
     setTxQty("");
     setTxCost(String(material.costPrice || ""));
     setTxNotes("");
@@ -214,6 +218,7 @@ function RawMaterialDetailsScreen() {
 
   const handleOpenConsumption = () => {
     setEditingLog(null);
+    setTxDate(new Date());
     setTxQty("");
     setTxNotes("");
     setErrorMsg("");
@@ -230,6 +235,15 @@ function RawMaterialDetailsScreen() {
     setTxQty(String(log.quantity));
     setTxNotes(log.notes || "");
     setErrorMsg("");
+    setTxDate(
+      log.date
+        ? log.date instanceof Date
+          ? log.date
+          : log.date?.toDate
+          ? log.date.toDate()
+          : new Date(log.date)
+        : new Date()
+    );
     
     if (log.type === "purchase") {
       setTxCost(String(log.costPerUnit || ""));
@@ -279,6 +293,7 @@ function RawMaterialDetailsScreen() {
           supplierId: selectedSupplierId || null,
           supplierName: supplierObj ? supplierObj.name : null,
           notes: txNotes.trim(),
+          date: txDate,
         });
       } else {
         success = await addTransaction({
@@ -294,7 +309,7 @@ function RawMaterialDetailsScreen() {
           supplierName: supplierObj ? supplierObj.name : null,
           unit: unitSuffix,
           notes: txNotes.trim(),
-          date: new Date(),
+          date: txDate,
         });
       }
 
@@ -335,6 +350,7 @@ function RawMaterialDetailsScreen() {
         success = await updateTransaction(editingLog.id, {
           quantity: qty,
           notes: txNotes.trim(),
+          date: txDate,
         });
       } else {
         success = await addTransaction({
@@ -344,7 +360,7 @@ function RawMaterialDetailsScreen() {
           quantity: qty,
           unit: unitSuffix,
           notes: txNotes.trim(),
-          date: new Date(),
+          date: txDate,
         });
       }
 
@@ -644,6 +660,22 @@ function RawMaterialDetailsScreen() {
             ) : null}
 
             <ScrollView contentContainerStyle={{ paddingBottom: 10 }} showsVerticalScrollIndicator={false} keyboardShouldPersistTaps="handled">
+              <Text style={styles.modalInputLabel}>Transaction Date</Text>
+              <Pressable
+                style={styles.dateSelector}
+                onPress={() => !loggingTx && setIsCalendarOpen(true)}
+              >
+                <MaterialIcons name="calendar-today" size={18} color={colors.accent.primary} style={{ marginRight: 8 }} />
+                <Text style={styles.dateSelectorText}>
+                  {txDate.toLocaleDateString("en-IN", {
+                    day: "numeric",
+                    month: "short",
+                    year: "numeric",
+                  })}
+                </Text>
+                <MaterialIcons name="edit-calendar" size={16} color={colors.text.muted} style={{ marginLeft: "auto" }} />
+              </Pressable>
+
               <Text style={styles.modalInputLabel}>Quantity to Intake ({unitSuffix}) *</Text>
               <TextInput
                 style={styles.modalTextInput}
@@ -782,6 +814,22 @@ function RawMaterialDetailsScreen() {
               </View>
             ) : null}
 
+            <Text style={styles.modalInputLabel}>Transaction Date</Text>
+            <Pressable
+              style={styles.dateSelector}
+              onPress={() => !loggingTx && setIsCalendarOpen(true)}
+            >
+              <MaterialIcons name="calendar-today" size={18} color={colors.accent.primary} style={{ marginRight: 8 }} />
+              <Text style={styles.dateSelectorText}>
+                {txDate.toLocaleDateString("en-IN", {
+                  day: "numeric",
+                  month: "short",
+                  year: "numeric",
+                })}
+              </Text>
+              <MaterialIcons name="edit-calendar" size={16} color={colors.text.muted} style={{ marginLeft: "auto" }} />
+            </Pressable>
+
             <Text style={styles.modalInputLabel}>Quantity to Consume ({unitSuffix}) *</Text>
             <TextInput
               style={styles.modalTextInput}
@@ -852,6 +900,18 @@ function RawMaterialDetailsScreen() {
           </View>
         </View>
       </Modal>
+
+      {/* Date Picker Modal */}
+      <EasyCalendarModal
+        visible={isCalendarOpen}
+        date={txDate}
+        onSelectDate={(newDate) => {
+          setTxDate(newDate);
+          setIsCalendarOpen(false);
+        }}
+        onClose={() => setIsCalendarOpen(false)}
+        title="Select Transaction Date"
+      />
     </ScrollView>
   );
 }
@@ -1296,6 +1356,22 @@ const getStyles = (theme) => {
   },
   disabledBtn: {
     opacity: 0.6,
+  },
+  dateSelector: {
+    flexDirection: "row",
+    alignItems: "center",
+    backgroundColor: colors.bg.card,
+    borderWidth: 1.5,
+    borderColor: colors.border.medium,
+    borderRadius: 8,
+    paddingHorizontal: 10,
+    height: 40,
+    marginBottom: 10,
+  },
+  dateSelectorText: {
+    fontSize: 14,
+    color: colors.text.primary,
+    fontWeight: "500",
   },
   dropdownSelector: {
     flexDirection: "row",

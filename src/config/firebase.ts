@@ -151,6 +151,7 @@ export async function deleteCurrentUserAccount() {
 // Helper: initialize Firestore with appropriate cache mechanism for platform
 function getOfflineFirestore(firebaseApp: FirebaseApp): Firestore {
   try {
+    // Web supports IndexedDB for persistentLocalCache; native React Native uses memoryLocalCache
     const localCache =
       Platform.OS === "web"
         ? persistentLocalCache({ tabManager: persistentMultipleTabManager() })

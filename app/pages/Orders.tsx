@@ -333,6 +333,9 @@ export default function Orders() {
   const [editRawMaterialId, setEditRawMaterialId] = useState("");
   const [editRawNotes, setEditRawNotes] = useState("");
   const [editRawPaymentStatus, setEditRawPaymentStatus] = useState("balance"); // "fully" | "balance"
+  const [editRawPaymentMethod, setEditRawPaymentMethod] = useState("Cash");
+  const [rawSupplierSearch, setRawSupplierSearch] = useState("");
+  const [rawMaterialSearch, setRawMaterialSearch] = useState("");
   const [showEditRawSupplierDropdown, setShowEditRawSupplierDropdown] =
     useState(false);
   const [showEditRawMaterialDropdown, setShowEditRawMaterialDropdown] =
@@ -370,6 +373,10 @@ export default function Orders() {
   const [editUnloadingByDeliveryPartner, setEditUnloadingByDeliveryPartner] = useState(false);
   const [editCustomPartnerUnloadingRate, setEditCustomPartnerUnloadingRate] = useState("0");
   const [editCustomPartnerUnloadingRateType, setEditCustomPartnerUnloadingRateType] = useState("per brick");
+  const [editLoadingCharge, setEditLoadingCharge] = useState("0");
+  const [editUnloadingCharge, setEditUnloadingCharge] = useState("0");
+  const [isLoadingCustomized, setIsLoadingCustomized] = useState(false);
+  const [isUnloadingCustomized, setIsUnloadingCustomized] = useState(false);
   const [isSaving, setIsSaving] = useState(false);
   const [deliveryInputs, setDeliveryInputs] = useState<Record<string, string>>({});
   const [isEditDeliveryModalOpen, setIsEditDeliveryModalOpen] = useState(false);
@@ -749,12 +756,14 @@ export default function Orders() {
         if (partner.hasLoading) {
           setEditCustomPartnerLoadingRate(String(partner.loadingRate || 0));
           setEditCustomPartnerLoadingRateType(partner.loadingRateType || "per brick");
+          setEditLoadingByDeliveryPartner(true);
         } else {
           setEditLoadingByDeliveryPartner(false);
         }
         if (partner.hasUnloading) {
           setEditCustomPartnerUnloadingRate(String(partner.unloadingRate || 0));
           setEditCustomPartnerUnloadingRateType(partner.unloadingRateType || "per brick");
+          setEditUnloadingByDeliveryPartner(true);
         } else {
           setEditUnloadingByDeliveryPartner(false);
         }
@@ -1098,6 +1107,9 @@ export default function Orders() {
     setEditRawPaymentStatus(
       Number(log.remainingBalance || 0) > 0 ? "balance" : "fully",
     );
+    setEditRawPaymentMethod(log.paymentMethod || log.paymentMode || "Cash");
+    setRawSupplierSearch("");
+    setRawMaterialSearch("");
     setShowEditRawSupplierDropdown(false);
     setShowEditRawMaterialDropdown(false);
 
@@ -1153,6 +1165,7 @@ export default function Orders() {
         totalCost: totalVal,
         amountPaid: paidVal,
         remainingBalance: remainingVal,
+        paymentMethod: editRawPaymentMethod || "Cash",
         supplierId: editRawSupplierId || null,
         supplierName: supplierObj ? supplierObj.name : null,
         materialId: editRawMaterialId || selectedOrder.materialId || null,
@@ -1279,6 +1292,14 @@ export default function Orders() {
     setEditUnloadingByDeliveryPartner(!!order.unloadingByDeliveryPartner);
     setEditCustomPartnerUnloadingRate(String(order.deliveryPartnerUnloadingRate !== undefined ? order.deliveryPartnerUnloadingRate : (partner?.unloadingRate || 0)));
     setEditCustomPartnerUnloadingRateType(order.deliveryPartnerUnloadingRateType || partner?.unloadingRateType || "per brick");
+
+    const initialLoading = Number(order.loadingCharge !== undefined ? order.loadingCharge : 0);
+    const initialUnloading = Number(order.unloadingCharge !== undefined ? order.unloadingCharge : 0);
+    setEditLoadingCharge(String(initialLoading));
+    setEditUnloadingCharge(String(initialUnloading));
+    setIsLoadingCustomized(initialLoading > 0 && !order.loadingWorkerId && !order.loadingByDeliveryPartner);
+    setIsUnloadingCustomized(initialUnloading > 0 && !order.unloadingWorkerId && !order.unloadingByDeliveryPartner);
+
     setEditModalVisible(true);
     // Reset add item fields
     setSelectedItemId("");
@@ -1376,25 +1397,28 @@ export default function Orders() {
       const collectorObj = collectors ? (collectors.find((c: any) => c.id === editCollectorId) || null) : null;
       const collectorName = collectorObj ? collectorObj.name : null;
 
+      const finalCustomerId = editCustomerId || selectedOrder?.customerId || null;
+      const finalCustomerName = editCustomerName.trim() || selectedOrder?.customerName || "General Customer";
+      const finalCustomerPhone = editCustomerPhone.trim() || selectedOrder?.customerPhone || "";
+
       // Fast path: try O(1) id lookup first, then fall back to name/phone match
-      const customerObj = (selectedOrder?.customerId && customerByIdMap.get(selectedOrder.customerId)) ||
+      const customerObj = (finalCustomerId && customerByIdMap.get(finalCustomerId)) ||
         (customers || []).find((c: any) =>
-          (c.name && selectedOrder?.customerName && c.name.trim().toLowerCase() === selectedOrder.customerName.trim().toLowerCase()) ||
-          (c.phone && selectedOrder?.customerPhone && c.phone.trim() === selectedOrder.customerPhone.trim())
+          (c.name && finalCustomerName && c.name.trim().toLowerCase() === finalCustomerName.trim().toLowerCase()) ||
+          (c.phone && finalCustomerPhone && c.phone.trim() === finalCustomerPhone.trim())
         );
 
       const customerCurrentPending = customerObj
         ? (customerObj.totalPending !== undefined ? Number(customerObj.totalPending) : Number(customerObj.balance || 0))
         : 0;
 
-      const originalOrderUnpaid = Number(selectedOrder?.balanceDue || 0);
-      const oldBalanceDue = selectedOrder?.previousBalance !== undefined
-        ? Number(selectedOrder.previousBalance)
-        : Math.max(0, customerCurrentPending - originalOrderUnpaid);
-
-      const finalCustomerId = editCustomerId || selectedOrder?.customerId || null;
-      const finalCustomerName = editCustomerName.trim() || selectedOrder?.customerName || "General Customer";
-      const finalCustomerPhone = editCustomerPhone.trim() || selectedOrder?.customerPhone || "";
+      const isSameCustomer = Boolean(finalCustomerId && selectedOrder?.customerId && finalCustomerId === selectedOrder.customerId);
+      const originalOrderUnpaid = isSameCustomer ? Number(selectedOrder?.balanceDue || 0) : 0;
+      const oldBalanceDue = isSameCustomer
+        ? (selectedOrder?.previousBalance !== undefined
+            ? Number(selectedOrder.previousBalance)
+            : Math.max(0, customerCurrentPending - originalOrderUnpaid))
+        : Math.max(0, customerCurrentPending);
 
       const totalWithOldDues = editTotalVal + oldBalanceDue;
       const excessAdv = Math.max(0, editPaidVal - totalWithOldDues);
@@ -1425,13 +1449,13 @@ export default function Orders() {
         deliveryPartnerLoadingRateType: (editLoadingByDeliveryPartner && partnerObj?.hasLoading) ? editCustomPartnerLoadingRateType : "per brick",
         loadingWorkerId: (editLoadingByDeliveryPartner && partnerObj?.hasLoading) ? null : (editLoadingWorkerId || null),
         loadingWorkerName: loadingWorkerName,
-        loadingCharge: editLoadingCharge,
+        loadingCharge: editLoadingVal,
         unloadingByDeliveryPartner: !!(editUnloadingByDeliveryPartner && partnerObj?.hasUnloading),
         deliveryPartnerUnloadingRate: (editUnloadingByDeliveryPartner && partnerObj?.hasUnloading) ? (parseFloat(editCustomPartnerUnloadingRate) || 0) : 0,
         deliveryPartnerUnloadingRateType: (editUnloadingByDeliveryPartner && partnerObj?.hasUnloading) ? editCustomPartnerUnloadingRateType : "per brick",
         unloadingWorkerId: (editUnloadingByDeliveryPartner && partnerObj?.hasUnloading) ? null : (editUnloadingWorkerId || null),
         unloadingWorkerName: unloadingWorkerName,
-        unloadingCharge: editUnloadingCharge,
+        unloadingCharge: editUnloadingVal,
         total: editTotalVal,
         paidAmount: editPaidVal,
         amountPaid: editPaidVal,
@@ -1803,7 +1827,7 @@ export default function Orders() {
   const loadingWorkerName = isEditDpLoading
     ? (partnerObj?.name ? `${partnerObj.name} (Delivery Partner)` : "Delivery Partner")
     : (loadingWorkerObj ? loadingWorkerObj.name : null);
-  const editLoadingCharge = isEditDpLoading
+  const autoCalcLoadingCharge = isEditDpLoading
     ? (editCustomPartnerLoadingRateType === "per brick"
         ? editTotalQty * (parseFloat(editCustomPartnerLoadingRate) || 0)
         : (parseFloat(editCustomPartnerLoadingRate) || 0))
@@ -1813,14 +1837,17 @@ export default function Orders() {
   const unloadingWorkerName = isEditDpUnloading
     ? (partnerObj?.name ? `${partnerObj.name} (Delivery Partner)` : "Delivery Partner")
     : (unloadingWorkerObj ? unloadingWorkerObj.name : null);
-  const editUnloadingCharge = isEditDpUnloading
+  const autoCalcUnloadingCharge = isEditDpUnloading
     ? (editCustomPartnerUnloadingRateType === "per brick"
         ? editTotalQty * (parseFloat(editCustomPartnerUnloadingRate) || 0)
         : (parseFloat(editCustomPartnerUnloadingRate) || 0))
     : (unloadingWorkerObj ? editTotalQty * Number(unloadingWorkerObj.unloadingCost || 0) : 0);
 
+  const editLoadingVal = isLoadingCustomized ? (parseFloat(editLoadingCharge) || 0) : autoCalcLoadingCharge;
+  const editUnloadingVal = isUnloadingCustomized ? (parseFloat(editUnloadingCharge) || 0) : autoCalcUnloadingCharge;
+
   const discountVal = parseFloat(editDiscount) || 0;
-  const subtotalBeforeDiscount = editGrossTotal + editShipmentVal + editExtraVal + editLoadingCharge + editUnloadingCharge;
+  const subtotalBeforeDiscount = editGrossTotal + editShipmentVal + editExtraVal + editLoadingVal + editUnloadingVal;
   const editDiscountAmount = editDiscountType === "percent"
     ? (subtotalBeforeDiscount * discountVal) / 100
     : editDiscountType === "per_brick"
@@ -3199,19 +3226,29 @@ export default function Orders() {
       >
         <View style={styles.modalOverlay}>
           <View style={styles.modalContent}>
-            {/* Upgraded Modal Header with Badges and Date Selector */}
+            {/* Upgraded Modal Header with Badges, Status and Date Selector */}
             <View style={styles.modalHeader}>
               <View style={{ flex: 1, paddingRight: 8 }}>
-                <View style={{ flexDirection: "row", alignItems: "center", gap: 8, flexWrap: "wrap", marginBottom: 4 }}>
+                <View style={{ flexDirection: "row", alignItems: "center", gap: 8, flexWrap: "wrap", marginBottom: 6 }}>
                   <Text style={styles.modalTitle}>Edit Transaction</Text>
                   <View
                     style={{
+                      flexDirection: "row",
+                      alignItems: "center",
+                      gap: 4,
                       paddingHorizontal: 8,
-                      paddingVertical: 2,
+                      paddingVertical: 3,
                       borderRadius: 12,
                       backgroundColor: selectedOrder?.isRawMaterialOrder ? "#FEF3C7" : "#DBEAFE",
+                      borderWidth: 1,
+                      borderColor: selectedOrder?.isRawMaterialOrder ? "#FDE68A" : "#BFDBFE",
                     }}
                   >
+                    <MaterialIcons
+                      name={selectedOrder?.isRawMaterialOrder ? "inventory-2" : "receipt-long"}
+                      size={13}
+                      color={selectedOrder?.isRawMaterialOrder ? "#D97706" : "#2563EB"}
+                    />
                     <Text
                       style={{
                         fontSize: 11,
@@ -3223,9 +3260,32 @@ export default function Orders() {
                     </Text>
                   </View>
                   {selectedOrder?.id && (
-                    <Text style={{ fontSize: 11, color: colors.text.muted, fontFamily: "monospace" }}>
-                      #{String(selectedOrder.id).slice(-6)}
+                    <Text style={{ fontSize: 11, color: colors.text.muted, fontFamily: "monospace", fontWeight: "600" }}>
+                      #{String(selectedOrder.id).slice(-6).toUpperCase()}
                     </Text>
+                  )}
+                  {!selectedOrder?.isRawMaterialOrder && (
+                    <View
+                      style={{
+                        paddingHorizontal: 8,
+                        paddingVertical: 2,
+                        borderRadius: 10,
+                        backgroundColor: `${getStatusColor(editStatus)}18`,
+                        borderWidth: 1,
+                        borderColor: getStatusColor(editStatus),
+                      }}
+                    >
+                      <Text
+                        style={{
+                          fontSize: 10,
+                          fontWeight: "800",
+                          color: getStatusColor(editStatus),
+                          textTransform: "uppercase",
+                        }}
+                      >
+                        {editStatus}
+                      </Text>
+                    </View>
                   )}
                 </View>
                 {/* Transaction Date Button */}
@@ -3238,10 +3298,9 @@ export default function Orders() {
                     alignSelf: "flex-start",
                     paddingVertical: 4,
                     paddingHorizontal: 10,
-                    borderRadius: 6,
+                    borderRadius: 8,
                     borderWidth: 1,
                     borderColor: colors.border.subtle,
-                    marginTop: 2,
                   }}
                   onPress={() => setIsEditOrderCalendarOpen(true)}
                 >
@@ -3270,109 +3329,165 @@ export default function Orders() {
             >
               {selectedOrder?.isRawMaterialOrder ? (
                 <View style={{ gap: 16 }}>
-                  {/* Supplier Selection */}
+                  {/* Supplier Selection with Search */}
                   <View>
-                    <Text style={styles.label}>Select Supplier</Text>
+                    <View style={{ flexDirection: "row", justifyContent: "space-between", alignItems: "center", marginBottom: 6 }}>
+                      <Text style={[styles.label, { marginTop: 0, marginBottom: 0 }]}>Select Supplier</Text>
+                      {editRawSupplierId ? (
+                        <Pressable onPress={() => setEditRawSupplierId("")}>
+                          <Text style={{ fontSize: 11, fontWeight: "600", color: colors.accent.danger }}>Clear Supplier</Text>
+                        </Pressable>
+                      ) : null}
+                    </View>
                     <Pressable
-                      style={styles.dropdownToggle}
-                      onPress={() =>
-                        setShowEditRawSupplierDropdown(
-                          !showEditRawSupplierDropdown,
-                        )
-                      }
+                      style={[styles.dropdownToggle, showEditRawSupplierDropdown && { borderColor: colors.accent.primary }]}
+                      onPress={() => setShowEditRawSupplierDropdown(!showEditRawSupplierDropdown)}
                     >
-                      <Text style={styles.dropdownToggleText}>
-                        {editRawSupplierId
-                          ? supplierByIdMap.get(editRawSupplierId)?.name || "Select Supplier"
-                          : "No Supplier / Spot Purchase"}
-                      </Text>
+                      <View style={{ flexDirection: "row", alignItems: "center", gap: 8, flex: 1 }}>
+                        <MaterialIcons name="storefront" size={18} color={editRawSupplierId ? colors.accent.primary : colors.text.muted} />
+                        <Text style={[styles.dropdownToggleText, !editRawSupplierId && { color: colors.text.muted }]}>
+                          {editRawSupplierId
+                            ? supplierByIdMap.get(editRawSupplierId)?.name || "Select Supplier"
+                            : "No Supplier / Spot Purchase"}
+                        </Text>
+                      </View>
                       <MaterialIcons
-                        name={
-                          showEditRawSupplierDropdown
-                            ? "arrow-drop-up"
-                            : "arrow-drop-down"
-                        }
+                        name={showEditRawSupplierDropdown ? "arrow-drop-up" : "arrow-drop-down"}
                         size={24}
                         color={colors.text.muted}
                       />
                     </Pressable>
 
                     {showEditRawSupplierDropdown && (
-                      <View style={styles.dropdownList}>
-                        <Pressable
-                          style={styles.dropdownItem}
-                          onPress={() => {
-                            setEditRawSupplierId("");
-                            setShowEditRawSupplierDropdown(false);
-                          }}
-                        >
-                          <Text style={styles.dropdownItemText}>
-                            No Supplier / Spot Purchase
-                          </Text>
-                        </Pressable>
-                        {suppliers
-                          .filter((s: any) => s.status !== "inactive")
-                          .map((supp: any) => (
-                            <Pressable
-                              key={supp.id}
-                              style={styles.dropdownItem}
-                              onPress={() => {
-                                setEditRawSupplierId(supp.id);
-                                setShowEditRawSupplierDropdown(false);
-                              }}
-                            >
-                              <Text style={styles.dropdownItemText}>
-                                {supp.name}
-                              </Text>
-                            </Pressable>
-                          ))}
+                      <View style={[styles.dropdownList, { padding: 8 }]}>
+                        <TextInput
+                          value={rawSupplierSearch}
+                          onChangeText={setRawSupplierSearch}
+                          placeholder="Search supplier by name or phone..."
+                          placeholderTextColor={colors.text.muted}
+                          style={[styles.input, { height: 36, fontSize: 13, marginBottom: 8 }]}
+                        />
+                        <ScrollView style={{ maxHeight: 160 }} nestedScrollEnabled>
+                          <Pressable
+                            style={[
+                              styles.dropdownItem,
+                              !editRawSupplierId && { backgroundColor: `${colors.accent.primary}12` },
+                            ]}
+                            onPress={() => {
+                              setEditRawSupplierId("");
+                              setShowEditRawSupplierDropdown(false);
+                            }}
+                          >
+                            <Text style={[styles.dropdownItemText, !editRawSupplierId && { fontWeight: "700", color: colors.accent.primary }]}>
+                              ⚡ No Supplier / Spot Purchase
+                            </Text>
+                          </Pressable>
+                          {suppliers
+                            .filter((s: any) => s.status !== "inactive")
+                            .filter((s: any) =>
+                              (s.name || "").toLowerCase().includes(rawSupplierSearch.toLowerCase()) ||
+                              (s.phone || "").includes(rawSupplierSearch)
+                            )
+                            .map((supp: any) => {
+                              const isSel = editRawSupplierId === supp.id;
+                              const bal = Number(supp.outstandingBalance || supp.balance || 0);
+                              return (
+                                <Pressable
+                                  key={supp.id}
+                                  style={[
+                                    styles.dropdownItem,
+                                    isSel && { backgroundColor: `${colors.accent.primary}12` },
+                                    { flexDirection: "row", justifyContent: "space-between", alignItems: "center" },
+                                  ]}
+                                  onPress={() => {
+                                    setEditRawSupplierId(supp.id);
+                                    setShowEditRawSupplierDropdown(false);
+                                  }}
+                                >
+                                  <View style={{ flex: 1 }}>
+                                    <Text style={[styles.dropdownItemText, isSel && { fontWeight: "700", color: colors.accent.primary }]}>
+                                      {supp.name}
+                                    </Text>
+                                    {!!supp.phone && (
+                                      <Text style={{ fontSize: 11, color: colors.text.muted }}>{supp.phone}</Text>
+                                    )}
+                                  </View>
+                                  {bal > 0 && (
+                                    <View style={{ backgroundColor: "#FEE2E2", paddingHorizontal: 6, paddingVertical: 2, borderRadius: 6 }}>
+                                      <Text style={{ fontSize: 10, fontWeight: "700", color: "#DC2626" }}>
+                                        ₹{bal.toLocaleString("en-IN")} Due
+                                      </Text>
+                                    </View>
+                                  )}
+                                </Pressable>
+                              );
+                            })}
+                        </ScrollView>
                       </View>
                     )}
                   </View>
 
-                  {/* Material Selection */}
+                  {/* Raw Material Selection with Search */}
                   <View>
                     <Text style={styles.label}>Raw Material Type</Text>
                     <Pressable
-                      style={styles.dropdownToggle}
-                      onPress={() =>
-                        setShowEditRawMaterialDropdown(!showEditRawMaterialDropdown)
-                      }
+                      style={[styles.dropdownToggle, showEditRawMaterialDropdown && { borderColor: colors.accent.primary }]}
+                      onPress={() => setShowEditRawMaterialDropdown(!showEditRawMaterialDropdown)}
                     >
-                      <Text style={styles.dropdownToggleText}>
-                        {editRawMaterialId
-                          ? itemByIdMap.get(editRawMaterialId)?.itemName || "Select Material"
-                          : (selectedOrder?.items?.[0]?.itemName || "Select Material")}
-                      </Text>
+                      <View style={{ flexDirection: "row", alignItems: "center", gap: 8, flex: 1 }}>
+                        <MaterialIcons name="category" size={18} color={colors.accent.primary} />
+                        <Text style={styles.dropdownToggleText}>
+                          {editRawMaterialId
+                            ? itemByIdMap.get(editRawMaterialId)?.itemName || "Select Material"
+                            : (selectedOrder?.items?.[0]?.itemName || "Select Material")}
+                        </Text>
+                      </View>
                       <MaterialIcons
-                        name={
-                          showEditRawMaterialDropdown
-                            ? "arrow-drop-up"
-                            : "arrow-drop-down"
-                        }
+                        name={showEditRawMaterialDropdown ? "arrow-drop-up" : "arrow-drop-down"}
                         size={24}
                         color={colors.text.muted}
                       />
                     </Pressable>
 
                     {showEditRawMaterialDropdown && (
-                      <View style={styles.dropdownList}>
-                        {(items || [])
-                          .filter((i: any) => i.itemType === "raw_material" || i.category === "Raw Material")
-                          .map((mat: any) => (
-                            <Pressable
-                              key={mat.id}
-                              style={styles.dropdownItem}
-                              onPress={() => {
-                                setEditRawMaterialId(mat.id);
-                                setShowEditRawMaterialDropdown(false);
-                              }}
-                            >
-                              <Text style={styles.dropdownItemText}>
-                                {mat.itemName} {mat.rateType ? `(${mat.rateType})` : ""}
-                              </Text>
-                            </Pressable>
-                          ))}
+                      <View style={[styles.dropdownList, { padding: 8 }]}>
+                        <TextInput
+                          value={rawMaterialSearch}
+                          onChangeText={setRawMaterialSearch}
+                          placeholder="Search material..."
+                          placeholderTextColor={colors.text.muted}
+                          style={[styles.input, { height: 36, fontSize: 13, marginBottom: 8 }]}
+                        />
+                        <ScrollView style={{ maxHeight: 160 }} nestedScrollEnabled>
+                          {(items || [])
+                            .filter((i: any) => i.itemType === "raw_material" || i.category === "Raw Material")
+                            .filter((i: any) => (i.itemName || "").toLowerCase().includes(rawMaterialSearch.toLowerCase()))
+                            .map((mat: any) => {
+                              const isSel = editRawMaterialId === mat.id;
+                              const stk = mat.openingStock !== undefined ? mat.openingStock : (mat.stock || 0);
+                              return (
+                                <Pressable
+                                  key={mat.id}
+                                  style={[
+                                    styles.dropdownItem,
+                                    isSel && { backgroundColor: `${colors.accent.primary}12` },
+                                    { flexDirection: "row", justifyContent: "space-between", alignItems: "center" },
+                                  ]}
+                                  onPress={() => {
+                                    setEditRawMaterialId(mat.id);
+                                    setShowEditRawMaterialDropdown(false);
+                                  }}
+                                >
+                                  <Text style={[styles.dropdownItemText, isSel && { fontWeight: "700", color: colors.accent.primary }]}>
+                                    {mat.itemName} {mat.rateType ? `(${mat.rateType})` : ""}
+                                  </Text>
+                                  <Text style={{ fontSize: 11, color: colors.text.muted, fontWeight: "600" }}>
+                                    Stock: {stk}
+                                  </Text>
+                                </Pressable>
+                              );
+                            })}
+                        </ScrollView>
                       </View>
                     )}
                   </View>
@@ -3385,6 +3500,8 @@ export default function Orders() {
                         value={editRawQty}
                         onChangeText={setEditRawQty}
                         keyboardType="numeric"
+                        placeholder="0"
+                        placeholderTextColor={colors.text.muted}
                         style={styles.input}
                       />
                     </View>
@@ -3394,27 +3511,25 @@ export default function Orders() {
                         value={editRawCost}
                         onChangeText={setEditRawCost}
                         keyboardType="numeric"
+                        placeholder="0.00"
+                        placeholderTextColor={colors.text.muted}
                         style={styles.input}
                       />
                     </View>
                   </View>
 
-                  {/* Total Cost Price Display */}
+                  {/* Total Cost Price Display Banner */}
                   {(() => {
-                    const total =
-                      (parseFloat(editRawQty) || 0) *
-                      (parseFloat(editRawCost) || 0);
+                    const total = (parseFloat(editRawQty) || 0) * (parseFloat(editRawCost) || 0);
                     if (total <= 0) return null;
                     return (
-                      <View style={styles.calcContainer}>
-                        <View style={styles.calcRow}>
-                          <Text style={styles.calcLabelBold}>
-                            Calculated Total Cost:
-                          </Text>
-                          <Text style={styles.calcValueBold}>
-                            ₹{total.toFixed(2)}
-                          </Text>
-                        </View>
+                      <View style={{ backgroundColor: `${colors.accent.primary}10`, borderWidth: 1, borderColor: `${colors.accent.primary}30`, borderRadius: 10, padding: 12, flexDirection: "row", justifyContent: "space-between", alignItems: "center" }}>
+                        <Text style={{ fontSize: 13, fontWeight: "700", color: colors.text.primary }}>
+                          Total Purchase Amount:
+                        </Text>
+                        <Text style={{ fontSize: 16, fontWeight: "800", color: colors.accent.primary }}>
+                          ₹{total.toLocaleString("en-IN", { minimumFractionDigits: 2, maximumFractionDigits: 2 })}
+                        </Text>
                       </View>
                     );
                   })()}
@@ -3427,7 +3542,7 @@ export default function Orders() {
                         style={[
                           styles.statusTogglePill,
                           editRawPaymentStatus === "fully" && {
-                            backgroundColor: "#ecfdf5",
+                            backgroundColor: "#ECFDF5",
                             borderColor: colors.accent.success,
                           },
                         ]}
@@ -3440,10 +3555,8 @@ export default function Orders() {
                           style={[
                             styles.statusTogglePillText,
                             {
-                              color:
-                                editRawPaymentStatus === "fully"
-                                    ? "#10b981"
-                                    : colors.text.muted,
+                              color: editRawPaymentStatus === "fully" ? "#10B981" : colors.text.muted,
+                              fontWeight: "700",
                             },
                           ]}
                         >
@@ -3454,7 +3567,7 @@ export default function Orders() {
                         style={[
                           styles.statusTogglePill,
                           editRawPaymentStatus === "balance" && {
-                            backgroundColor: "#fffbeb",
+                            backgroundColor: "#FFFBEB",
                             borderColor: colors.accent.warning,
                           },
                         ]}
@@ -3467,10 +3580,8 @@ export default function Orders() {
                           style={[
                             styles.statusTogglePillText,
                             {
-                              color:
-                                editRawPaymentStatus === "balance"
-                                    ? "#f59e0b"
-                                    : colors.text.muted,
+                              color: editRawPaymentStatus === "balance" ? "#F59E0B" : colors.text.muted,
+                              fontWeight: "700",
                             },
                           ]}
                         >
@@ -3480,19 +3591,96 @@ export default function Orders() {
                     </View>
                   </View>
 
+                  {/* Payment Method Selector */}
+                  <View>
+                    <Text style={styles.label}>Payment Method</Text>
+                    <View style={{ flexDirection: "row", flexWrap: "wrap", gap: 8 }}>
+                      {["Cash", "UPI", "Bank Transfer", "Cheque"].map((m) => {
+                        const isSel = editRawPaymentMethod === m;
+                        return (
+                          <Pressable
+                            key={m}
+                            style={[
+                              {
+                                paddingVertical: 6,
+                                paddingHorizontal: 12,
+                                borderRadius: 8,
+                                borderWidth: 1.5,
+                                borderColor: isSel ? colors.accent.primary : colors.border.subtle,
+                                backgroundColor: isSel ? `${colors.accent.primary}15` : colors.bg.primary,
+                              },
+                            ]}
+                            onPress={() => setEditRawPaymentMethod(m)}
+                          >
+                            <Text style={{ fontSize: 12, fontWeight: isSel ? "700" : "600", color: isSel ? colors.accent.primary : colors.text.secondary }}>
+                              {m}
+                            </Text>
+                          </Pressable>
+                        );
+                      })}
+                    </View>
+                  </View>
+
                   {/* Custom Paid Amount */}
                   {editRawPaymentStatus === "balance" && (
                     <View>
-                      <Text style={styles.label}>Amount Paid (₹)</Text>
+                      <View style={{ flexDirection: "row", justifyContent: "space-between", alignItems: "center", marginBottom: 6 }}>
+                        <Text style={[styles.label, { marginTop: 0, marginBottom: 0 }]}>Amount Paid (₹)</Text>
+                        {(() => {
+                          const total = (parseFloat(editRawQty) || 0) * (parseFloat(editRawCost) || 0);
+                          return (
+                            <View style={{ flexDirection: "row", gap: 6 }}>
+                              <Pressable onPress={() => setEditRawPaid("0")}>
+                                <Text style={{ fontSize: 11, fontWeight: "700", color: colors.accent.warning }}>₹0 Credit</Text>
+                              </Pressable>
+                              <Text style={{ fontSize: 11, color: colors.text.muted }}>|</Text>
+                              <Pressable onPress={() => setEditRawPaid(String(total))}>
+                                <Text style={{ fontSize: 11, fontWeight: "700", color: colors.accent.success }}>Full ₹{total.toFixed(0)}</Text>
+                              </Pressable>
+                            </View>
+                          );
+                        })()}
+                      </View>
                       <TextInput
                         value={editRawPaid}
                         onChangeText={setEditRawPaid}
                         keyboardType="numeric"
                         placeholder="e.g. 0 for full credit"
+                        placeholderTextColor={colors.text.muted}
                         style={styles.input}
                       />
                     </View>
                   )}
+
+                  {/* Raw Purchase Live Breakdown Card */}
+                  {(() => {
+                    const totalCost = (parseFloat(editRawQty) || 0) * (parseFloat(editRawCost) || 0);
+                    const paidAmt = editRawPaymentStatus === "fully" ? totalCost : (parseFloat(editRawPaid) || 0);
+                    const balanceDue = Math.max(0, totalCost - paidAmt);
+                    if (totalCost <= 0) return null;
+
+                    return (
+                      <View style={styles.calcContainer}>
+                        <View style={styles.calcRow}>
+                          <Text style={styles.calcLabel}>Total Purchase Price:</Text>
+                          <Text style={styles.calcValue}>₹{totalCost.toFixed(2)}</Text>
+                        </View>
+                        <View style={styles.calcRow}>
+                          <Text style={styles.calcLabel}>Paid ({editRawPaymentMethod}):</Text>
+                          <Text style={[styles.calcValue, { color: colors.accent.success, fontWeight: "700" }]}>
+                            ₹{paidAmt.toFixed(2)}
+                          </Text>
+                        </View>
+                        <View style={[styles.divider, { marginVertical: 4 }]} />
+                        <View style={styles.calcRow}>
+                          <Text style={styles.calcLabelBold}>Supplier Balance Due:</Text>
+                          <Text style={[styles.calcValueBold, balanceDue > 0 && { color: colors.accent.danger }]}>
+                            ₹{balanceDue.toFixed(2)}
+                          </Text>
+                        </View>
+                      </View>
+                    );
+                  })()}
 
                   {/* Notes */}
                   <View>
@@ -3500,7 +3688,8 @@ export default function Orders() {
                     <TextInput
                       value={editRawNotes}
                       onChangeText={setEditRawNotes}
-                      placeholder="Enter note..."
+                      placeholder="Enter purchase note or bill number..."
+                      placeholderTextColor={colors.text.muted}
                       multiline
                       numberOfLines={3}
                       style={[styles.input, { height: 60, paddingVertical: 8 }]}
@@ -3511,63 +3700,104 @@ export default function Orders() {
                 <>
                   {/* Customer Information & Switcher */}
                   <View style={{ marginBottom: 12 }}>
-                    <View style={{ flexDirection: "row", justifyContent: "space-between", alignItems: "center", marginBottom: 4 }}>
-                      <Text style={styles.label}>Customer Details</Text>
+                    <View style={{ flexDirection: "row", justifyContent: "space-between", alignItems: "center", marginBottom: 6 }}>
+                      <View style={{ flexDirection: "row", alignItems: "center", gap: 6 }}>
+                        <MaterialIcons name="person" size={18} color={colors.accent.primary} />
+                        <Text style={[styles.label, { marginTop: 0, marginBottom: 0, fontWeight: "700" }]}>Customer Details</Text>
+                      </View>
                       <Pressable
                         onPress={() => setShowEditCustomerDropdown(!showEditCustomerDropdown)}
-                        style={{ flexDirection: "row", alignItems: "center", gap: 2 }}
+                        style={{ flexDirection: "row", alignItems: "center", gap: 4, paddingHorizontal: 8, paddingVertical: 3, backgroundColor: `${colors.accent.primary}12`, borderRadius: 6 }}
                       >
                         <MaterialIcons name="person-search" size={14} color={colors.accent.primary} />
-                        <Text style={{ fontSize: 11, fontWeight: "600", color: colors.accent.primary }}>
-                          {showEditCustomerDropdown ? "Hide Switcher" : "Change Customer"}
+                        <Text style={{ fontSize: 11, fontWeight: "700", color: colors.accent.primary }}>
+                          {showEditCustomerDropdown ? "Hide Switcher" : "Re-assign Customer"}
                         </Text>
                       </Pressable>
                     </View>
 
                     {showEditCustomerDropdown && (
-                      <View style={{ marginBottom: 10, padding: 8, backgroundColor: colors.bg.primary, borderRadius: 8, borderWidth: 1, borderColor: colors.border.subtle }}>
-                        <TextInput
-                          value={customerSearchQuery}
-                          onChangeText={setCustomerSearchQuery}
-                          placeholder="Search customer by name or phone..."
-                          placeholderTextColor={colors.text.muted}
-                          style={[styles.input, { marginBottom: 6 }]}
-                        />
-                        <ScrollView style={{ maxHeight: 140 }} nestedScrollEnabled>
+                      <View style={{ marginBottom: 10, padding: 10, backgroundColor: colors.bg.primary, borderRadius: 10, borderWidth: 1, borderColor: colors.border.subtle }}>
+                        <Text style={{ fontSize: 11, fontWeight: "600", color: colors.text.muted, marginBottom: 6 }}>
+                          Search customer to link or transfer this order:
+                        </Text>
+                        <View style={{ flexDirection: "row", alignItems: "center", position: "relative" }}>
+                          <TextInput
+                            value={customerSearchQuery}
+                            onChangeText={setCustomerSearchQuery}
+                            placeholder="Type customer name or mobile..."
+                            placeholderTextColor={colors.text.muted}
+                            style={[styles.input, { flex: 1, marginBottom: 8, height: 38 }]}
+                          />
+                          {!!customerSearchQuery && (
+                            <Pressable
+                              style={{ position: "absolute", right: 8, top: 9 }}
+                              onPress={() => setCustomerSearchQuery("")}
+                            >
+                              <MaterialIcons name="close" size={18} color={colors.text.muted} />
+                            </Pressable>
+                          )}
+                        </View>
+                        <ScrollView style={{ maxHeight: 150 }} nestedScrollEnabled>
                           {(customers || [])
                             .filter((c: any) =>
                               (c.name || "").toLowerCase().includes(customerSearchQuery.toLowerCase()) ||
                               (c.phone || "").includes(customerSearchQuery)
                             )
                             .slice(0, 15)
-                            .map((cust: any) => (
-                              <Pressable
-                                key={cust.id}
-                                style={{
-                                  paddingVertical: 8,
-                                  paddingHorizontal: 10,
-                                  borderBottomWidth: 1,
-                                  borderBottomColor: colors.border.subtle,
-                                  backgroundColor: editCustomerId === cust.id ? `${colors.accent.primary}15` : "transparent",
-                                  borderRadius: 4,
-                                }}
-                                onPress={() => {
-                                  setEditCustomerId(cust.id);
-                                  setEditCustomerName(cust.name || "");
-                                  setEditCustomerPhone(cust.phone || cust.mobile || "");
-                                  setShowEditCustomerDropdown(false);
-                                }}
-                              >
-                                <Text style={{ fontSize: 13, fontWeight: "600", color: colors.text.primary }}>
-                                  {cust.name}
-                                </Text>
-                                {!!(cust.phone || cust.mobile) && (
-                                  <Text style={{ fontSize: 11, color: colors.text.muted }}>
-                                    {cust.phone || cust.mobile}
-                                  </Text>
-                                )}
-                              </Pressable>
-                            ))}
+                            .map((cust: any) => {
+                              const isSel = editCustomerId === cust.id;
+                              const bal = Number(cust.totalPending !== undefined ? cust.totalPending : (cust.balance || 0));
+                              return (
+                                <Pressable
+                                  key={cust.id}
+                                  style={{
+                                    paddingVertical: 8,
+                                    paddingHorizontal: 10,
+                                    borderBottomWidth: 1,
+                                    borderBottomColor: colors.border.subtle,
+                                    backgroundColor: isSel ? `${colors.accent.primary}18` : "transparent",
+                                    borderRadius: 6,
+                                    flexDirection: "row",
+                                    justifyContent: "space-between",
+                                    alignItems: "center",
+                                  }}
+                                  onPress={() => {
+                                    setEditCustomerId(cust.id);
+                                    setEditCustomerName(cust.name || "");
+                                    setEditCustomerPhone(cust.phone || cust.mobile || "");
+                                    setShowEditCustomerDropdown(false);
+                                  }}
+                                >
+                                  <View>
+                                    <Text style={{ fontSize: 13, fontWeight: "700", color: isSel ? colors.accent.primary : colors.text.primary }}>
+                                      {cust.name}
+                                    </Text>
+                                    {!!(cust.phone || cust.mobile) && (
+                                      <Text style={{ fontSize: 11, color: colors.text.muted }}>
+                                        {cust.phone || cust.mobile}
+                                      </Text>
+                                    )}
+                                  </View>
+                                  {bal !== 0 && (
+                                    <View style={{
+                                      backgroundColor: bal > 0 ? "#FEE2E2" : "#D1FAE5",
+                                      paddingHorizontal: 6,
+                                      paddingVertical: 2,
+                                      borderRadius: 6,
+                                    }}>
+                                      <Text style={{
+                                        fontSize: 10,
+                                        fontWeight: "700",
+                                        color: bal > 0 ? "#DC2626" : "#059669",
+                                      }}>
+                                        {bal > 0 ? `₹${bal.toLocaleString("en-IN")} Due` : `₹${Math.abs(bal).toLocaleString("en-IN")} Adv`}
+                                      </Text>
+                                    </View>
+                                  )}
+                                </Pressable>
+                              );
+                            })}
                         </ScrollView>
                       </View>
                     )}
@@ -3579,6 +3809,7 @@ export default function Orders() {
                           value={editCustomerName}
                           onChangeText={setEditCustomerName}
                           placeholder="Customer Name"
+                          placeholderTextColor={colors.text.muted}
                           style={styles.input}
                         />
                       </View>
@@ -3588,11 +3819,51 @@ export default function Orders() {
                           value={editCustomerPhone}
                           onChangeText={setEditCustomerPhone}
                           placeholder="Phone Number"
+                          placeholderTextColor={colors.text.muted}
                           keyboardType="phone-pad"
                           style={styles.input}
                         />
                       </View>
                     </View>
+
+                    {/* Customer Standing Chip */}
+                    {(() => {
+                      const targetCustId = editCustomerId || selectedOrder?.customerId;
+                      const custObj = targetCustId ? customerByIdMap.get(targetCustId) : null;
+                      if (!custObj) return null;
+                      const bal = Number(custObj.totalPending !== undefined ? custObj.totalPending : (custObj.balance || 0));
+                      return (
+                        <View style={{
+                          flexDirection: "row",
+                          alignItems: "center",
+                          gap: 6,
+                          backgroundColor: bal > 0 ? "#FEF2F2" : bal < 0 ? "#ECFDF5" : colors.bg.primary,
+                          paddingVertical: 5,
+                          paddingHorizontal: 10,
+                          borderRadius: 8,
+                          borderWidth: 1,
+                          borderColor: bal > 0 ? "#FECACA" : bal < 0 ? "#A7F3D0" : colors.border.subtle,
+                          marginTop: 2,
+                        }}>
+                          <MaterialIcons
+                            name={bal > 0 ? "warning-amber" : bal < 0 ? "account-balance-wallet" : "check-circle"}
+                            size={14}
+                            color={bal > 0 ? "#DC2626" : bal < 0 ? "#059669" : colors.text.muted}
+                          />
+                          <Text style={{
+                            fontSize: 11,
+                            fontWeight: "600",
+                            color: bal > 0 ? "#DC2626" : bal < 0 ? "#059669" : colors.text.muted,
+                          }}>
+                            {bal > 0
+                              ? `Current Profile Pending Due: ₹${bal.toLocaleString("en-IN")}`
+                              : bal < 0
+                              ? `Available Advance Balance: ₹${Math.abs(bal).toLocaleString("en-IN")}`
+                              : "No prior dues on customer profile"}
+                          </Text>
+                        </View>
+                      );
+                    })()}
                   </View>
 
                   {/* Product Section */}
@@ -3606,7 +3877,14 @@ export default function Orders() {
                     <Text style={styles.sectionTitle}>1. Product details</Text>
                   </View>
 
-                  <Text style={styles.label}>Search & Select Product</Text>
+                  <View style={{ flexDirection: "row", justifyContent: "space-between", alignItems: "center" }}>
+                    <Text style={styles.label}>Search & Select Product</Text>
+                    {itemSearch ? (
+                      <Pressable onPress={() => setItemSearch("")}>
+                        <Text style={{ fontSize: 11, color: colors.text.muted }}>Clear Search</Text>
+                      </Pressable>
+                    ) : null}
+                  </View>
                   <TextInput
                     value={itemSearch}
                     onChangeText={setItemSearch}
@@ -3634,6 +3912,8 @@ export default function Orders() {
                               ? item.openingStock
                               : item.stock || 0;
 
+                          const stockColor = stock <= 0 ? "#EF4444" : stock <= 20 ? "#F59E0B" : "#10B981";
+
                           return (
                             <Pressable
                               key={item.id}
@@ -3652,9 +3932,12 @@ export default function Orders() {
                               >
                                 {item.itemName} {item.status === "Inactive" ? "(Inactive)" : ""}
                               </Text>
-                              <Text style={styles.itemCardStock}>
-                                Stock: {stock} units
-                              </Text>
+                              <View style={{ flexDirection: "row", alignItems: "center", gap: 3, marginTop: 3 }}>
+                                <View style={{ width: 6, height: 6, borderRadius: 3, backgroundColor: stockColor }} />
+                                <Text style={[styles.itemCardStock, { color: stockColor, marginTop: 0 }]}>
+                                  {stock} in stock
+                                </Text>
+                              </View>
                               <Text style={styles.itemCardPrice}>
                                 ₹{item.sellingRate || item.sellingPrice || 0}
                               </Text>
@@ -3666,7 +3949,24 @@ export default function Orders() {
 
                   <View style={[styles.flexRow, { marginTop: 12 }]}>
                     <View style={{ flex: 1 }}>
-                      <Text style={styles.label}>Quantity</Text>
+                      <View style={{ flexDirection: "row", justifyContent: "space-between", alignItems: "center" }}>
+                        <Text style={styles.label}>Quantity</Text>
+                        <View style={{ flexDirection: "row", gap: 4 }}>
+                          {["+1", "+5", "+10"].map((step) => (
+                            <Pressable
+                              key={step}
+                              style={{ paddingHorizontal: 5, paddingVertical: 1, backgroundColor: `${colors.accent.primary}12`, borderRadius: 4 }}
+                              onPress={() => {
+                                const cur = Number(selectedItemQty) || 0;
+                                const inc = parseInt(step.replace("+", ""));
+                                setSelectedItemQty(String(cur + inc));
+                              }}
+                            >
+                              <Text style={{ fontSize: 10, fontWeight: "700", color: colors.accent.primary }}>{step}</Text>
+                            </Pressable>
+                          ))}
+                        </View>
+                      </View>
                       <TextInput
                         value={selectedItemQty}
                         onChangeText={setSelectedItemQty}
@@ -3675,7 +3975,7 @@ export default function Orders() {
                       />
                     </View>
                     <View style={{ flex: 1 }}>
-                      <Text style={styles.label}>Rate (₹)</Text>
+                      <Text style={styles.label}>Rate per Unit (₹)</Text>
                       <TextInput
                         value={selectedItemRate}
                         onChangeText={setSelectedItemRate}
@@ -3686,7 +3986,7 @@ export default function Orders() {
                   </View>
 
                   {/* Add / Update Product to Bill Button */}
-                  <View style={{ flexDirection: "row", gap: 10, marginTop: 12 }}>
+                  <View style={{ flexDirection: "row", gap: 10, marginTop: 8 }}>
                     <Pressable
                       style={[styles.addButton, { flex: 1 }]}
                       onPress={handleAddItemToEdit}
@@ -3719,9 +4019,14 @@ export default function Orders() {
                   {/* Added Items List with Inline Stepper & Direct Rate Edit */}
                   {editItems.length > 0 && (
                     <View style={styles.addedItemsContainer}>
-                      <Text style={styles.addedItemsTitle}>
-                        Added Items ({editItems.length})
-                      </Text>
+                      <View style={{ flexDirection: "row", justifyContent: "space-between", alignItems: "center", marginBottom: 10 }}>
+                        <Text style={[styles.addedItemsTitle, { marginBottom: 0 }]}>
+                          Added Items ({editItems.length})
+                        </Text>
+                        <Text style={{ fontSize: 12, fontWeight: "700", color: colors.accent.primary }}>
+                          Gross Total: ₹{editGrossTotal.toLocaleString("en-IN")}
+                        </Text>
+                      </View>
                       {editItems.map((item, idx) => {
                         const isEditingThis = editingEditItemIndex === idx;
 
@@ -3860,7 +4165,7 @@ export default function Orders() {
                       size={20}
                       color={colors.accent.primary}
                     />
-                    <Text style={styles.sectionTitle}>2. Shipments</Text>
+                    <Text style={styles.sectionTitle}>2. Shipments & Logistics</Text>
                   </View>
 
                   <Text style={styles.label}>Assign Delivery Partner</Text>
@@ -3895,7 +4200,7 @@ export default function Orders() {
                             style={[
                               styles.partnerCard,
                               active && styles.partnerCardActive,
-                              p.isFavorite && !active && { backgroundColor: "#fef3c7", borderColor: "#fde047" },
+                              p.isFavorite && !active && { backgroundColor: "#FEF3C7", borderColor: "#FDE047" },
                             ]}
                             onPress={() => setEditDeliveryPartnerId(p.id)}
                           >
@@ -3903,7 +4208,7 @@ export default function Orders() {
                               style={[
                                 styles.partnerName,
                                 active && styles.partnerNameActive,
-                                p.isFavorite && !active && { color: "#d97706" },
+                                p.isFavorite && !active && { color: "#D97706" },
                               ]}
                             >
                               {p.isFavorite ? "⭐ " : ""}{p.name} ({p.vehicleType || "Driver"})
@@ -4019,257 +4324,382 @@ export default function Orders() {
                     </View>
                   </ScrollView>
 
-                  {/* Delivery Partner Loading Toggle */}
-                  {editDeliveryPartnerId && partnerObj?.hasLoading ? (
-                    <View style={styles.dpOptionCard}>
-                      <Pressable
-                        style={[styles.dpToggleRow, editLoadingByDeliveryPartner && styles.dpToggleRowActive]}
-                        onPress={() => {
-                          const nextVal = !editLoadingByDeliveryPartner;
-                          setEditLoadingByDeliveryPartner(nextVal);
-                          if (nextVal) {
-                            setEditLoadingWorkerId("");
-                            const p = partners.find((x: any) => x.id === editDeliveryPartnerId);
-                            if (p?.hasLoading) {
-                              setEditCustomPartnerLoadingRate(String(p.loadingRate || 0));
-                              setEditCustomPartnerLoadingRateType(p.loadingRateType || "per brick");
-                            }
-                          }
+                  {/* Loading & Unloading Expenses Section */}
+                  <View style={styles.divider} />
+                  <View style={styles.sectionHeader}>
+                    <MaterialIcons
+                      name="local-shipping"
+                      size={20}
+                      color={colors.accent.primary}
+                    />
+                    <Text style={styles.sectionTitle}>
+                      3. Loading & Unloading Expenses (ஏற்று / இறக்கு கூலி)
+                    </Text>
+                  </View>
+
+                  {/* Loading Expense Card */}
+                  <View style={[styles.dpOptionCard, { padding: 12, marginBottom: 14 }]}>
+                    <View style={{ flexDirection: "row", justifyContent: "space-between", alignItems: "center", marginBottom: 8 }}>
+                      <View style={{ flexDirection: "row", alignItems: "center", gap: 6 }}>
+                        <MaterialIcons name="archive" size={18} color={colors.accent.primary} />
+                        <Text style={{ fontSize: 13, fontWeight: "700", color: colors.text.primary }}>
+                          Loading Expense (ஏற்று கூலி)
+                        </Text>
+                      </View>
+                      {isLoadingCustomized && (
+                        <Pressable
+                          onPress={() => {
+                            setIsLoadingCustomized(false);
+                            setEditLoadingCharge(String(autoCalcLoadingCharge));
+                          }}
+                          style={{ flexDirection: "row", alignItems: "center", gap: 2, paddingHorizontal: 6, paddingVertical: 2, backgroundColor: colors.accent.primary + "15", borderRadius: 6 }}
+                        >
+                          <MaterialIcons name="refresh" size={13} color={colors.accent.primary} />
+                          <Text style={{ fontSize: 11, color: colors.accent.primary, fontWeight: "700" }}>
+                            Auto-Calculate (₹{autoCalcLoadingCharge})
+                          </Text>
+                        </Pressable>
+                      )}
+                    </View>
+
+                    {/* Numeric Input for Loading Expense */}
+                    <View style={{ flexDirection: "row", alignItems: "center", gap: 10, marginBottom: 10 }}>
+                      <Text style={{ fontSize: 12, fontWeight: "600", color: colors.text.secondary }}>
+                        Loading Amount (₹):
+                      </Text>
+                      <TextInput
+                        value={isLoadingCustomized ? editLoadingCharge : String(autoCalcLoadingCharge)}
+                        onChangeText={(val) => {
+                          setIsLoadingCustomized(true);
+                          setEditLoadingCharge(val);
                         }}
-                      >
-                        <View style={{ flexDirection: "row", alignItems: "center", gap: 8, flex: 1 }}>
-                          <MaterialIcons
-                            name={editLoadingByDeliveryPartner ? "check-box" : "check-box-outline-blank"}
-                            size={22}
-                            color={editLoadingByDeliveryPartner ? colors.accent.primary : colors.text.muted}
-                          />
-                          <View style={{ flex: 1 }}>
-                            <Text style={styles.dpToggleTitle}>Delivery Partner Handles Loading</Text>
-                            <Text style={styles.dpToggleSub}>
-                              {partnerObj?.name} {partnerObj?.hasLoading ? `(Default: ₹${partnerObj.loadingRate}/${partnerObj.loadingRateType === "per brick" ? "brick" : "fixed"})` : "(Customizable rate)"}
+                        keyboardType="numeric"
+                        placeholder="0"
+                        placeholderTextColor={colors.text.muted}
+                        style={[styles.input, { flex: 1, marginBottom: 0, paddingVertical: 6, paddingHorizontal: 10, fontSize: 14, fontWeight: "700" }]}
+                      />
+                    </View>
+
+                    {/* Summary formula banner */}
+                    <View style={{ backgroundColor: colors.bg.primary, paddingVertical: 4, paddingHorizontal: 8, borderRadius: 6, marginBottom: 10 }}>
+                      <Text style={{ fontSize: 11, color: colors.text.muted }}>
+                        {isLoadingCustomized
+                          ? `Manual custom loading expense: ₹${editLoadingVal}`
+                          : loadingWorkerObj
+                          ? `Auto-calculated: ${loadingWorkerObj.name} @ ₹${loadingWorkerObj.loadingCost || 0}/unit × ${editTotalQty} units = ₹${autoCalcLoadingCharge}`
+                          : (isEditDpLoading && partnerObj)
+                          ? `Auto-calculated: Partner ${partnerObj.name} @ ₹${editCustomPartnerLoadingRate}/${editCustomPartnerLoadingRateType === "per brick" ? "unit" : "fixed"} = ₹${autoCalcLoadingCharge}`
+                          : "No worker assigned (₹0 auto-calculated)"}
+                      </Text>
+                    </View>
+
+                    {/* Delivery Partner Loading Toggle (if delivery partner selected) */}
+                    {editDeliveryPartnerId && partnerObj?.hasLoading ? (
+                      <View style={{ marginBottom: 10 }}>
+                        <Pressable
+                          style={[styles.dpToggleRow, editLoadingByDeliveryPartner && styles.dpToggleRowActive]}
+                          onPress={() => {
+                            const nextVal = !editLoadingByDeliveryPartner;
+                            setEditLoadingByDeliveryPartner(nextVal);
+                            if (nextVal) {
+                              setEditLoadingWorkerId("");
+                              if (partnerObj?.hasLoading) {
+                                setEditCustomPartnerLoadingRate(String(partnerObj.loadingRate || 0));
+                                setEditCustomPartnerLoadingRateType(partnerObj.loadingRateType || "per brick");
+                              }
+                            }
+                          }}
+                        >
+                          <View style={{ flexDirection: "row", alignItems: "center", gap: 8, flex: 1 }}>
+                            <MaterialIcons
+                              name={editLoadingByDeliveryPartner ? "check-box" : "check-box-outline-blank"}
+                              size={20}
+                              color={editLoadingByDeliveryPartner ? colors.accent.primary : colors.text.muted}
+                            />
+                            <View style={{ flex: 1 }}>
+                              <Text style={styles.dpToggleTitle}>Delivery Partner Handles Loading</Text>
+                              <Text style={styles.dpToggleSub}>
+                                {partnerObj?.name} {partnerObj?.hasLoading ? `(Default: ₹${partnerObj.loadingRate}/${partnerObj.loadingRateType === "per brick" ? "brick" : "fixed"})` : ""}
+                              </Text>
+                            </View>
+                          </View>
+                          <View style={[styles.dpStatusBadge, editLoadingByDeliveryPartner && styles.dpStatusBadgeActive]}>
+                            <Text style={[styles.dpStatusBadgeText, editLoadingByDeliveryPartner && styles.dpStatusBadgeTextActive]}>
+                              {editLoadingByDeliveryPartner ? "Partner Selected" : "Use Worker"}
                             </Text>
                           </View>
-                        </View>
-                        <View style={[styles.dpStatusBadge, editLoadingByDeliveryPartner && styles.dpStatusBadgeActive]}>
-                          <Text style={[styles.dpStatusBadgeText, editLoadingByDeliveryPartner && styles.dpStatusBadgeTextActive]}>
-                            {editLoadingByDeliveryPartner ? "Partner Selected" : "Use Worker"}
-                          </Text>
-                        </View>
-                      </Pressable>
+                        </Pressable>
 
-                      {editLoadingByDeliveryPartner && (
-                        <View style={styles.dpRateAdjustRow}>
-                          <View style={{ flexDirection: "row", gap: 8, marginBottom: 8 }}>
-                            {["per brick", "fixed amount"].map((type) => {
-                              const isSel = editCustomPartnerLoadingRateType === type;
+                        {editLoadingByDeliveryPartner && (
+                          <View style={styles.dpRateAdjustRow}>
+                            <View style={{ flexDirection: "row", gap: 8, marginBottom: 8 }}>
+                              {["per brick", "fixed amount"].map((type) => {
+                                const isSel = editCustomPartnerLoadingRateType === type;
+                                return (
+                                  <Pressable
+                                    key={type}
+                                    style={[styles.miniPill, isSel && styles.miniPillActive]}
+                                    onPress={() => setEditCustomPartnerLoadingRateType(type)}
+                                  >
+                                    <Text style={[styles.miniPillText, isSel && styles.miniPillTextActive]}>
+                                      {type === "per brick" ? "Per Brick" : "Fixed Amount"}
+                                    </Text>
+                                  </Pressable>
+                                );
+                              })}
+                            </View>
+                            <View style={{ flexDirection: "row", alignItems: "center", gap: 10 }}>
+                              <Text style={styles.dpRateLabel}>
+                                {editCustomPartnerLoadingRateType === "per brick" ? "Rate (₹/brick):" : "Fixed Amount (₹):"}
+                              </Text>
+                              <TextInput
+                                style={styles.dpRateInput}
+                                value={editCustomPartnerLoadingRate}
+                                onChangeText={setEditCustomPartnerLoadingRate}
+                                keyboardType="numeric"
+                                placeholder="0.00"
+                                placeholderTextColor={colors.text.muted}
+                              />
+                            </View>
+                          </View>
+                        )}
+                      </View>
+                    ) : null}
+
+                    {/* Loading Worker Selector */}
+                    {!(editLoadingByDeliveryPartner && partnerObj?.hasLoading) && (
+                      <View>
+                        <Text style={[styles.label, { marginBottom: 6 }]}>Assign Loading Worker</Text>
+                        <ScrollView horizontal showsHorizontalScrollIndicator={false} style={styles.partnersScroll}>
+                          <View style={styles.partnersRow}>
+                            <Pressable
+                              style={[
+                                styles.partnerCard,
+                                !editLoadingWorkerId && styles.partnerCardActive,
+                              ]}
+                              onPress={() => setEditLoadingWorkerId("")}
+                            >
+                              <Text
+                                style={[
+                                  styles.partnerName,
+                                  !editLoadingWorkerId && styles.partnerNameActive,
+                                ]}
+                              >
+                                No Loading Worker
+                              </Text>
+                            </Pressable>
+                            {(workers || []).map((w: any) => {
+                              const active = editLoadingWorkerId === w.id;
                               return (
                                 <Pressable
-                                  key={type}
-                                  style={[styles.miniPill, isSel && styles.miniPillActive]}
-                                  onPress={() => setEditCustomPartnerLoadingRateType(type)}
+                                  key={w.id}
+                                  style={[
+                                    styles.partnerCard,
+                                    active && styles.partnerCardActive,
+                                  ]}
+                                  onPress={() => {
+                                    setEditLoadingWorkerId(w.id);
+                                    setEditLoadingByDeliveryPartner(false);
+                                  }}
                                 >
-                                  <Text style={[styles.miniPillText, isSel && styles.miniPillTextActive]}>
-                                    {type === "per brick" ? "Per Brick" : "Fixed Amount"}
+                                  <Text
+                                    style={[
+                                      styles.partnerName,
+                                      active && styles.partnerNameActive,
+                                    ]}
+                                  >
+                                    {w.name} (₹{w.loadingCost || 0}/unit)
                                   </Text>
                                 </Pressable>
                               );
                             })}
                           </View>
-                          <View style={{ flexDirection: "row", alignItems: "center", gap: 10 }}>
-                            <Text style={styles.dpRateLabel}>
-                              {editCustomPartnerLoadingRateType === "per brick" ? "Rate (₹/brick):" : "Fixed Amount (₹):"}
-                            </Text>
-                            <TextInput
-                              style={styles.dpRateInput}
-                              value={editCustomPartnerLoadingRate}
-                              onChangeText={setEditCustomPartnerLoadingRate}
-                              keyboardType="numeric"
-                              placeholder="0.00"
-                              placeholderTextColor={colors.text.muted}
-                            />
-                          </View>
-                        </View>
+                        </ScrollView>
+                      </View>
+                    )}
+                  </View>
+
+                  {/* Unloading Expense Card */}
+                  <View style={[styles.dpOptionCard, { padding: 12, marginBottom: 14 }]}>
+                    <View style={{ flexDirection: "row", justifyContent: "space-between", alignItems: "center", marginBottom: 8 }}>
+                      <View style={{ flexDirection: "row", alignItems: "center", gap: 6 }}>
+                        <MaterialIcons name="unarchive" size={18} color={colors.accent.primary} />
+                        <Text style={{ fontSize: 13, fontWeight: "700", color: colors.text.primary }}>
+                          Unloading Expense (இறக்கு கூலி)
+                        </Text>
+                      </View>
+                      {isUnloadingCustomized && (
+                        <Pressable
+                          onPress={() => {
+                            setIsUnloadingCustomized(false);
+                            setEditUnloadingCharge(String(autoCalcUnloadingCharge));
+                          }}
+                          style={{ flexDirection: "row", alignItems: "center", gap: 2, paddingHorizontal: 6, paddingVertical: 2, backgroundColor: colors.accent.primary + "15", borderRadius: 6 }}
+                        >
+                          <MaterialIcons name="refresh" size={13} color={colors.accent.primary} />
+                          <Text style={{ fontSize: 11, color: colors.accent.primary, fontWeight: "700" }}>
+                            Auto-Calculate (₹{autoCalcUnloadingCharge})
+                          </Text>
+                        </Pressable>
                       )}
                     </View>
-                  ) : null}
 
-                  {/* Loading Worker */}
-                  {!(editLoadingByDeliveryPartner && partnerObj?.hasLoading) && (
-                    <>
-                      <Text style={styles.label}>Assign Loading Worker</Text>
-                      <ScrollView horizontal showsHorizontalScrollIndicator={false} style={styles.partnersScroll}>
-                        <View style={styles.partnersRow}>
-                          <Pressable
-                            style={[
-                              styles.partnerCard,
-                              !editLoadingWorkerId && styles.partnerCardActive,
-                            ]}
-                            onPress={() => setEditLoadingWorkerId("")}
-                          >
-                            <Text
-                              style={[
-                                styles.partnerName,
-                                !editLoadingWorkerId && styles.partnerNameActive,
-                              ]}
-                            >
-                              No Loading Worker
-                            </Text>
-                          </Pressable>
-                          {(workers || []).map((w: any) => {
-                            const active = editLoadingWorkerId === w.id;
-                            return (
-                              <Pressable
-                                key={w.id}
-                                style={[
-                                  styles.partnerCard,
-                                  active && styles.partnerCardActive,
-                                ]}
-                                onPress={() => {
-                                  setEditLoadingWorkerId(w.id);
-                                  setEditLoadingByDeliveryPartner(false);
-                                }}
-                              >
-                                <Text
-                                  style={[
-                                    styles.partnerName,
-                                    active && styles.partnerNameActive,
-                                  ]}
-                                >
-                                  {w.name} (₹{w.loadingCost || 0}/unit)
-                                </Text>
-                              </Pressable>
-                            );
-                          })}
-                        </View>
-                      </ScrollView>
-                    </>
-                  )}
-
-                  {/* Delivery Partner Unloading Toggle */}
-                  {editDeliveryPartnerId && partnerObj?.hasUnloading ? (
-                    <View style={[styles.dpOptionCard, { marginTop: 14 }]}>
-                      <Pressable
-                        style={[styles.dpToggleRow, editUnloadingByDeliveryPartner && styles.dpToggleRowActive]}
-                        onPress={() => {
-                          const nextVal = !editUnloadingByDeliveryPartner;
-                          setEditUnloadingByDeliveryPartner(nextVal);
-                          if (nextVal) {
-                            setEditUnloadingWorkerId("");
-                            const p = partners.find((x: any) => x.id === editDeliveryPartnerId);
-                            if (p?.hasUnloading) {
-                              setEditCustomPartnerUnloadingRate(String(p.unloadingRate || 0));
-                              setEditCustomPartnerUnloadingRateType(p.unloadingRateType || "per brick");
-                            }
-                          }
+                    {/* Numeric Input for Unloading Expense */}
+                    <View style={{ flexDirection: "row", alignItems: "center", gap: 10, marginBottom: 10 }}>
+                      <Text style={{ fontSize: 12, fontWeight: "600", color: colors.text.secondary }}>
+                        Unloading Amount (₹):
+                      </Text>
+                      <TextInput
+                        value={isUnloadingCustomized ? editUnloadingCharge : String(autoCalcUnloadingCharge)}
+                        onChangeText={(val) => {
+                          setIsUnloadingCustomized(true);
+                          setEditUnloadingCharge(val);
                         }}
-                      >
-                        <View style={{ flexDirection: "row", alignItems: "center", gap: 8, flex: 1 }}>
-                          <MaterialIcons
-                            name={editUnloadingByDeliveryPartner ? "check-box" : "check-box-outline-blank"}
-                            size={22}
-                            color={editUnloadingByDeliveryPartner ? colors.accent.primary : colors.text.muted}
-                          />
-                          <View style={{ flex: 1 }}>
-                            <Text style={styles.dpToggleTitle}>Delivery Partner Handles Unloading</Text>
-                            <Text style={styles.dpToggleSub}>
-                              {partnerObj?.name} {partnerObj?.hasUnloading ? `(Default: ₹${partnerObj.unloadingRate}/${partnerObj.unloadingRateType === "per brick" ? "brick" : "fixed"})` : "(Customizable rate)"}
+                        keyboardType="numeric"
+                        placeholder="0"
+                        placeholderTextColor={colors.text.muted}
+                        style={[styles.input, { flex: 1, marginBottom: 0, paddingVertical: 6, paddingHorizontal: 10, fontSize: 14, fontWeight: "700" }]}
+                      />
+                    </View>
+
+                    {/* Summary formula banner */}
+                    <View style={{ backgroundColor: colors.bg.primary, paddingVertical: 4, paddingHorizontal: 8, borderRadius: 6, marginBottom: 10 }}>
+                      <Text style={{ fontSize: 11, color: colors.text.muted }}>
+                        {isUnloadingCustomized
+                          ? `Manual custom unloading expense: ₹${editUnloadingVal}`
+                          : unloadingWorkerObj
+                          ? `Auto-calculated: ${unloadingWorkerObj.name} @ ₹${unloadingWorkerObj.unloadingCost || 0}/unit × ${editTotalQty} units = ₹${autoCalcUnloadingCharge}`
+                          : (isEditDpUnloading && partnerObj)
+                          ? `Auto-calculated: Partner ${partnerObj.name} @ ₹${editCustomPartnerUnloadingRate}/${editCustomPartnerUnloadingRateType === "per brick" ? "unit" : "fixed"} = ₹${autoCalcUnloadingCharge}`
+                          : "No worker assigned (₹0 auto-calculated)"}
+                      </Text>
+                    </View>
+
+                    {/* Delivery Partner Unloading Toggle (if delivery partner selected) */}
+                    {editDeliveryPartnerId && partnerObj?.hasUnloading ? (
+                      <View style={{ marginBottom: 10 }}>
+                        <Pressable
+                          style={[styles.dpToggleRow, editUnloadingByDeliveryPartner && styles.dpToggleRowActive]}
+                          onPress={() => {
+                            const nextVal = !editUnloadingByDeliveryPartner;
+                            setEditUnloadingByDeliveryPartner(nextVal);
+                            if (nextVal) {
+                              setEditUnloadingWorkerId("");
+                              if (partnerObj?.hasUnloading) {
+                                setEditCustomPartnerUnloadingRate(String(partnerObj.unloadingRate || 0));
+                                setEditCustomPartnerUnloadingRateType(partnerObj.unloadingRateType || "per brick");
+                              }
+                            }
+                          }}
+                        >
+                          <View style={{ flexDirection: "row", alignItems: "center", gap: 8, flex: 1 }}>
+                            <MaterialIcons
+                              name={editUnloadingByDeliveryPartner ? "check-box" : "check-box-outline-blank"}
+                              size={20}
+                              color={editUnloadingByDeliveryPartner ? colors.accent.primary : colors.text.muted}
+                            />
+                            <View style={{ flex: 1 }}>
+                              <Text style={styles.dpToggleTitle}>Delivery Partner Handles Unloading</Text>
+                              <Text style={styles.dpToggleSub}>
+                                {partnerObj?.name} {partnerObj?.hasUnloading ? `(Default: ₹${partnerObj.unloadingRate}/${partnerObj.unloadingRateType === "per brick" ? "brick" : "fixed"})` : ""}
+                              </Text>
+                            </View>
+                          </View>
+                          <View style={[styles.dpStatusBadge, editUnloadingByDeliveryPartner && styles.dpStatusBadgeActive]}>
+                            <Text style={[styles.dpStatusBadgeText, editUnloadingByDeliveryPartner && styles.dpStatusBadgeTextActive]}>
+                              {editUnloadingByDeliveryPartner ? "Partner Selected" : "Use Worker"}
                             </Text>
                           </View>
-                        </View>
-                        <View style={[styles.dpStatusBadge, editUnloadingByDeliveryPartner && styles.dpStatusBadgeActive]}>
-                          <Text style={[styles.dpStatusBadgeText, editUnloadingByDeliveryPartner && styles.dpStatusBadgeTextActive]}>
-                            {editUnloadingByDeliveryPartner ? "Partner Selected" : "Use Worker"}
-                          </Text>
-                        </View>
-                      </Pressable>
+                        </Pressable>
 
-                      {editUnloadingByDeliveryPartner && (
-                        <View style={styles.dpRateAdjustRow}>
-                          <View style={{ flexDirection: "row", gap: 8, marginBottom: 8 }}>
-                            {["per brick", "fixed amount"].map((type) => {
-                              const isSel = editCustomPartnerUnloadingRateType === type;
+                        {editUnloadingByDeliveryPartner && (
+                          <View style={styles.dpRateAdjustRow}>
+                            <View style={{ flexDirection: "row", gap: 8, marginBottom: 8 }}>
+                              {["per brick", "fixed amount"].map((type) => {
+                                const isSel = editCustomPartnerUnloadingRateType === type;
+                                return (
+                                  <Pressable
+                                    key={type}
+                                    style={[styles.miniPill, isSel && styles.miniPillActive]}
+                                    onPress={() => setEditCustomPartnerUnloadingRateType(type)}
+                                  >
+                                    <Text style={[styles.miniPillText, isSel && styles.miniPillTextActive]}>
+                                      {type === "per brick" ? "Per Brick" : "Fixed Amount"}
+                                    </Text>
+                                  </Pressable>
+                                );
+                              })}
+                            </View>
+                            <View style={{ flexDirection: "row", alignItems: "center", gap: 10 }}>
+                              <Text style={styles.dpRateLabel}>
+                                {editCustomPartnerUnloadingRateType === "per brick" ? "Rate (₹/brick):" : "Fixed Amount (₹):"}
+                              </Text>
+                              <TextInput
+                                style={styles.dpRateInput}
+                                value={editCustomPartnerUnloadingRate}
+                                onChangeText={setEditCustomPartnerUnloadingRate}
+                                keyboardType="numeric"
+                                placeholder="0.00"
+                                placeholderTextColor={colors.text.muted}
+                              />
+                            </View>
+                          </View>
+                        )}
+                      </View>
+                    ) : null}
+
+                    {/* Unloading Worker Selector */}
+                    {!(editUnloadingByDeliveryPartner && partnerObj?.hasUnloading) && (
+                      <View>
+                        <Text style={[styles.label, { marginBottom: 6 }]}>Assign Unloading Worker</Text>
+                        <ScrollView horizontal showsHorizontalScrollIndicator={false} style={styles.partnersScroll}>
+                          <View style={styles.partnersRow}>
+                            <Pressable
+                              style={[
+                                styles.partnerCard,
+                                !editUnloadingWorkerId && styles.partnerCardActive,
+                              ]}
+                              onPress={() => setEditUnloadingWorkerId("")}
+                            >
+                              <Text
+                                style={[
+                                  styles.partnerName,
+                                  !editUnloadingWorkerId && styles.partnerNameActive,
+                                ]}
+                              >
+                                No Unloading Worker
+                              </Text>
+                            </Pressable>
+                            {(workers || []).map((w: any) => {
+                              const active = editUnloadingWorkerId === w.id;
                               return (
                                 <Pressable
-                                  key={type}
-                                  style={[styles.miniPill, isSel && styles.miniPillActive]}
-                                  onPress={() => setEditCustomPartnerUnloadingRateType(type)}
+                                  key={w.id}
+                                  style={[
+                                    styles.partnerCard,
+                                    active && styles.partnerCardActive,
+                                  ]}
+                                  onPress={() => {
+                                    setEditUnloadingWorkerId(w.id);
+                                    setEditUnloadingByDeliveryPartner(false);
+                                  }}
                                 >
-                                  <Text style={[styles.miniPillText, isSel && styles.miniPillTextActive]}>
-                                    {type === "per brick" ? "Per Brick" : "Fixed Amount"}
+                                  <Text
+                                    style={[
+                                      styles.partnerName,
+                                      active && styles.partnerNameActive,
+                                    ]}
+                                  >
+                                    {w.name} (₹{w.unloadingCost || 0}/unit)
                                   </Text>
                                 </Pressable>
                               );
                             })}
                           </View>
-                          <View style={{ flexDirection: "row", alignItems: "center", gap: 10 }}>
-                            <Text style={styles.dpRateLabel}>
-                              {editCustomPartnerUnloadingRateType === "per brick" ? "Rate (₹/brick):" : "Fixed Amount (₹):"}
-                            </Text>
-                            <TextInput
-                              style={styles.dpRateInput}
-                              value={editCustomPartnerUnloadingRate}
-                              onChangeText={setEditCustomPartnerUnloadingRate}
-                              keyboardType="numeric"
-                              placeholder="0.00"
-                              placeholderTextColor={colors.text.muted}
-                            />
-                          </View>
-                        </View>
-                      )}
-                    </View>
-                  ) : null}
-
-                  {/* Unloading Worker */}
-                  {!(editUnloadingByDeliveryPartner && partnerObj?.hasUnloading) && (
-                    <>
-                      <Text style={[styles.label, { marginTop: (editDeliveryPartnerId && partnerObj?.hasUnloading) ? 10 : 14 }]}>Assign Unloading Worker</Text>
-                      <ScrollView horizontal showsHorizontalScrollIndicator={false} style={styles.partnersScroll}>
-                        <View style={styles.partnersRow}>
-                          <Pressable
-                            style={[
-                              styles.partnerCard,
-                              !editUnloadingWorkerId && styles.partnerCardActive,
-                            ]}
-                            onPress={() => setEditUnloadingWorkerId("")}
-                          >
-                            <Text
-                              style={[
-                                styles.partnerName,
-                                !editUnloadingWorkerId && styles.partnerNameActive,
-                              ]}
-                            >
-                              No Unloading Worker
-                            </Text>
-                          </Pressable>
-                          {(workers || []).map((w: any) => {
-                            const active = editUnloadingWorkerId === w.id;
-                            return (
-                              <Pressable
-                                key={w.id}
-                                style={[
-                                  styles.partnerCard,
-                                  active && styles.partnerCardActive,
-                                ]}
-                                onPress={() => {
-                                  setEditUnloadingWorkerId(w.id);
-                                  setEditUnloadingByDeliveryPartner(false);
-                                }}
-                              >
-                                <Text
-                                  style={[
-                                    styles.partnerName,
-                                    active && styles.partnerNameActive,
-                                  ]}
-                                >
-                                  {w.name} (₹{w.unloadingCost || 0}/unit)
-                                </Text>
-                              </Pressable>
-                            );
-                          })}
-                        </View>
-                      </ScrollView>
-                    </>
-                  )}
+                        </ScrollView>
+                      </View>
+                    )}
+                  </View>
 
                   {/* Billing Calculations */}
                   <View style={styles.divider} />
@@ -4280,7 +4710,7 @@ export default function Orders() {
                       color={colors.accent.warning}
                     />
                     <Text style={styles.sectionTitle}>
-                      3. Billing & Payments
+                      4. Billing & Payments
                     </Text>
                   </View>
 
@@ -4397,18 +4827,67 @@ export default function Orders() {
                     </Pressable>
                   </View>
 
-                  <Text style={styles.label}>Amount Paid (₹)</Text>
-                  <TextInput
-                    value={editPaidAmount}
-                    onChangeText={setEditPaidAmount}
-                    keyboardType="numeric"
-                    placeholder="0"
-                    placeholderTextColor={colors.text.muted}
-                    style={styles.input}
-                  />
+                  {/* Amount Paid with Quick Presets */}
+                  {(() => {
+                    const targetCustId = editCustomerId || selectedOrder?.customerId;
+                    const custObj = (targetCustId && customerByIdMap.get(targetCustId)) ||
+                      (customers || []).find((c: any) =>
+                        (c.name && (editCustomerName || selectedOrder?.customerName) && c.name.trim().toLowerCase() === (editCustomerName || selectedOrder.customerName).trim().toLowerCase()) ||
+                        (c.phone && (editCustomerPhone || selectedOrder?.customerPhone) && c.phone.trim() === (editCustomerPhone || selectedOrder.customerPhone).trim())
+                      );
+                    const custPending = custObj
+                      ? (custObj.totalPending !== undefined ? Number(custObj.totalPending) : Number(custObj.balance || 0))
+                      : 0;
+                    const isSameCust = Boolean(targetCustId && selectedOrder?.customerId && targetCustId === selectedOrder.customerId);
+                    const origUnpaid = isSameCust ? Number(selectedOrder?.balanceDue || 0) : 0;
+                    const oldDues = isSameCust
+                      ? (selectedOrder?.previousBalance !== undefined
+                          ? Number(selectedOrder.previousBalance)
+                          : Math.max(0, custPending - origUnpaid))
+                      : Math.max(0, custPending);
+                    const totalAllDues = editTotalVal + oldDues;
+
+                    return (
+                      <View>
+                        <View style={{ flexDirection: "row", justifyContent: "space-between", alignItems: "center", marginBottom: 6 }}>
+                          <Text style={[styles.label, { marginTop: 0, marginBottom: 0 }]}>Amount Paid (₹)</Text>
+                          <View style={{ flexDirection: "row", gap: 6 }}>
+                            <Pressable
+                              style={{ paddingHorizontal: 7, paddingVertical: 2, backgroundColor: colors.bg.primary, borderRadius: 6, borderWidth: 1, borderColor: colors.border.subtle }}
+                              onPress={() => setEditPaidAmount("0")}
+                            >
+                              <Text style={{ fontSize: 10, fontWeight: "700", color: colors.text.secondary }}>₹0 Credit</Text>
+                            </Pressable>
+                            <Pressable
+                              style={{ paddingHorizontal: 7, paddingVertical: 2, backgroundColor: `${colors.accent.primary}15`, borderRadius: 6, borderWidth: 1, borderColor: colors.accent.primary }}
+                              onPress={() => setEditPaidAmount(String(editTotalVal))}
+                            >
+                              <Text style={{ fontSize: 10, fontWeight: "700", color: colors.accent.primary }}>Order Total (₹{editTotalVal})</Text>
+                            </Pressable>
+                            {oldDues > 0 && (
+                              <Pressable
+                                style={{ paddingHorizontal: 7, paddingVertical: 2, backgroundColor: `${colors.accent.success}15`, borderRadius: 6, borderWidth: 1, borderColor: colors.accent.success }}
+                                onPress={() => setEditPaidAmount(String(totalAllDues))}
+                              >
+                                <Text style={{ fontSize: 10, fontWeight: "700", color: colors.accent.success }}>All Dues (₹{totalAllDues})</Text>
+                              </Pressable>
+                            )}
+                          </View>
+                        </View>
+                        <TextInput
+                          value={editPaidAmount}
+                          onChangeText={setEditPaidAmount}
+                          keyboardType="numeric"
+                          placeholder="0"
+                          placeholderTextColor={colors.text.muted}
+                          style={styles.input}
+                        />
+                      </View>
+                    );
+                  })()}
 
                   {/* Payment Method Selector */}
-                  <View style={{ marginTop: 10, marginBottom: 8 }}>
+                  <View style={{ marginTop: 8, marginBottom: 8 }}>
                     <Text style={[styles.label, { marginBottom: 8 }]}>Payment Method</Text>
                     <View style={{ flexDirection: "row", flexWrap: "wrap", gap: 8 }}>
                       {[
@@ -4551,18 +5030,23 @@ export default function Orders() {
 
                   {/* Live Totals Container */}
                   {(() => {
-                    const customerObj = (selectedOrder?.customerId && customerByIdMap.get(selectedOrder.customerId)) ||
+                    const targetCustId = editCustomerId || selectedOrder?.customerId;
+                    const customerObj = (targetCustId && customerByIdMap.get(targetCustId)) ||
                       (customers || []).find((c: any) =>
-                        (c.name && selectedOrder?.customerName && c.name.trim().toLowerCase() === selectedOrder.customerName.trim().toLowerCase()) ||
-                        (c.phone && selectedOrder?.customerPhone && c.phone.trim() === selectedOrder.customerPhone.trim())
+                        (c.name && (editCustomerName || selectedOrder?.customerName) && c.name.trim().toLowerCase() === (editCustomerName || selectedOrder.customerName).trim().toLowerCase()) ||
+                        (c.phone && (editCustomerPhone || selectedOrder?.customerPhone) && c.phone.trim() === (editCustomerPhone || selectedOrder.customerPhone).trim())
                       );
                     const customerCurrentPending = customerObj
                       ? (customerObj.totalPending !== undefined ? Number(customerObj.totalPending) : Number(customerObj.balance || 0))
                       : 0;
-                    const originalOrderUnpaid = Number(selectedOrder?.balanceDue || 0);
-                    const oldBalanceDue = selectedOrder?.previousBalance !== undefined
-                      ? Number(selectedOrder.previousBalance)
-                      : Math.max(0, customerCurrentPending - originalOrderUnpaid);
+
+                    const isSameCust = Boolean(targetCustId && selectedOrder?.customerId && targetCustId === selectedOrder.customerId);
+                    const originalOrderUnpaid = isSameCust ? Number(selectedOrder?.balanceDue || 0) : 0;
+                    const oldBalanceDue = isSameCust
+                      ? (selectedOrder?.previousBalance !== undefined
+                          ? Number(selectedOrder.previousBalance)
+                          : Math.max(0, customerCurrentPending - originalOrderUnpaid))
+                      : Math.max(0, customerCurrentPending);
 
                     const grandTotalWithOldDues = editTotalVal + oldBalanceDue;
                     const totalBalanceUnpaid = oldBalanceDue + editBalanceDueVal;
@@ -4591,19 +5075,23 @@ export default function Orders() {
                             </Text>
                           </View>
                         )}
-                        {editLoadingCharge > 0 && (
+                        {editLoadingVal > 0 && (
                           <View style={styles.calcRow}>
-                            <Text style={styles.calcLabel}>Loading Charge ({loadingWorkerName}):</Text>
+                            <Text style={styles.calcLabel}>
+                              Loading Expense ({loadingWorkerName || (isLoadingCustomized ? "Manual" : "Direct")}):
+                            </Text>
                             <Text style={styles.calcValue}>
-                              ₹{editLoadingCharge.toLocaleString("en-IN")}
+                              +₹{editLoadingVal.toLocaleString("en-IN")}
                             </Text>
                           </View>
                         )}
-                        {editUnloadingCharge > 0 && (
+                        {editUnloadingVal > 0 && (
                           <View style={styles.calcRow}>
-                            <Text style={styles.calcLabel}>Unloading Charge ({unloadingWorkerName}):</Text>
+                            <Text style={styles.calcLabel}>
+                              Unloading Expense ({unloadingWorkerName || (isUnloadingCustomized ? "Manual" : "Direct")}):
+                            </Text>
                             <Text style={styles.calcValue}>
-                              ₹{editUnloadingCharge.toLocaleString("en-IN")}
+                              +₹{editUnloadingVal.toLocaleString("en-IN")}
                             </Text>
                           </View>
                         )}
@@ -4665,11 +5153,14 @@ export default function Orders() {
                           </Text>
                         </View>
                         {editPaidVal > grandTotalWithOldDues && (
-                          <View style={[styles.calcRow, { marginTop: 6, paddingVertical: 4, paddingHorizontal: 8, backgroundColor: colors.accent.success + "15", borderRadius: 6, borderColor: colors.accent.success + "30", borderWidth: 1 }]}>
-                            <Text style={[styles.calcLabel, { color: colors.accent.success, fontWeight: "700" }]}>
-                              ⭐ Advance Credit (To Profile):
-                            </Text>
-                            <Text style={[styles.calcValue, { color: colors.accent.success, fontWeight: "800" }]}>
+                          <View style={[styles.calcRow, { marginTop: 6, paddingVertical: 6, paddingHorizontal: 10, backgroundColor: colors.accent.success + "15", borderRadius: 8, borderColor: colors.accent.success + "30", borderWidth: 1 }]}>
+                            <View style={{ flexDirection: "row", alignItems: "center", gap: 6 }}>
+                              <MaterialIcons name="stars" size={16} color={colors.accent.success} />
+                              <Text style={[styles.calcLabel, { color: colors.accent.success, fontWeight: "700" }]}>
+                                Advance Credit (To Profile):
+                              </Text>
+                            </View>
+                            <Text style={[styles.calcValue, { color: colors.accent.success, fontWeight: "800", fontSize: 13 }]}>
                               +₹{(editPaidVal - grandTotalWithOldDues).toLocaleString("en-IN")}
                             </Text>
                           </View>
@@ -4895,10 +5386,31 @@ export default function Orders() {
               <Text style={styles.inputLabel}>Expense Category *</Text>
               <TextInput
                 style={styles.textInput}
-                placeholder="e.g. Fuel, Salary, Office, Raw Materials"
+                placeholder="e.g. Loading & Unloading, Fuel, Salary, Office"
                 value={expenseCategory}
                 onChangeText={setExpenseCategory}
               />
+              <ScrollView horizontal showsHorizontalScrollIndicator={false} style={{ marginTop: 8 }}>
+                <View style={{ flexDirection: "row", gap: 6 }}>
+                  {["Loading & Unloading", "Worker Wages", "Fuel / Transport", "Vehicle Maintenance", "Office / Tea", "Raw Materials"].map((cat) => {
+                    const isSel = expenseCategory.trim().toLowerCase() === cat.toLowerCase();
+                    return (
+                      <Pressable
+                        key={cat}
+                        style={[
+                          styles.miniPill,
+                          isSel && styles.miniPillActive,
+                        ]}
+                        onPress={() => setExpenseCategory(cat)}
+                      >
+                        <Text style={[styles.miniPillText, isSel && styles.miniPillTextActive]}>
+                          {cat}
+                        </Text>
+                      </Pressable>
+                    );
+                  })}
+                </View>
+              </ScrollView>
             </View>
 
             {/* Payment Status Segment Toggle */}

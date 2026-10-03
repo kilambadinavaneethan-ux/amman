@@ -41,6 +41,7 @@ LogBox.ignoreLogs([
 ]);
 
 // Intercept Firestore shutting down and other transient errors to prevent red screen crashes in development
+if (__DEV__) {
 const originalConsoleError = console.error;
 console.error = (...args) => {
   const message = args
@@ -117,6 +118,7 @@ console.warn = (...args) => {
   }
   originalConsoleWarn(...args);
 };
+} // end __DEV__
 
 // Prevent the native splash screen from auto-hiding to avoid black flicker
 SplashScreen.preventAutoHideAsync().catch(() => {});

@@ -9,7 +9,7 @@ import {
     updateDoc,
     writeBatch,
 } from "firebase/firestore";
-import { createContext, useEffect, useState, useMemo, useCallback } from "react";
+import { createContext, useEffect, useState, useMemo, useCallback, useRef } from "react";
 import { db, normalizeDateValue } from "../../src/config/firebase";
 
 export const PaymentContext = createContext(null);
@@ -18,35 +18,71 @@ export function PaymentProvider({ children }) {
   const [payments, setPayments] = useState([]);
   const [loading, setLoading] = useState(true);
 
+  const isInitialLoadRef = useRef(false);
   useEffect(() => {
     setLoading(true);
+    isInitialLoadRef.current = true;
     const paymentsCollection = collection(db, "payments");
     const q = query(paymentsCollection, orderBy("createdAt", "desc"));
+
+    const normalizePaymentDoc = (docSnapshot) => {
+      const data = docSnapshot.data();
+      const amt =
+        data.amountReceived !== undefined
+          ? Number(data.amountReceived)
+          : Number(data.amount || 0);
+      const rawDate =
+        data.createdAt ||
+        data.paymentDate ||
+        data.date ||
+        data.timestamp ||
+        data.updatedAt;
+      return {
+        id: docSnapshot.id,
+        ...data,
+        amount: amt,
+        amountReceived: amt,
+        createdAt: normalizeDateValue(rawDate),
+      };
+    };
 
     const unsubscribe = onSnapshot(
       q,
       (snapshot) => {
-        const dbPayments = snapshot.docs.map((doc) => {
-          const data = doc.data();
-          const amt =
-            data.amountReceived !== undefined
-              ? Number(data.amountReceived)
-              : Number(data.amount || 0);
-          const rawDate =
-            data.createdAt ||
-            data.paymentDate ||
-            data.date ||
-            data.timestamp ||
-            data.updatedAt;
-          return {
-            id: doc.id,
-            ...data,
-            amount: amt,
-            amountReceived: amt,
-            createdAt: normalizeDateValue(rawDate),
-          };
-        });
-        setPayments(dbPayments);
+        if (isInitialLoadRef.current) {
+          const dbPayments = snapshot.docs.map(normalizePaymentDoc);
+          setPayments(dbPayments);
+          isInitialLoadRef.current = false;
+        } else {
+          const changes = snapshot.docChanges();
+          if (changes.length > 0) {
+            setPayments((prev) => {
+              const updated = [...prev];
+              for (const change of changes) {
+                const paymentData = normalizePaymentDoc(change.doc);
+                if (change.type === "added") {
+                  const existIdx = updated.findIndex((p) => p.id === paymentData.id);
+                  if (existIdx === -1) {
+                    updated.unshift(paymentData);
+                  } else {
+                    updated[existIdx] = paymentData;
+                  }
+                } else if (change.type === "modified") {
+                  const idx = updated.findIndex((p) => p.id === paymentData.id);
+                  if (idx !== -1) {
+                    updated[idx] = paymentData;
+                  }
+                } else if (change.type === "removed") {
+                  const idx = updated.findIndex((p) => p.id === paymentData.id);
+                  if (idx !== -1) {
+                    updated.splice(idx, 1);
+                  }
+                }
+              }
+              return updated;
+            });
+          }
+        }
         setLoading(false);
       },
       (error) => {

@@ -21,27 +21,66 @@ export function CustomerProvider({ children }) {
     customersRef.current = customers;
   }, [customers]);
 
+  const isInitialLoadRef = useRef(false);
   useEffect(() => {
+    isInitialLoadRef.current = true;
     const customersCollection = collection(db, "customers");
+
+    const normalizeCustomerDoc = (docSnapshot) => {
+      const data = docSnapshot.data();
+      const balanceVal =
+        data.totalPending !== undefined
+          ? Number(data.totalPending)
+          : Number(data.balance || 0);
+      return {
+        id: docSnapshot.id,
+        ...data,
+        balance: balanceVal,
+        totalPending: balanceVal,
+        totalPaid: Number(data.totalPaid || 0),
+        dueDates: data.dueDates || [],
+      };
+    };
+
     const unsubscribe = onSnapshot(
       customersCollection,
       (snapshot) => {
-        const dbCustomers = snapshot.docs.map((doc) => {
-          const data = doc.data();
-          const balanceVal =
-            data.totalPending !== undefined
-              ? Number(data.totalPending)
-              : Number(data.balance || 0);
-          return {
-            id: doc.id,
-            ...data,
-            balance: balanceVal,
-            totalPending: balanceVal,
-            totalPaid: Number(data.totalPaid || 0),
-            dueDates: data.dueDates || [],
-          };
-        });
-        setCustomers(dbCustomers);
+        if (isInitialLoadRef.current) {
+          // First load: map all docs
+          const dbCustomers = snapshot.docs.map(normalizeCustomerDoc);
+          setCustomers(dbCustomers);
+          isInitialLoadRef.current = false;
+        } else {
+          // Incremental: only process changed docs
+          const changes = snapshot.docChanges();
+          if (changes.length > 0) {
+            setCustomers((prev) => {
+              const updated = [...prev];
+              for (const change of changes) {
+                const customerData = normalizeCustomerDoc(change.doc);
+                if (change.type === "added") {
+                  const existIdx = updated.findIndex((c) => c.id === customerData.id);
+                  if (existIdx === -1) {
+                    updated.push(customerData);
+                  } else {
+                    updated[existIdx] = customerData;
+                  }
+                } else if (change.type === "modified") {
+                  const idx = updated.findIndex((c) => c.id === customerData.id);
+                  if (idx !== -1) {
+                    updated[idx] = customerData;
+                  }
+                } else if (change.type === "removed") {
+                  const idx = updated.findIndex((c) => c.id === customerData.id);
+                  if (idx !== -1) {
+                    updated.splice(idx, 1);
+                  }
+                }
+              }
+              return updated;
+            });
+          }
+        }
       },
       (error) => {
       },

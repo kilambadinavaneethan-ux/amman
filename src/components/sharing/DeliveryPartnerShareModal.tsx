@@ -124,6 +124,15 @@ export function DeliveryPartnerShareModal({
     const totalPaid = selPayments.reduce((sum, p) => sum + Number(p.amount || 0), 0);
     const totalBonuses = selBonuses.reduce((sum, b) => sum + Number(b.amount || 0), 0);
 
+    const totalLoadingEarnings = selTrips.reduce((sum, t) => sum + Number(t.loadingCharge || 0), 0);
+    const totalUnloadingEarnings = selTrips.reduce((sum, t) => sum + Number(t.unloadingCharge || 0), 0);
+    const totalBaseTripEarnings = selTrips.reduce((sum, t) => {
+      const base = t.baseDeliveryCharge !== undefined
+        ? Number(t.baseDeliveryCharge || 0)
+        : (Number(t.deliveryCharge || 0) - Number(t.loadingCharge || 0) - Number(t.unloadingCharge || 0));
+      return sum + (base > 0 ? base : Number(t.deliveryCharge || 0));
+    }, 0);
+
     let totalOrderVal = 0;
     let totalOrderPaid = 0;
     let totalOrderDue = 0;
@@ -166,6 +175,9 @@ export function DeliveryPartnerShareModal({
       summary: {
         totalTrips: selTrips.length,
         totalPayable,
+        totalBaseTripEarnings,
+        totalLoadingEarnings,
+        totalUnloadingEarnings,
         totalBonuses,
         totalPaid,
         netPending,
@@ -458,6 +470,11 @@ export function DeliveryPartnerShareModal({
                       <Text style={[styles.summaryMiniVal, { color: '#16A34A' }]}>
                         ₹{filteredData.summary.totalPayable.toLocaleString('en-IN')}
                       </Text>
+                      {((filteredData.summary.totalLoadingEarnings || 0) > 0 || (filteredData.summary.totalUnloadingEarnings || 0) > 0) && (
+                        <Text style={{ fontSize: 8.5, color: '#15803D', fontWeight: '600', marginTop: 2 }}>
+                          Trip: ₹{(filteredData.summary.totalBaseTripEarnings || 0).toLocaleString('en-IN')} + Load: ₹{(filteredData.summary.totalLoadingEarnings || 0).toLocaleString('en-IN')} + Unload: ₹{(filteredData.summary.totalUnloadingEarnings || 0).toLocaleString('en-IN')}
+                        </Text>
+                      )}
                     </View>
                     {filteredData.summary.totalBonuses > 0 && (
                       <View style={styles.summaryMiniCard}>
@@ -712,16 +729,27 @@ export function DeliveryPartnerShareModal({
                       <Text style={styles.imageCardSnippetTitle}>
                         RECENT DELIVERIES ({Math.min(3, filteredData.trips.length)} of {filteredData.trips.length})
                       </Text>
-                      {filteredData.trips.slice(0, 3).map((t, idx) => (
-                        <View key={t.id || idx} style={styles.imageCardSnippetRow}>
-                          <Text style={styles.imageCardSnippetText} numberOfLines={1}>
-                            • {t.customerName || 'General Client'} {t.deliveredItem ? `(${t.deliveredItem})` : ''}
-                          </Text>
-                          <Text style={styles.imageCardSnippetAmount}>
-                            ₹{Number(t.deliveryCharge || 0).toLocaleString('en-IN')}
-                          </Text>
-                        </View>
-                      ))}
+                      {filteredData.trips.slice(0, 3).map((t, idx) => {
+                        const hasExtra = (t.loadingCharge || 0) > 0 || (t.unloadingCharge || 0) > 0;
+                        const base = t.baseDeliveryCharge ?? (Number(t.deliveryCharge || 0) - Number(t.loadingCharge || 0) - Number(t.unloadingCharge || 0));
+                        return (
+                          <View key={t.id || idx} style={[styles.imageCardSnippetRow, { flexDirection: 'column', alignItems: 'flex-start' }]}>
+                            <View style={{ flexDirection: 'row', justifyContent: 'space-between', width: '100%' }}>
+                              <Text style={styles.imageCardSnippetText} numberOfLines={1}>
+                                • {t.customerName || 'General Client'} {t.deliveredItem ? `(${t.deliveredItem})` : ''}
+                              </Text>
+                              <Text style={styles.imageCardSnippetAmount}>
+                                ₹{Number(t.deliveryCharge || 0).toLocaleString('en-IN')}
+                              </Text>
+                            </View>
+                            {hasExtra && (
+                              <Text style={{ fontSize: 8.5, color: '#0284C7', paddingLeft: 8, marginTop: 1 }}>
+                                Trip: ₹{base} + Load: ₹{Number(t.loadingCharge || 0)} + Unload: ₹{Number(t.unloadingCharge || 0)}
+                              </Text>
+                            )}
+                          </View>
+                        );
+                      })}
                     </View>
                   )}
 

@@ -427,7 +427,7 @@ export const AppaEstimateBillView = React.forwardRef<View, AppaEstimateBillViewP
                 </View>
                 <View style={[styles.colDebit, { borderRightColor: theme.lineColor }]}>
                   <Text style={[styles.tableHeaderText, { color: theme.inkColor }]}>{cfg.columnLabels?.debit || 'பற்று (+)'}</Text>
-                  <Text style={[styles.tableHeaderSub, { color: theme.highlightColor }]}>Debit</Text>
+                  <Text style={[styles.tableHeaderSub, { color: isDark ? '#94A3B8' : '#64748B' }]}>Debit</Text>
                 </View>
                 <View style={[styles.colCredit, { borderRightColor: theme.lineColor }]}>
                   <Text style={[styles.tableHeaderText, { color: theme.inkColor }]}>{cfg.columnLabels?.credit || 'வரவு (-)'}</Text>
@@ -435,7 +435,7 @@ export const AppaEstimateBillView = React.forwardRef<View, AppaEstimateBillViewP
                 </View>
                 <View style={styles.colBalance}>
                   <Text style={[styles.tableHeaderText, { color: theme.inkColor }]}>{cfg.columnLabels?.balance || 'பாக்கி'}</Text>
-                  <Text style={[styles.tableHeaderSub, { color: theme.subTextColor }]}>Balance</Text>
+                  <Text style={[styles.tableHeaderSub, { color: theme.highlightColor }]}>Balance</Text>
                 </View>
               </View>
 
@@ -524,19 +524,23 @@ export const AppaEstimateBillView = React.forwardRef<View, AppaEstimateBillViewP
                               </Text>
                             )}
 
-                            {/* Additional Service Charges formatted as clean subtext */}
+                            {/* Additional Service Charges formatted line by line */}
                             {(() => {
                               const extras: string[] = [];
-                              if (item.shipmentCharge) extras.push(`வண்டி வாடகை: ₹${item.shipmentCharge}`);
-                              if (item.loadingCharge) extras.push(`ஏற்று கூலி: ₹${item.loadingCharge}`);
-                              if (item.unloadingCharge) extras.push(`இறக்கு கூலி: ₹${item.unloadingCharge}`);
-                              if (item.extraAmount) extras.push(`கூடுதல்: ₹${item.extraAmount}`);
+                              if (item.shipmentCharge) extras.push(`வண்டி வாடகை: ₹${Number(item.shipmentCharge).toLocaleString('en-IN')}`);
+                              if (item.loadingCharge) extras.push(`ஏற்று கூலி: ₹${Number(item.loadingCharge).toLocaleString('en-IN')}`);
+                              if (item.unloadingCharge) extras.push(`இறக்கு கூலி: ₹${Number(item.unloadingCharge).toLocaleString('en-IN')}`);
+                              if (item.extraAmount) extras.push(`கூடுதல்: ₹${Number(item.extraAmount).toLocaleString('en-IN')}`);
                               if (item.notes) extras.push(item.notes);
                               if (extras.length === 0) return null;
                               return (
-                                <Text style={{ fontSize: 10, color: theme.subTextColor, marginTop: 2 }}>
-                                  ({extras.join(', ')})
-                                </Text>
+                                <View style={{ marginTop: 2 }}>
+                                  {extras.map((extra, idx) => (
+                                    <Text key={idx} style={{ fontSize: 10, color: theme.subTextColor, marginTop: 1 }}>
+                                      • {extra}
+                                    </Text>
+                                  ))}
+                                </View>
                               );
                             })()}
                           </View>
@@ -545,7 +549,7 @@ export const AppaEstimateBillView = React.forwardRef<View, AppaEstimateBillViewP
 
                       {/* Debit (+) Cell */}
                       <View style={[styles.colDebit, { borderRightColor: theme.gridLineColor }]}>
-                        <Text style={[styles.rowCellText, { color: debitVal ? theme.highlightColor : theme.subTextColor, textAlign: 'right', fontWeight: debitVal ? '800' : '400' }]}>
+                        <Text style={[styles.rowCellText, { color: debitVal ? (isDark ? '#94A3B8' : '#64748B') : theme.subTextColor, textAlign: 'right', fontWeight: debitVal ? '700' : '400' }]}>
                           {debitVal ? formatCurrency(debitVal) : '-'}
                         </Text>
                       </View>
@@ -559,7 +563,7 @@ export const AppaEstimateBillView = React.forwardRef<View, AppaEstimateBillViewP
 
                       {/* Running Balance Cell */}
                       <View style={styles.colBalance}>
-                        <Text style={[styles.rowCellText, { color: theme.inkColor, textAlign: 'right', fontWeight: '600' }]}>
+                        <Text style={[styles.rowCellText, { color: (item.balance !== undefined && item.balance !== 0) ? theme.highlightColor : theme.inkColor, textAlign: 'right', fontWeight: '700' }]}>
                           {item.balance !== undefined ? formatCurrency(item.balance) : '-'}
                         </Text>
                       </View>
@@ -576,7 +580,7 @@ export const AppaEstimateBillView = React.forwardRef<View, AppaEstimateBillViewP
                   </Text>
                 </View>
                 <View style={[styles.colDebit, { borderRightColor: theme.lineColor }]}>
-                  <Text style={[styles.totalValText, { color: theme.highlightColor, textAlign: 'right' }]}>
+                  <Text style={[styles.totalValText, { color: isDark ? '#94A3B8' : '#64748B', textAlign: 'right' }]}>
                     {formatCurrency(totalDebit)}
                   </Text>
                 </View>
@@ -586,7 +590,7 @@ export const AppaEstimateBillView = React.forwardRef<View, AppaEstimateBillViewP
                   </Text>
                 </View>
                 <View style={styles.colBalance}>
-                  <Text style={[styles.totalValText, { color: netDue > 0 ? theme.highlightColor : theme.inkColor, textAlign: 'right' }]}>
+                  <Text style={[styles.totalValText, { color: theme.highlightColor, textAlign: 'right' }]}>
                     {formatCurrency(netDue)}
                   </Text>
                 </View>

@@ -20,6 +20,7 @@ import { RawMaterialSupplierContext } from "./context/RawMaterialSupplierContext
 import { UserContext } from "./context/UserContext";
 import ProtectedRoute from "./components/ProtectedRoute";
 import BackButton from "./components/BackButton";
+import EasyCalendarModal from "./components/EasyCalendarModal";
 import { useScrollRestoration } from "./context/ScrollContext";
 
 function RawMaterialStockManager() {
@@ -39,6 +40,8 @@ function RawMaterialStockManager() {
   const [activeMaterial, setActiveMaterial] = useState(null);
   const [logType, setLogType] = useState(null); // "in" | "out"
   const [isModalOpen, setIsModalOpen] = useState(false);
+  const [selectedDate, setSelectedDate] = useState(new Date());
+  const [isDatePickerOpen, setIsDatePickerOpen] = useState(false);
 
   // Form Fields
   const [qty, setQty] = useState("");
@@ -65,6 +68,7 @@ function RawMaterialStockManager() {
   const handleOpenLogModal = (material, type) => {
     setActiveMaterial(material);
     setLogType(type);
+    setSelectedDate(new Date());
     setQty("");
     setNotes("");
     setErrorMsg("");
@@ -128,7 +132,7 @@ function RawMaterialStockManager() {
           quantity: parsedQty,
           unit: unitSuffix,
           notes: notes.trim(),
-          date: new Date(),
+          date: selectedDate,
         });
 
         if (success) {
@@ -185,7 +189,7 @@ function RawMaterialStockManager() {
           supplierName: supplierObj ? supplierObj.name : null,
           unit: unitSuffix,
           notes: notes.trim(),
-          date: new Date(),
+          date: selectedDate,
         });
 
         if (success) {
@@ -367,6 +371,35 @@ function RawMaterialStockManager() {
                 <Text style={styles.materialMetaLabel}>
                   Material: <Text style={styles.materialMetaVal}>{activeMaterial.itemName}</Text>
                 </Text>
+
+                {/* Transaction Date Selector */}
+                <View style={styles.formGroup}>
+                  <Text style={styles.inputLabel}>Date</Text>
+                  <Pressable
+                    style={styles.dateSelector}
+                    onPress={() => !saving && setIsDatePickerOpen(true)}
+                  >
+                    <MaterialIcons
+                      name="calendar-today"
+                      size={18}
+                      color={colors.accent.primary}
+                      style={{ marginRight: 8 }}
+                    />
+                    <Text style={styles.dateSelectorText}>
+                      {selectedDate.toLocaleDateString("en-IN", {
+                        day: "numeric",
+                        month: "short",
+                        year: "numeric",
+                      })}
+                    </Text>
+                    <MaterialIcons
+                      name="edit-calendar"
+                      size={16}
+                      color={colors.text.muted}
+                      style={{ marginLeft: "auto" }}
+                    />
+                  </Pressable>
+                </View>
 
                 {logType === "out" ? (
                   <View style={styles.formGroup}>
@@ -585,6 +618,18 @@ function RawMaterialStockManager() {
           </View>
         </KeyboardAvoidingView>
       </Modal>
+
+      {/* Date Picker Modal */}
+      <EasyCalendarModal
+        visible={isDatePickerOpen}
+        date={selectedDate}
+        onSelectDate={(newDate) => {
+          setSelectedDate(newDate);
+          setIsDatePickerOpen(false);
+        }}
+        onClose={() => setIsDatePickerOpen(false)}
+        title={logType === "in" ? "Select Stock In Date" : "Select Stock Out Date"}
+      />
     </View>
   );
 }
@@ -867,6 +912,21 @@ const getStyles = (theme) => {
     fontSize: 15,
     fontWeight: "700",
     color: colors.text.primary,
+  },
+  dateSelector: {
+    flexDirection: "row",
+    alignItems: "center",
+    borderWidth: 1,
+    borderColor: colors.border.medium,
+    borderRadius: 10,
+    height: 44,
+    paddingHorizontal: 12,
+    backgroundColor: colors.bg.primary,
+  },
+  dateSelectorText: {
+    fontSize: 14,
+    color: colors.text.primary,
+    fontWeight: "500",
   },
   dropdownToggle: {
     flexDirection: "row",
