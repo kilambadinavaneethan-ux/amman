@@ -193,12 +193,28 @@ function RawMaterialDetailsScreen() {
   const handleOpenPurchase = () => {
     setEditingLog(null);
     setTxDate(new Date());
-    setTxQty("");
-    setTxCost(String(material.costPrice || ""));
+    const lastPurchase = (materialLogs || []).find((l) => l.type === "purchase");
+    if (lastPurchase) {
+      setTxQty(lastPurchase.quantity !== undefined && lastPurchase.quantity !== null ? String(lastPurchase.quantity) : "");
+      setTxCost(
+        lastPurchase.costPerUnit !== undefined && lastPurchase.costPerUnit !== null
+          ? String(lastPurchase.costPerUnit)
+          : lastPurchase.rate !== undefined && lastPurchase.rate !== null
+          ? String(lastPurchase.rate)
+          : ""
+      );
+    } else {
+      setTxQty("");
+      setTxCost("");
+    }
     setTxNotes("");
     
     // Find default supplier who supplies this raw material
-    const defaultSupplier = suppliers.find(s => 
+    const lastSupplier = lastPurchase?.supplierId
+      ? suppliers.find(s => s.id === lastPurchase.supplierId && s.status !== "inactive")
+      : null;
+
+    const defaultSupplier = lastSupplier || suppliers.find(s => 
       s.status !== "inactive" && 
       s.suppliedMaterials && 
       s.suppliedMaterials.includes(material.id)
@@ -219,7 +235,12 @@ function RawMaterialDetailsScreen() {
   const handleOpenConsumption = () => {
     setEditingLog(null);
     setTxDate(new Date());
-    setTxQty("");
+    const lastConsumption = (materialLogs || []).find((l) => l.type === "consumption");
+    if (lastConsumption && lastConsumption.quantity !== undefined && lastConsumption.quantity !== null) {
+      setTxQty(String(lastConsumption.quantity));
+    } else {
+      setTxQty("");
+    }
     setTxNotes("");
     setErrorMsg("");
     setConsumptionModal(true);

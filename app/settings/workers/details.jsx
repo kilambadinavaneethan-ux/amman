@@ -1,6 +1,6 @@
 import { MaterialIcons } from "@expo/vector-icons";
 import { useLocalSearchParams, useRouter } from "expo-router";
-import { collection, onSnapshot, query, where } from "firebase/firestore";
+import { collection, doc, onSnapshot, query, updateDoc, where } from "firebase/firestore";
 import { useContext, useEffect, useMemo, useState } from "react";
 import {
     ActivityIndicator,
@@ -139,7 +139,10 @@ function WorkerDetails() {
   }, [attendanceLog, dateFilter, customStart, customEnd]);
 
   const filteredPaymentLog = useMemo(() => {
-    return paymentLog.filter((p) => isDateInSelectedFilter(p.createdAt));
+    return paymentLog.filter((p) => {
+      const pDate = p.createdAt instanceof Date ? p.createdAt : (p.date ? new Date(p.date) : new Date(p.createdAt));
+      return isDateInSelectedFilter(pDate);
+    });
   }, [paymentLog, dateFilter, customStart, customEnd]);
 
   const filteredBonusLog = useMemo(() => {
@@ -852,16 +855,50 @@ function WorkerDetails() {
       () => setLoadingLogs(false),
     );
 
-    const unsub2 = onSnapshot(payQuery, (snap) => {
-      const logs = snap.docs
-        .map((d) => ({
-          id: d.id,
-          ...d.data(),
-          createdAt: normalizeDateValue(d.data().createdAt),
-        }))
-        .sort((a, b) => b.createdAt.getTime() - a.createdAt.getTime());
-      setPaymentLog(logs);
-    });
+    const unsub2 = onSnapshot(
+      collection(db, "workerPayments"),
+      (snap) => {
+        const targetIdStr = String(id).trim();
+        const workerObj = (workers || []).find((w) => String(w.id).trim() === targetIdStr);
+        const workerName = workerObj?.name?.trim().toLowerCase();
+
+        const logs = snap.docs
+          .filter((d) => {
+            const data = d.data();
+            const wIdStr = data.workerId !== undefined ? String(data.workerId).trim() : "";
+            if (
+              wIdStr === targetIdStr ||
+              wIdStr === `worker_${targetIdStr}` ||
+              wIdStr === `w_${targetIdStr}` ||
+              `worker_${wIdStr}` === targetIdStr ||
+              `w_${wIdStr}` === targetIdStr
+            ) {
+              return true;
+            }
+            if (
+              workerName &&
+              data.workerName &&
+              String(data.workerName).trim().toLowerCase() === workerName &&
+              (!data.workerId || data.workerId === "undefined")
+            ) {
+              return true;
+            }
+            return false;
+          })
+          .map((d) => {
+            const data = d.data();
+            return {
+              id: d.id,
+              ...data,
+              amount: Number(data.amount ?? data.paidAmount ?? data.totalAmount ?? 0),
+              createdAt: normalizeDateValue(data.createdAt || data.date || data.paymentDate),
+            };
+          })
+          .sort((a, b) => b.createdAt.getTime() - a.createdAt.getTime());
+        setPaymentLog(logs);
+      },
+      (err) => console.log("workerPayments error in details:", err),
+    );
 
     const unsub3 = onSnapshot(bonusQuery, (snap) => {
       const logs = snap.docs
@@ -879,7 +916,32 @@ function WorkerDetails() {
       unsub2();
       unsub3();
     };
-  }, [id]);
+  }, [id, workers]);
+
+  // Self-heal Firestore worker totals if they drift
+  useEffect(() => {
+    if (!worker || loadingLogs) return;
+    const curEarned = Number(worker.totalWages || 0);
+    const curPaid = Number(worker.totalPaid || 0);
+    const curPending = worker.totalPending !== undefined ? Number(worker.totalPending) : (curEarned - curPaid);
+    if (
+      Math.abs(curEarned - liveTotalWages) > 0.01 ||
+      Math.abs(curPaid - liveTotalPaid) > 0.01 ||
+      Math.abs(curPending - liveNetPending) > 0.01
+    ) {
+      try {
+        const wRef = doc(db, "workers", worker.id);
+        updateDoc(wRef, {
+          totalWages: liveTotalWages,
+          totalPaid: liveTotalPaid,
+          totalPending: liveNetPending,
+          updatedAt: new Date(),
+        }).catch((e) => console.log("Worker profile self-healing sync error:", e));
+      } catch (err) {
+        console.log("Worker profile self-healing sync error:", err);
+      }
+    }
+  }, [worker, liveTotalWages, liveTotalPaid, liveNetPending, loadingLogs]);
 
   const handleLogBonus = async () => {
     const amount = parseFloat(bonusAmount);
@@ -1610,13 +1672,13 @@ function WorkerDetails() {
                 pressed && { opacity: 0.8 },
               ]}
             >
-              <View style={{ flexDirection: "row", alignItems: "center", justifyContent: "center", gap: 4 }}>
+              <View style={{ flexDirection: "row", alignItems: "center", justifyContent: "center", gap: 3 }}>
                 <Text style={[styles.financeNum, { color: "#7c3aed" }]}>
                   ₹{liveTotalWages.toLocaleString("en-IN")}
                 </Text>
-                <MaterialIcons name="info-outline" size={14} color="#7c3aed" />
+                <MaterialIcons name="info-outline" size={13} color="#7c3aed" />
               </View>
-              <Text style={styles.financeLabel}>Total Earned (Tap for details)</Text>
+              <Text style={styles.financeLabel} numberOfLines={1}>Total Earned</Text>
             </Pressable>
 
             <Pressable
@@ -1627,14 +1689,45 @@ function WorkerDetails() {
                 pressed && { opacity: 0.8 },
               ]}
             >
-              <View style={{ flexDirection: "row", alignItems: "center", justifyContent: "center", gap: 4 }}>
+              <View style={{ flexDirection: "row", alignItems: "center", justifyContent: "center", gap: 3 }}>
                 <Text style={[styles.financeNum, { color: "#059669" }]}>
                   ₹{liveTotalPaid.toLocaleString("en-IN")}
                 </Text>
-                <MaterialIcons name="info-outline" size={14} color="#059669" />
+                <MaterialIcons name="info-outline" size={13} color="#059669" />
               </View>
-              <Text style={styles.financeLabel}>Total Paid (Tap for details)</Text>
+              <Text style={styles.financeLabel} numberOfLines={1}>Total Paid</Text>
             </Pressable>
+
+            <View
+              style={[
+                styles.financeBlock,
+                {
+                  backgroundColor: isAdvancePaid ? "#ecfdf5" : liveNetPending > 0 ? "#fef2f2" : "#f8fafc",
+                  borderWidth: 1.5,
+                  borderColor: isAdvancePaid ? "#05966940" : liveNetPending > 0 ? "#ef444440" : colors.border.subtle,
+                },
+              ]}
+            >
+              <View style={{ flexDirection: "row", alignItems: "center", justifyContent: "center", gap: 3 }}>
+                <Text
+                  style={[
+                    styles.financeNum,
+                    { color: isAdvancePaid ? "#059669" : liveNetPending > 0 ? "#dc2626" : colors.text.muted },
+                  ]}
+                >
+                  ₹{Math.abs(liveNetPending).toLocaleString("en-IN")}
+                </Text>
+              </View>
+              <Text
+                style={[
+                  styles.financeLabel,
+                  { color: isAdvancePaid ? "#059669" : liveNetPending > 0 ? "#dc2626" : colors.text.muted },
+                ]}
+                numberOfLines={1}
+              >
+                {isAdvancePaid ? "Advance Paid" : "Remaining Due"}
+              </Text>
+            </View>
           </View>
 
           <View style={styles.financeDivider} />
@@ -1669,6 +1762,35 @@ function WorkerDetails() {
             <Text style={styles.breakdownLabelTotal}>Calculated Net Earned Wages</Text>
             <Text style={styles.breakdownValueTotal}>
               ₹{liveTotalWages.toLocaleString("en-IN")}
+            </Text>
+          </View>
+
+          <View style={[styles.breakdownRow, { marginTop: 6 }]}>
+            <View style={styles.breakdownLabelContainer}>
+              <MaterialIcons name="payments" size={16} color={colors.accent.success} style={{ marginRight: 6 }} />
+              <Text style={styles.breakdownLabel}>Total Wage Payments (Paid)</Text>
+            </View>
+            <Text style={[styles.breakdownValue, { color: colors.accent.success, fontWeight: "700" }]}>
+              - ₹{liveTotalPaid.toLocaleString("en-IN")}
+            </Text>
+          </View>
+
+          <View style={[
+            styles.breakdownRowTotal,
+            {
+              backgroundColor: isAdvancePaid ? "#ecfdf5" : liveNetPending > 0 ? "#fef2f2" : colors.bg.primary,
+              borderColor: isAdvancePaid ? "#05966940" : liveNetPending > 0 ? "#ef444440" : colors.border.subtle,
+              borderWidth: 1,
+              borderRadius: 10,
+              padding: 10,
+              marginTop: 6,
+            }
+          ]}>
+            <Text style={[styles.breakdownLabelTotal, { color: isAdvancePaid ? "#059669" : liveNetPending > 0 ? "#dc2626" : colors.text.primary }]}>
+              {isAdvancePaid ? "Net Advance Balance" : "Net Remaining Due"}
+            </Text>
+            <Text style={[styles.breakdownValueTotal, { color: isAdvancePaid ? "#059669" : liveNetPending > 0 ? "#dc2626" : colors.text.primary }]}>
+              ₹{Math.abs(liveNetPending).toLocaleString("en-IN")}
             </Text>
           </View>
 
@@ -1840,12 +1962,23 @@ function WorkerDetails() {
           <Pressable
             style={[
               styles.bigActionBtn,
-              { backgroundColor: "#10b981", flex: 1 },
+              { backgroundColor: liveNetPending > 0 ? colors.accent.primary : "#10b981", flex: 1 },
             ]}
-            onPress={() => setShowPaymentModal(true)}
+            onPress={() => {
+              if (liveNetPending > 0 && !payAmount) {
+                setPayAmount(String(liveNetPending));
+              }
+              setShowPaymentModal(true);
+            }}
           >
-            <MaterialIcons name="add-circle-outline" size={20} color={colors.bg.card} />
-            <Text style={styles.bigActionBtnText}>Pay Advance</Text>
+            <MaterialIcons
+              name={liveNetPending > 0 ? "payment" : "add-circle-outline"}
+              size={20}
+              color={liveNetPending > 0 ? "#1A1D27" : colors.bg.card}
+            />
+            <Text style={[styles.bigActionBtnText, liveNetPending > 0 && { color: "#1A1D27" }]}>
+              {liveNetPending > 0 ? "Pay Due" : "Pay Advance"}
+            </Text>
           </Pressable>
         </View>
 
@@ -2363,19 +2496,22 @@ const getStyles = (theme) => {
       padding: 16,
       marginBottom: 16,
     },
-    financeRow: { flexDirection: "row", gap: 8 },
+    financeRow: { flexDirection: "row", gap: 6 },
     financeBlock: {
       flex: 1,
       borderRadius: 12,
-      padding: 12,
+      padding: 10,
+      paddingHorizontal: 4,
       alignItems: "center",
+      justifyContent: "center",
     },
-    financeNum: { fontSize: 16, fontWeight: "800" },
+    financeNum: { fontSize: 15, fontWeight: "800" },
     financeLabel: {
       fontSize: 10,
       fontWeight: "600",
       color: colors.text.muted,
       marginTop: 2,
+      textAlign: "center",
     },
     actionRow: { flexDirection: "row", gap: 10, marginBottom: 16 },
     bigActionBtn: {

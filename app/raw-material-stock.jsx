@@ -30,7 +30,7 @@ function RawMaterialStockManager() {
   const router = useRouter();
   const { scrollViewRef, handleScroll, handleContentSizeChange } = useScrollRestoration("/raw-material-stock");
   const { items, loading: itemsLoading } = useContext(ItemContext);
-  const { addTransaction } = useContext(RawMaterialContext);
+  const { addTransaction, logs } = useContext(RawMaterialContext);
   const { suppliers, loading: suppliersLoading } = useContext(RawMaterialSupplierContext);
   const { profile } = useContext(UserContext);
 
@@ -42,6 +42,7 @@ function RawMaterialStockManager() {
   const [isModalOpen, setIsModalOpen] = useState(false);
   const [selectedDate, setSelectedDate] = useState(new Date());
   const [isDatePickerOpen, setIsDatePickerOpen] = useState(false);
+  const [isPrefilledFromLast, setIsPrefilledFromLast] = useState(false);
 
   // Form Fields
   const [qty, setQty] = useState("");
@@ -69,15 +70,37 @@ function RawMaterialStockManager() {
     setActiveMaterial(material);
     setLogType(type);
     setSelectedDate(new Date());
-    setQty("");
     setNotes("");
     setErrorMsg("");
 
     if (type === "in") {
-      setCostPrice(String(material.costPrice || ""));
-      
-      // Default to first supplier supplying this material if any
-      const defaultSupplier = suppliers.find(
+      // Find the last purchase log for this specific raw material
+      const lastPurchase = (logs || []).find(
+        (l) => l.materialId === material.id && l.type === "purchase"
+      );
+
+      if (lastPurchase) {
+        setQty(lastPurchase.quantity !== undefined && lastPurchase.quantity !== null ? String(lastPurchase.quantity) : "");
+        setCostPrice(
+          lastPurchase.costPerUnit !== undefined && lastPurchase.costPerUnit !== null
+            ? String(lastPurchase.costPerUnit)
+            : lastPurchase.rate !== undefined && lastPurchase.rate !== null
+            ? String(lastPurchase.rate)
+            : ""
+        );
+        setIsPrefilledFromLast(true);
+      } else {
+        setQty("");
+        setCostPrice("");
+        setIsPrefilledFromLast(false);
+      }
+
+      // Default to last purchase supplier or first supplier supplying this material if any
+      const lastSupplier = lastPurchase?.supplierId
+        ? suppliers.find((s) => s.id === lastPurchase.supplierId && s.status !== "inactive")
+        : null;
+
+      const defaultSupplier = lastSupplier || suppliers.find(
         (s) =>
           s.status !== "inactive" &&
           s.suppliedMaterials &&
@@ -86,6 +109,24 @@ function RawMaterialStockManager() {
       setSelectedSupplierId(defaultSupplier ? defaultSupplier.id : "");
       setAmountPaid("0");
       setPaymentStatus("balance");
+    } else if (type === "out") {
+      // Find the last consumption log for this specific raw material
+      const lastConsumption = (logs || []).find(
+        (l) => l.materialId === material.id && l.type === "consumption"
+      );
+
+      if (lastConsumption && lastConsumption.quantity !== undefined && lastConsumption.quantity !== null) {
+        setQty(String(lastConsumption.quantity));
+        setIsPrefilledFromLast(true);
+      } else {
+        setQty("");
+        setIsPrefilledFromLast(false);
+      }
+      setCostPrice("");
+    } else {
+      setQty("");
+      setCostPrice("");
+      setIsPrefilledFromLast(false);
     }
     
     setIsModalOpen(true);
@@ -95,6 +136,9 @@ function RawMaterialStockManager() {
     setIsModalOpen(false);
     setActiveMaterial(null);
     setLogType(null);
+    setQty("");
+    setCostPrice("");
+    setIsPrefilledFromLast(false);
     setShowSupplierDropdown(false);
   };
 
@@ -372,6 +416,30 @@ function RawMaterialStockManager() {
                   Material: <Text style={styles.materialMetaVal}>{activeMaterial.itemName}</Text>
                 </Text>
 
+                {isPrefilledFromLast && (
+                  <View
+                    style={{
+                      flexDirection: "row",
+                      alignItems: "center",
+                      gap: 5,
+                      marginTop: 4,
+                      marginBottom: 8,
+                      paddingHorizontal: 8,
+                      paddingVertical: 4,
+                      backgroundColor: `${colors.accent.primary}15`,
+                      borderRadius: 6,
+                      alignSelf: "flex-start",
+                    }}
+                  >
+                    <MaterialIcons name="history" size={13} color={colors.accent.primary} />
+                    <Text style={{ fontSize: 11, fontWeight: "600", color: colors.accent.primary }}>
+                      {logType === "in"
+                        ? "Auto-filled from last purchase transaction"
+                        : "Auto-filled from last consumption transaction"}
+                    </Text>
+                  </View>
+                )}
+
                 {/* Transaction Date Selector */}
                 <View style={styles.formGroup}>
                   <Text style={styles.inputLabel}>Date</Text>
@@ -428,7 +496,8 @@ function RawMaterialStockManager() {
                       <TextInput
                         style={styles.input}
                         keyboardType="numeric"
-                        placeholder="e.g., 50"
+                        placeholder="Enter quantity"
+                        placeholderTextColor={colors.text.muted}
                         value={qty}
                         onChangeText={setQty}
                         editable={!saving}
@@ -440,6 +509,8 @@ function RawMaterialStockManager() {
                       <TextInput
                         style={styles.input}
                         keyboardType="numeric"
+                        placeholder="Enter cost per unit"
+                        placeholderTextColor={colors.text.muted}
                         value={costPrice}
                         onChangeText={setCostPrice}
                         editable={!saving}

@@ -26,6 +26,7 @@ import BackButton from "../components/BackButton";
 import { ExpenseContext } from "../context/ExpenseContext";
 import { RawMaterialSupplierContext } from "../context/RawMaterialSupplierContext";
 import { WorkerContext } from "../context/WorkerContext";
+import { OrderContext } from "../context/OrderContext";
 import { RawMaterialContext } from "../context/RawMaterialContext";
 import { DeliveryPartnerContext } from "../context/DeliveryPartnerContext";
 import { db, normalizeDateValue } from "../../src/config/firebase";
@@ -145,9 +146,10 @@ export default function ExpenseBalances() {
 
   const { suppliers, loading: suppliersLoading } = useContext(RawMaterialSupplierContext) as any;
   const { workers, loading: workersLoading, logPayment, deleteWorkerPayment } = useContext(WorkerContext) as any;
+  const { orders, loading: ordersLoading } = useContext(OrderContext) as any;
   const { addTransaction, logs, deleteTransaction: deleteRawTransaction } = useContext(RawMaterialContext) as any;
   const { partners: deliveryPartners, loading: partnersLoading } = useContext(DeliveryPartnerContext) as any;
-  const loading = expensesLoading || suppliersLoading || workersLoading || partnersLoading;
+  const loading = expensesLoading || suppliersLoading || workersLoading || partnersLoading || ordersLoading;
 
   const [refreshing, setRefreshing] = useState(false);
   const [searchQuery, setSearchQuery] = useState("");
@@ -165,9 +167,35 @@ export default function ExpenseBalances() {
   const [isRepayMode, setIsRepayMode] = useState(false);
   const [expandedExpenseId, setExpandedExpenseId] = useState<string | null>(null);
 
-  // Real-time Firestore payment listeners for worker & delivery partner payments
+  // Calculation Breakdown & Statement Modal State
+  const [isCalcModalOpen, setIsCalcModalOpen] = useState(false);
+  const [calcTargetType, setCalcTargetType] = useState<"supplier" | "worker" | "delivery" | null>(null);
+  const [calcTarget, setCalcTarget] = useState<any>(null);
+  const [calcViewTab, setCalcViewTab] = useState<"ledger" | "breakdown">("ledger");
+  const [ledgerSortOrder, setLedgerSortOrder] = useState<"desc" | "asc">("desc");
+
+  const handleOpenCalcModal = (target: any, type: "supplier" | "worker" | "delivery") => {
+    setCalcTarget(target);
+    setCalcTargetType(type);
+    setCalcViewTab("ledger");
+    setLedgerSortOrder("desc");
+    setIsCalcModalOpen(true);
+  };
+
+  const handleCloseCalcModal = () => {
+    setIsCalcModalOpen(false);
+    setCalcTarget(null);
+    setCalcTargetType(null);
+  };
+
+  // Real-time Firestore payment listeners for worker & delivery partner payments, attendance, trips, and bonuses
   const [workerPayments, setWorkerPayments] = useState<any[]>([]);
   const [deliveryPayments, setDeliveryPayments] = useState<any[]>([]);
+  const [workerAttendance, setWorkerAttendance] = useState<any[]>([]);
+  const [deliveryTrips, setDeliveryTrips] = useState<any[]>([]);
+  const [workerBonuses, setWorkerBonuses] = useState<any[]>([]);
+  const [deliveryBonuses, setDeliveryBonuses] = useState<any[]>([]);
+  const [attendanceLoaded, setAttendanceLoaded] = useState(false);
 
   useEffect(() => {
     const unsubWorkerPay = onSnapshot(collection(db, "workerPayments"), (snapshot) => {
@@ -188,11 +216,145 @@ export default function ExpenseBalances() {
       setDeliveryPayments(docs);
     }, (err) => console.log("deliveryPayments error:", err));
 
+    const unsubWorkerAtt = onSnapshot(collection(db, "workerAttendance"), (snapshot) => {
+      const docs = snapshot.docs.map((d) => ({
+        id: d.id,
+        ...d.data(),
+        createdAt: normalizeDateValue(d.data().createdAt),
+      }));
+      setWorkerAttendance(docs);
+      setAttendanceLoaded(true);
+    }, (err) => {
+      console.log("workerAttendance error in ExpenseBalances:", err);
+      setAttendanceLoaded(true);
+    });
+
+    const unsubTrips = onSnapshot(collection(db, "deliveryTrips"), (snapshot) => {
+      const docs = snapshot.docs.map((d) => ({
+        id: d.id,
+        ...d.data(),
+        createdAt: normalizeDateValue(d.data().createdAt),
+      }));
+      setDeliveryTrips(docs);
+    }, (err) => console.log("deliveryTrips error in ExpenseBalances:", err));
+
+    const unsubWorkerBonuses = onSnapshot(collection(db, "workerBonuses"), (snapshot) => {
+      const docs = snapshot.docs.map((d) => ({
+        id: d.id,
+        ...d.data(),
+        createdAt: normalizeDateValue(d.data().createdAt),
+      }));
+      setWorkerBonuses(docs);
+    }, (err) => console.log("workerBonuses error in ExpenseBalances:", err));
+
+    const unsubDeliveryBonuses = onSnapshot(collection(db, "deliveryPartnerBonuses"), (snapshot) => {
+      const docs = snapshot.docs.map((d) => ({
+        id: d.id,
+        ...d.data(),
+        createdAt: normalizeDateValue(d.data().createdAt),
+      }));
+      setDeliveryBonuses(docs);
+    }, (err) => console.log("deliveryPartnerBonuses error in ExpenseBalances:", err));
+
     return () => {
       unsubWorkerPay();
       unsubDeliveryPay();
+      unsubWorkerAtt();
+      unsubTrips();
+      unsubWorkerBonuses();
+      unsubDeliveryBonuses();
     };
   }, []);
+
+  // Live financial metrics computed exactly matching the Worker Profile Financial Summary (details.jsx)
+  const workerFinancialsMap = useMemo(() => {
+    const map = new Map<string, { totalEarned: number; totalPaid: number; pending: number; isAdvance: boolean; effectiveAdvance: number }>();
+    (workers || []).forEach((worker: any) => {
+      // 1. Attendance & Shift Wages
+      const workerAtts = (workerAttendance || []).filter(
+        (a: any) => String(a.workerId) === String(worker.id) && a.status !== "absent"
+      );
+      const totalAttendanceWages = workerAtts.reduce((sum: number, att: any) => {
+        let wage = 0;
+        if (worker.billingSystem === "Piece-Rate") {
+          wage = Number(att.piecesProduced || 0) * Number(worker.pieceRate || 0);
+        } else {
+          const dailyWage = Number(worker.dailyWage || 0);
+          const otHours = Number(att.overtimeHours || 0);
+          const overtimeRate = Number(worker.overtimeRate || dailyWage / 8);
+          if (att.status === "present") {
+            wage = dailyWage;
+          } else if (att.status === "half-day") {
+            wage = dailyWage / 2;
+          }
+          wage += otHours * overtimeRate;
+        }
+        return sum + wage;
+      }, 0);
+
+      // 2. Loading Charges from Orders
+      const totalLoadingWages = (orders || [])
+        .filter((o: any) => String(o.loadingWorkerId) === String(worker.id))
+        .reduce((sum: number, o: any) => sum + Number(o.loadingCharge || 0), 0);
+
+      // 3. Unloading Charges from Orders
+      const totalUnloadingWages = (orders || [])
+        .filter((o: any) => String(o.unloadingWorkerId) === String(worker.id))
+        .reduce((sum: number, o: any) => sum + Number(o.unloadingCharge || 0), 0);
+
+      // 4. Live Total Earned (Attendance + Loading + Unloading)
+      const totalEarned = totalAttendanceWages + totalLoadingWages + totalUnloadingWages;
+
+      // 5. Live Total Paid from workerPayments
+      const totalPaid = (workerPayments || [])
+        .filter((p: any) => String(p.workerId) === String(worker.id))
+        .reduce((sum: number, p: any) => sum + Number(p.amount || 0), 0);
+
+      // 6. Net Pending & Advance
+      const pending = totalEarned - totalPaid;
+      const storedAdvance = Number(worker.advanceAmount || 0);
+      const effectiveAdvance = pending < 0 ? Math.abs(pending) : storedAdvance;
+      const isAdvance = pending < 0 || (pending === 0 && storedAdvance > 0);
+
+      map.set(worker.id, {
+        totalEarned,
+        totalPaid,
+        pending,
+        isAdvance,
+        effectiveAdvance,
+      });
+    });
+    return map;
+  }, [workers, workerAttendance, orders, workerPayments]);
+
+  // Self-heal any divergent worker totals in Firestore to keep other screens in sync
+  useEffect(() => {
+    if (!attendanceLoaded || !workers || workers.length === 0) return;
+    (workers || []).forEach(async (w: any) => {
+      const fin = workerFinancialsMap.get(w.id);
+      if (!fin) return;
+      const curEarned = Number(w.totalWages || 0);
+      const curPaid = Number(w.totalPaid || 0);
+      const curPending = w.totalPending !== undefined ? Number(w.totalPending) : (curEarned - curPaid);
+      if (
+        Math.abs(curEarned - fin.totalEarned) > 0.01 ||
+        Math.abs(curPaid - fin.totalPaid) > 0.01 ||
+        Math.abs(curPending - fin.pending) > 0.01
+      ) {
+        try {
+          const wRef = doc(db, "workers", w.id);
+          await updateDoc(wRef, {
+            totalWages: fin.totalEarned,
+            totalPaid: fin.totalPaid,
+            totalPending: fin.pending,
+            updatedAt: new Date(),
+          });
+        } catch (e) {
+          console.log("Worker self-healing sync error:", e);
+        }
+      }
+    });
+  }, [attendanceLoaded, workers, workerFinancialsMap]);
 
   const parseDate = (val: any) => {
     if (!val) return new Date();
@@ -338,9 +500,12 @@ export default function ExpenseBalances() {
     let advance = 0;
     (workers || []).forEach((w: any) => {
       if (w.status === "Active" || !w.status) {
-        const pending = w.totalPending !== undefined
-          ? Number(w.totalPending)
-          : (Number(w.totalWages || 0) - Number(w.totalPaid || 0));
+        const fin = workerFinancialsMap.get(w.id);
+        const pending = fin
+          ? fin.pending
+          : (w.totalPending !== undefined
+              ? Number(w.totalPending)
+              : (Number(w.totalWages || 0) - Number(w.totalPaid || 0)));
         const storedAdvance = Number(w.advanceAmount || 0);
 
         if (pending > 0) {
@@ -355,7 +520,7 @@ export default function ExpenseBalances() {
       }
     });
     return { totalWorkerPending: outstanding, totalWorkerAdvance: advance };
-  }, [workers]);
+  }, [workers, workerFinancialsMap]);
 
   // Single-pass delivery partner metrics
   const { totalDeliveryPending, totalDeliveryAdvance } = useMemo(() => {
@@ -383,9 +548,12 @@ export default function ExpenseBalances() {
 
   // Filter workers (shows advance paid or pending due > 0; stays visible when advance exists)
   const pendingWorkers = useMemo(() => (workers || []).filter((w: any) => {
-    const pending = w.totalPending !== undefined
-      ? Number(w.totalPending)
-      : (Number(w.totalWages || 0) - Number(w.totalPaid || 0));
+    const fin = workerFinancialsMap.get(w.id);
+    const pending = fin
+      ? fin.pending
+      : (w.totalPending !== undefined
+          ? Number(w.totalPending)
+          : (Number(w.totalWages || 0) - Number(w.totalPaid || 0)));
     const storedAdvance = Number(w.advanceAmount || 0);
 
     const hasBalanceOrAdvance = pending !== 0 || storedAdvance > 0;
@@ -394,7 +562,7 @@ export default function ExpenseBalances() {
       w.name?.toLowerCase().includes(searchQuery.toLowerCase()) ||
       w.role?.toLowerCase().includes(searchQuery.toLowerCase());
     return (hasBalanceOrAdvance || searchQuery.trim() !== "") && (w.status === "Active" || !w.status) && matchesSearch;
-  }), [workers, searchQuery]);
+  }), [workers, workerFinancialsMap, searchQuery]);
 
   // Filter delivery partners (pending balance, advance paid, or search match)
   const pendingDeliveries = useMemo(() => (deliveryPartners || []).filter((p: any) => {
@@ -502,32 +670,44 @@ export default function ExpenseBalances() {
   };
 
   const handleOpenPayModal = (target: any, type: "expense" | "supplier" | "worker" | "delivery", initialRepayMode = false) => {
-    setSelectedTarget(target);
+    let effectiveTarget = target;
+    if (type === "worker") {
+      const fin = workerFinancialsMap.get(target.id);
+      if (fin) {
+        effectiveTarget = {
+          ...target,
+          totalWages: fin.totalEarned,
+          totalPaid: fin.totalPaid,
+          totalPending: fin.pending,
+        };
+      }
+    }
+    setSelectedTarget(effectiveTarget);
     setPayTargetType(type);
     setPayMethod("Cash");
     setPayNotes("");
     setIsRepayMode(initialRepayMode);
 
     const isAdvanceOrRepay = initialRepayMode || (
-      type === "supplier" && Number(target.balance || 0) < 0
+      type === "supplier" && Number(effectiveTarget.balance || 0) < 0
     ) || (
-      type === "worker" && ((target.totalPending !== undefined ? Number(target.totalPending) : (Number(target.totalWages || 0) - Number(target.totalPaid || 0))) < 0 || Number(target.advanceAmount || 0) > 0)
+      type === "worker" && ((effectiveTarget.totalPending !== undefined ? Number(effectiveTarget.totalPending) : (Number(effectiveTarget.totalWages || 0) - Number(effectiveTarget.totalPaid || 0))) < 0 || Number(effectiveTarget.advanceAmount || 0) > 0)
     ) || (
-      type === "delivery" && Number(target.totalPending || 0) < 0
+      type === "delivery" && Number(effectiveTarget.totalPending || 0) < 0
     );
 
     if (isAdvanceOrRepay) {
       setPayAmount("");
     } else {
       if (type === "expense") {
-        setPayAmount(String(target.remainingAmount !== undefined ? target.remainingAmount : target.amount));
+        setPayAmount(String(effectiveTarget.remainingAmount !== undefined ? effectiveTarget.remainingAmount : effectiveTarget.amount));
       } else if (type === "supplier") {
-        setPayAmount(String(target.balance || ""));
+        setPayAmount(String(effectiveTarget.balance || ""));
       } else if (type === "worker") {
-        const workerPending = target.totalPending !== undefined ? Number(target.totalPending) : (Number(target.totalWages || 0) - Number(target.totalPaid || 0));
+        const workerPending = effectiveTarget.totalPending !== undefined ? Number(effectiveTarget.totalPending) : (Number(effectiveTarget.totalWages || 0) - Number(effectiveTarget.totalPaid || 0));
         setPayAmount(String(workerPending > 0 ? workerPending : ""));
       } else if (type === "delivery") {
-        setPayAmount(String(target.totalPending || ""));
+        setPayAmount(String(effectiveTarget.totalPending || ""));
       }
     }
 
@@ -557,7 +737,8 @@ export default function ExpenseBalances() {
     } else if (payTargetType === "supplier") {
       remaining = Number(selectedTarget.balance || 0);
     } else if (payTargetType === "worker") {
-      remaining = Number(selectedTarget.totalWages || 0) - Number(selectedTarget.totalPaid || 0);
+      const fin = workerFinancialsMap.get(selectedTarget.id);
+      remaining = fin ? fin.pending : (Number(selectedTarget.totalWages || 0) - Number(selectedTarget.totalPaid || 0));
     } else if (payTargetType === "delivery") {
       remaining = Number(selectedTarget.totalPending || 0);
     }
@@ -679,6 +860,475 @@ export default function ExpenseBalances() {
       setIsSavingPayment(false);
     }
   };
+
+  // Comprehensive Calculation & Itemized Account Ledger Engine for Long-Pressed Profile
+  const calcAccountDetails = useMemo(() => {
+    if (!calcTarget || !calcTargetType) return null;
+
+    if (calcTargetType === "supplier") {
+      const sId = calcTarget.id;
+      const rawEntries: any[] = [];
+
+      (logs || []).forEach((log: any) => {
+        if (log.supplierId !== sId) return;
+        const d = parseDate(log.date || log.createdAt);
+        if (log.type === "purchase") {
+          const qty = Number(log.quantity || 0);
+          const rate = Number(log.costPerUnit || log.rate || 0);
+          const cost = Number(log.totalCost || (qty * rate) || 0);
+          const paid = Number(log.amountPaid || 0);
+          rawEntries.push({
+            id: `log-${log.id}`,
+            date: d,
+            type: "purchase",
+            title: `Material Purchase: ${log.materialName || "Raw Material"}`,
+            subtitle: `${qty > 0 ? `${qty} ${log.unit || "units"} @ ₹${rate}` : ""}${log.notes ? ` • ${log.notes}` : ""}`,
+            creditAmount: cost,
+            debitAmount: paid,
+            incurredAmount: cost,
+            paidAmount: paid,
+            notes: log.notes || "",
+            raw: log,
+          });
+        } else if (log.type === "payment") {
+          const amt = Number(log.amount || 0);
+          rawEntries.push({
+            id: `log-${log.id}`,
+            date: d,
+            type: "payment",
+            title: "Direct Supplier Payment",
+            subtitle: `${log.paymentMethod || "Cash"}${log.notes ? ` • ${log.notes}` : ""}`,
+            creditAmount: 0,
+            debitAmount: amt,
+            incurredAmount: 0,
+            paidAmount: amt,
+            notes: log.notes || "",
+            raw: log,
+          });
+        }
+      });
+
+      (orders || []).forEach((o: any) => {
+        if (o.customerId === sId || o.customerId === `sup_${sId}` || o.customerId === `supplier_${sId}`) {
+          const d = parseDate(o.createdAt || o.date);
+          const total = Number(o.total || 0);
+          const paid = Number(o.paidAmount || 0);
+          rawEntries.push({
+            id: `order-${o.id}`,
+            date: d,
+            type: "order",
+            title: `Product Order #${o.id.slice(-6).toUpperCase()}`,
+            subtitle: `${o.itemName || "Bricks"} (${o.quantity || 0} pcs)`,
+            creditAmount: total,
+            debitAmount: paid,
+            incurredAmount: total,
+            paidAmount: paid,
+            notes: o.notes || "",
+            raw: o,
+          });
+        }
+      });
+
+      rawEntries.sort((a, b) => a.date.getTime() - b.date.getTime());
+
+      let running = 0;
+      let totalCredit = 0;
+      let totalDebit = 0;
+
+      const ledger = rawEntries.map((entry) => {
+        const cr = Number(entry.creditAmount || 0);
+        const dr = Number(entry.debitAmount || 0);
+        totalCredit += cr;
+        totalDebit += dr;
+        running += (cr - dr);
+        return {
+          ...entry,
+          credit: cr,
+          debit: dr,
+          runningBalance: running,
+          balanceType: running > 0 ? "Cr" : running < 0 ? "Dr" : "Nil",
+        };
+      });
+
+      const displayLedger = [...ledger].reverse();
+      const netBalance = Number(calcTarget.balance !== undefined ? calcTarget.balance : (totalCredit - totalDebit));
+      const isAdvance = netBalance < 0;
+
+      return {
+        type: "supplier",
+        name: calcTarget.name,
+        subtitle: `Agent: ${calcTarget.contactPerson || "N/A"}${calcTarget.phone ? ` • ${calcTarget.phone}` : ""}`,
+        netBalance,
+        isAdvance,
+        totalIncurred: totalCredit,
+        totalPaid: totalDebit,
+        totalCredit,
+        totalDebit,
+        ledger,
+        displayLedger,
+        breakdownStats: [
+          { label: "Total Purchases (Cr)", value: totalCredit, icon: "inventory-2", color: colors.accent.warning },
+          { label: "Total Paid (Dr)", value: totalDebit, icon: "payments", color: colors.accent.success },
+          { label: isAdvance ? "Advance Paid (Dr)" : "Balance Due (Cr)", value: Math.abs(netBalance), icon: "account-balance-wallet", color: isAdvance ? colors.accent.success : colors.accent.danger },
+        ],
+      };
+    }
+
+    if (calcTargetType === "worker") {
+      const wId = calcTarget.id;
+      const rawEntries: any[] = [];
+      const isPieceRate = calcTarget.billingSystem === "Piece-Rate";
+      const pieceRate = Number(calcTarget.pieceRate || 0);
+      const dailyWage = Number(calcTarget.dailyWage || 0);
+      const overtimeRate = Number(calcTarget.overtimeRate || (dailyWage > 0 ? dailyWage / 8 : 0));
+
+      (workerAttendance || []).forEach((att: any) => {
+        if (String(att.workerId) !== String(wId) || att.status === "absent") return;
+        const d = parseDate(att.createdAt || att.date);
+        let wage = 0;
+        let subtitle = "";
+        if (isPieceRate) {
+          const pieces = Number(att.piecesProduced || 0);
+          wage = pieces * pieceRate;
+          subtitle = `${pieces} units produced @ ₹${pieceRate}/pc`;
+        } else {
+          const otHours = Number(att.overtimeHours || 0);
+          if (att.status === "present") {
+            wage = dailyWage;
+            subtitle = "Full Day Shift";
+          } else if (att.status === "half-day") {
+            wage = dailyWage / 2;
+            subtitle = "Half Day Shift";
+          }
+          if (otHours > 0) {
+            const otWage = otHours * overtimeRate;
+            wage += otWage;
+            subtitle += ` + ${otHours}h OT (@ ₹${overtimeRate.toFixed(1)}/h)`;
+          }
+        }
+
+        rawEntries.push({
+          id: `att-${att.id}`,
+          date: d,
+          type: "wage",
+          title: `Shift Wage: ${att.status === "present" ? "Present" : att.status === "half-day" ? "Half-Day" : "Work Shift"}`,
+          subtitle,
+          creditAmount: wage,
+          debitAmount: 0,
+          incurredAmount: wage,
+          paidAmount: 0,
+          notes: att.notes || "",
+          raw: att,
+        });
+      });
+
+      (orders || []).forEach((o: any) => {
+        if (String(o.loadingWorkerId) === String(wId)) {
+          const charge = Number(o.loadingCharge || 0);
+          if (charge > 0) {
+            rawEntries.push({
+              id: `load-${o.id}`,
+              date: parseDate(o.createdAt || o.orderDate),
+              type: "loading",
+              title: `Loading Charge: Order #${o.id.slice(-6).toUpperCase()}`,
+              subtitle: `${o.customerName || "Customer"} (${o.quantity || 0} bricks)`,
+              creditAmount: charge,
+              debitAmount: 0,
+              incurredAmount: charge,
+              paidAmount: 0,
+              notes: o.notes || "",
+              raw: o,
+            });
+          }
+        }
+      });
+
+      (orders || []).forEach((o: any) => {
+        if (String(o.unloadingWorkerId) === String(wId)) {
+          const charge = Number(o.unloadingCharge || 0);
+          if (charge > 0) {
+            rawEntries.push({
+              id: `unload-${o.id}`,
+              date: parseDate(o.createdAt || o.orderDate),
+              type: "unloading",
+              title: `Unloading Charge: Order #${o.id.slice(-6).toUpperCase()}`,
+              subtitle: `${o.customerName || "Customer"} (${o.quantity || 0} bricks)`,
+              creditAmount: charge,
+              debitAmount: 0,
+              incurredAmount: charge,
+              paidAmount: 0,
+              notes: o.notes || "",
+              raw: o,
+            });
+          }
+        }
+      });
+
+      (workerBonuses || []).forEach((b: any) => {
+        if (String(b.workerId) === String(wId)) {
+          const amt = Number(b.amount || 0);
+          if (amt > 0) {
+            rawEntries.push({
+              id: `bonus-${b.id}`,
+              date: parseDate(b.createdAt || b.date),
+              type: "bonus",
+              title: `⭐ Bonus: ${b.reason || "Performance Bonus"}`,
+              subtitle: b.notes || "Worker Incentive",
+              creditAmount: amt,
+              debitAmount: 0,
+              incurredAmount: amt,
+              paidAmount: 0,
+              notes: b.notes || "",
+              raw: b,
+            });
+          }
+        }
+      });
+
+      (workerPayments || []).forEach((p: any) => {
+        if (String(p.workerId) === String(wId)) {
+          const amt = Number(p.amount || 0);
+          const isRepay = amt < 0;
+          rawEntries.push({
+            id: `pay-${p.id}`,
+            date: parseDate(p.createdAt || p.date),
+            type: "payment",
+            title: isRepay ? "Advance Repaid by Worker" : "Wage Payment Disbursed",
+            subtitle: `${p.paymentMethod || "Cash"}${p.notes ? ` • ${p.notes}` : ""}`,
+            creditAmount: isRepay ? Math.abs(amt) : 0,
+            debitAmount: isRepay ? 0 : amt,
+            incurredAmount: 0,
+            paidAmount: amt,
+            notes: p.notes || "",
+            raw: p,
+          });
+        }
+      });
+
+      rawEntries.sort((a, b) => a.date.getTime() - b.date.getTime());
+
+      let running = 0;
+      let totalCredit = 0;
+      let totalDebit = 0;
+      let attEarned = 0;
+      let loadEarned = 0;
+      let unloadEarned = 0;
+      let bonusEarned = 0;
+
+      const ledger = rawEntries.map((entry) => {
+        const cr = Number(entry.creditAmount || 0);
+        const dr = Number(entry.debitAmount || 0);
+        if (entry.type === "wage") attEarned += cr;
+        if (entry.type === "loading") loadEarned += cr;
+        if (entry.type === "unloading") unloadEarned += cr;
+        if (entry.type === "bonus") bonusEarned += cr;
+
+        totalCredit += cr;
+        totalDebit += dr;
+        running += (cr - dr);
+
+        return {
+          ...entry,
+          credit: cr,
+          debit: dr,
+          runningBalance: running,
+          balanceType: running > 0 ? "Cr" : running < 0 ? "Dr" : "Nil",
+        };
+      });
+
+      const displayLedger = [...ledger].reverse();
+      const fin = workerFinancialsMap.get(calcTarget.id);
+      const pending = fin ? fin.pending : (totalCredit - totalDebit);
+      const storedAdvance = Number(calcTarget.advanceAmount || 0);
+      const effectiveAdvance = fin ? fin.effectiveAdvance : (pending < 0 ? Math.abs(pending) : storedAdvance);
+      const isAdvance = fin ? fin.isAdvance : (pending < 0 || (pending === 0 && storedAdvance > 0));
+
+      return {
+        type: "worker",
+        name: calcTarget.name,
+        subtitle: `${calcTarget.role || "Worker"} • ${isPieceRate ? "Piece-Rate System" : "Time-Based Wage System"}`,
+        netBalance: isAdvance ? -effectiveAdvance : pending,
+        isAdvance,
+        totalIncurred: totalCredit,
+        totalPaid: totalDebit,
+        totalCredit,
+        totalDebit,
+        ledger,
+        displayLedger,
+        breakdownStats: [
+          { label: "Shift Wages (Cr)", value: attEarned, icon: "construction", color: colors.accent.primary },
+          { label: "Loading Charges (Cr)", value: loadEarned, icon: "inventory-2", color: colors.accent.info },
+          { label: "Unloading Charges (Cr)", value: unloadEarned, icon: "move-to-inbox", color: "#8b5cf6" },
+          ...(bonusEarned > 0 ? [{ label: "Bonuses (Cr)", value: bonusEarned, icon: "stars", color: "#f59e0b" }] : []),
+          { label: "Total Paid (Dr)", value: totalDebit, icon: "payments", color: colors.accent.success },
+          { label: isAdvance ? "Advance Paid (Dr)" : "Pending Wage Due (Cr)", value: isAdvance ? effectiveAdvance : Math.abs(pending), icon: "account-balance-wallet", color: isAdvance ? colors.accent.success : colors.accent.danger },
+        ],
+      };
+    }
+
+    if (calcTargetType === "delivery") {
+      const pId = calcTarget.id;
+      const rawEntries: any[] = [];
+
+      (deliveryTrips || []).forEach((t: any) => {
+        if (String(t.partnerId) !== String(pId)) return;
+        const d = parseDate(t.createdAt || t.tripDate);
+        const load = Number(t.loadingCharge || 0);
+        const unload = Number(t.unloadingCharge || 0);
+
+        // Resolve base freight charge correctly:
+        // Priority 1: Use baseDeliveryCharge if present (e.g. ₹4 for 2 bricks @ ₹2)
+        // Priority 2: If deliveryCharge is present, it is the total trip payout (e.g. ₹8), so base = deliveryCharge - load - unload (8 - 2 - 2 = 4)
+        // Priority 3: Otherwise fallback to deliveryCharge
+        let base = 0;
+        if (t.baseDeliveryCharge !== undefined && t.baseDeliveryCharge !== null) {
+          base = Number(t.baseDeliveryCharge);
+        } else if (t.deliveryCharge !== undefined && t.deliveryCharge !== null) {
+          const rawDelCharge = Number(t.deliveryCharge || 0);
+          if (rawDelCharge >= load + unload) {
+            base = rawDelCharge - load - unload;
+          } else {
+            base = rawDelCharge;
+          }
+        }
+
+        // The total credit owed to the driver for this trip is base freight + loading + unloading
+        // (which matches t.deliveryCharge when deliveryCharge represents the total trip payout)
+        const total = (t.deliveryCharge !== undefined && Number(t.deliveryCharge) > 0)
+          ? Math.max(Number(t.deliveryCharge), base + load + unload)
+          : (base + load + unload);
+
+        let subtitle = `Freight: ₹${base}`;
+        if (load > 0) subtitle += ` + Load: ₹${load}`;
+        if (unload > 0) subtitle += ` + Unload: ₹${unload}`;
+        if (t.destination) subtitle += ` • ${t.destination}`;
+
+        rawEntries.push({
+          id: `trip-${t.id}`,
+          date: d,
+          type: "trip",
+          title: `Delivery Trip #${t.id.slice(-6).toUpperCase()}`,
+          subtitle,
+          creditAmount: total,
+          debitAmount: 0,
+          incurredAmount: total,
+          paidAmount: 0,
+          baseFreight: base,
+          loadingUnloading: load + unload,
+          notes: t.notes || "",
+          raw: t,
+        });
+      });
+
+      (deliveryBonuses || []).forEach((b: any) => {
+        if (String(b.partnerId) !== String(pId)) return;
+        const amt = Number(b.amount || 0);
+        if (amt > 0) {
+          rawEntries.push({
+            id: `bonus-${b.id}`,
+            date: parseDate(b.createdAt || b.date),
+            type: "bonus",
+            title: `⭐ Delivery Bonus: ${b.reason || "Bonus"}`,
+            subtitle: b.notes || "Performance Reward",
+            creditAmount: amt,
+            debitAmount: 0,
+            incurredAmount: amt,
+            paidAmount: 0,
+            notes: b.notes || "",
+            raw: b,
+          });
+        }
+      });
+
+      (deliveryPayments || []).forEach((p: any) => {
+        if (String(p.partnerId) !== String(pId)) return;
+        const amt = Number(p.amount || 0);
+        const isRepay = amt < 0;
+        rawEntries.push({
+          id: `pay-${p.id}`,
+          date: parseDate(p.createdAt || p.date),
+          type: "payment",
+          title: isRepay ? "Advance Repaid by Driver" : "Driver Payout Disbursed",
+          subtitle: `${p.paymentMethod || "Cash"}${p.notes ? ` • ${p.notes}` : ""}`,
+          creditAmount: isRepay ? Math.abs(amt) : 0,
+          debitAmount: isRepay ? 0 : amt,
+          incurredAmount: 0,
+          paidAmount: amt,
+          notes: p.notes || "",
+          raw: p,
+        });
+      });
+
+      rawEntries.sort((a, b) => a.date.getTime() - b.date.getTime());
+
+      let running = 0;
+      let totalCredit = 0;
+      let totalDebit = 0;
+      let baseFreight = 0;
+      let loadUnload = 0;
+      let bonusEarned = 0;
+
+      const ledger = rawEntries.map((entry) => {
+        const cr = Number(entry.creditAmount || 0);
+        const dr = Number(entry.debitAmount || 0);
+
+        if (entry.type === "trip") {
+          const b = Number(entry.baseFreight !== undefined ? entry.baseFreight : (entry.raw.baseDeliveryCharge || 0));
+          const lu = Number(entry.loadingUnloading !== undefined ? entry.loadingUnloading : (cr - b));
+          baseFreight += b;
+          loadUnload += lu;
+        }
+        if (entry.type === "bonus") bonusEarned += cr;
+
+        totalCredit += cr;
+        totalDebit += dr;
+        running += (cr - dr);
+
+        return {
+          ...entry,
+          credit: cr,
+          debit: dr,
+          runningBalance: running,
+          balanceType: running > 0 ? "Cr" : running < 0 ? "Dr" : "Nil",
+        };
+      });
+
+      const displayLedger = [...ledger].reverse();
+      const pending = Number(calcTarget.totalPending !== undefined ? calcTarget.totalPending : (totalCredit - totalDebit));
+      const isAdvance = pending < 0;
+
+      return {
+        type: "delivery",
+        name: calcTarget.name,
+        subtitle: `Vehicle: ${calcTarget.vehicleNo || "N/A"}${calcTarget.phone ? ` • ${calcTarget.phone}` : ""}`,
+        netBalance: pending,
+        isAdvance,
+        totalIncurred: totalCredit,
+        totalPaid: totalDebit,
+        totalCredit,
+        totalDebit,
+        ledger,
+        displayLedger,
+        breakdownStats: [
+          { label: "Base Trip Freight (Cr)", value: baseFreight, icon: "local-shipping", color: colors.accent.info },
+          ...(loadUnload > 0 ? [{ label: "Loading / Unloading (Cr)", value: loadUnload, icon: "inventory-2", color: "#8b5cf6" }] : []),
+          ...(bonusEarned > 0 ? [{ label: "Driver Bonuses (Cr)", value: bonusEarned, icon: "stars", color: "#f59e0b" }] : []),
+          { label: "Total Paid (Dr)", value: totalDebit, icon: "payments", color: colors.accent.success },
+          { label: isAdvance ? "Advance Paid (Dr)" : "Balance Due (Cr)", value: Math.abs(pending), icon: "account-balance-wallet", color: isAdvance ? colors.accent.success : colors.accent.danger },
+        ],
+      };
+    }
+
+    return null;
+  }, [calcTarget, calcTargetType, logs, orders, workerAttendance, workerPayments, workerBonuses, deliveryTrips, deliveryPayments, deliveryBonuses, workerFinancialsMap, colors]);
+
+  // Sorted ledger items based on user's sort selection ("desc" = newest first, "asc" = oldest first)
+  const displayedLedger = useMemo(() => {
+    if (!calcAccountDetails?.ledger) return [];
+    return ledgerSortOrder === "desc"
+      ? [...calcAccountDetails.ledger].reverse()
+      : calcAccountDetails.ledger;
+  }, [calcAccountDetails, ledgerSortOrder]);
 
   return (
     <AnimatedPage style={{ flex: 1, backgroundColor: colors.bg.primary }}>
@@ -1068,16 +1718,24 @@ export default function ExpenseBalances() {
                         >
                           <Pressable
                             onPress={() => router.push({ pathname: "/settings/raw-materials/suppliers/details", params: { id: supplier.id } } as any)}
+                            onLongPress={() => handleOpenCalcModal(supplier, "supplier")}
+                            delayLongPress={350}
                           >
                             <View style={styles.cardHeader}>
                               <View style={[styles.categoryBadge, { backgroundColor: colors.accent.primaryMuted }]}>
                                 <MaterialIcons name="local-shipping" size={20} color={colors.accent.warning} />
                               </View>
                               <View style={styles.cardHeaderInfo}>
-                                <Text style={styles.expenseTitle} numberOfLines={1}>
-                                  {supplier.name}
-                                </Text>
-                                <Text style={styles.categoryLabel}>Agent: {supplier.contactPerson || "N/A"}</Text>
+                                <View style={{ flexDirection: "row", alignItems: "center", gap: 6 }}>
+                                  <Text style={styles.expenseTitle} numberOfLines={1}>
+                                    {supplier.name}
+                                  </Text>
+                                  <View style={styles.longPressHintChip}>
+                                    <MaterialIcons name="calculate" size={11} color={colors.accent.warning} />
+                                    <Text style={[styles.longPressHintText, { color: colors.accent.warning }]}>Hold: Accounts</Text>
+                                  </View>
+                                </View>
+                                <Text style={styles.categoryLabel} numberOfLines={1}>Agent: {supplier.contactPerson || "N/A"}</Text>
                               </View>
                               <MaterialIcons name="chevron-right" size={20} color={colors.border.medium} />
                             </View>
@@ -1196,14 +1854,17 @@ export default function ExpenseBalances() {
                       Worker Accounts & Balances ({pendingWorkers.length})
                     </Text>
                     {pendingWorkers.map((worker: any, index: number) => {
-                      const pending = worker.totalPending !== undefined
-                        ? Number(worker.totalPending)
-                        : (Number(worker.totalWages || 0) - Number(worker.totalPaid || 0));
+                      const fin = workerFinancialsMap.get(worker.id);
+                      const pending = fin
+                        ? fin.pending
+                        : (worker.totalPending !== undefined
+                            ? Number(worker.totalPending)
+                            : (Number(worker.totalWages || 0) - Number(worker.totalPaid || 0)));
                       const storedAdvance = Number(worker.advanceAmount || 0);
-                      const effectiveAdvance = pending < 0 ? Math.abs(pending) : storedAdvance;
-                      const isAdvance = pending < 0 || (pending === 0 && storedAdvance > 0);
-                      const totalEarned = Number(worker.totalWages || 0);
-                      const totalPaid = Number(worker.totalPaid || 0);
+                      const effectiveAdvance = fin ? fin.effectiveAdvance : (pending < 0 ? Math.abs(pending) : storedAdvance);
+                      const isAdvance = fin ? fin.isAdvance : (pending < 0 || (pending === 0 && storedAdvance > 0));
+                      const totalEarned = fin ? fin.totalEarned : Number(worker.totalWages || 0);
+                      const totalPaid = fin ? fin.totalPaid : Number(worker.totalPaid || 0);
                       const roleIcons: Record<string, string> = {
                         Labour: "construction",
                         Operator: "engineering",
@@ -1221,16 +1882,24 @@ export default function ExpenseBalances() {
                         >
                           <Pressable
                             onPress={() => router.push({ pathname: "/settings/workers/details", params: { id: worker.id } } as any)}
+                            onLongPress={() => handleOpenCalcModal(worker, "worker")}
+                            delayLongPress={350}
                           >
                             <View style={styles.cardHeader}>
                               <View style={[styles.categoryBadge, { backgroundColor: colors.accent.primaryMuted }]}>
                                 <MaterialIcons name={roleIcon as any} size={20} color={colors.accent.primary} />
                               </View>
                               <View style={styles.cardHeaderInfo}>
-                                <Text style={styles.expenseTitle} numberOfLines={1}>
-                                  {worker.name}
-                                </Text>
-                                <Text style={styles.categoryLabel}>
+                                <View style={{ flexDirection: "row", alignItems: "center", gap: 6 }}>
+                                  <Text style={styles.expenseTitle} numberOfLines={1}>
+                                    {worker.name}
+                                  </Text>
+                                  <View style={styles.longPressHintChip}>
+                                    <MaterialIcons name="calculate" size={11} color={colors.accent.primary} />
+                                    <Text style={[styles.longPressHintText, { color: colors.accent.primary }]}>Hold: Accounts</Text>
+                                  </View>
+                                </View>
+                                <Text style={styles.categoryLabel} numberOfLines={1}>
                                   {worker.role || "Worker"} • {worker.billingSystem === "Piece-Rate" ? "Piece-Rate" : "Time-Based"}
                                 </Text>
                               </View>
@@ -1348,16 +2017,24 @@ export default function ExpenseBalances() {
                         >
                           <Pressable
                             onPress={() => router.push({ pathname: "/settings/delivery-partners/details", params: { id: partner.id } } as any)}
+                            onLongPress={() => handleOpenCalcModal(partner, "delivery")}
+                            delayLongPress={350}
                           >
                             <View style={styles.cardHeader}>
                               <View style={[styles.categoryBadge, { backgroundColor: `${colors.accent.info}18` }]}>
                                 <MaterialIcons name="local-shipping" size={20} color={colors.accent.info} />
                               </View>
                               <View style={styles.cardHeaderInfo}>
-                                <Text style={styles.expenseTitle} numberOfLines={1}>
-                                  {partner.name}
-                                </Text>
-                                <Text style={styles.categoryLabel}>
+                                <View style={{ flexDirection: "row", alignItems: "center", gap: 6 }}>
+                                  <Text style={styles.expenseTitle} numberOfLines={1}>
+                                    {partner.name}
+                                  </Text>
+                                  <View style={styles.longPressHintChip}>
+                                    <MaterialIcons name="calculate" size={11} color={colors.accent.info} />
+                                    <Text style={[styles.longPressHintText, { color: colors.accent.info }]}>Hold: Accounts</Text>
+                                  </View>
+                                </View>
+                                <Text style={styles.categoryLabel} numberOfLines={1}>
                                   Vehicle: {partner.vehicleNo || "N/A"} • Phone: {partner.phone || "N/A"}
                                 </Text>
                               </View>
@@ -1651,7 +2328,8 @@ export default function ExpenseBalances() {
                           } else if (payTargetType === "supplier") {
                             return Number(selectedTarget.balance || 0).toLocaleString("en-IN");
                           } else if (payTargetType === "worker") {
-                            return Number(selectedTarget.totalWages || 0).toLocaleString("en-IN");
+                            const fin = workerFinancialsMap.get(selectedTarget.id);
+                            return Number(fin ? fin.totalEarned : (selectedTarget.totalWages || 0)).toLocaleString("en-IN");
                           } else {
                             return Number(selectedTarget.totalPayable || 0).toLocaleString("en-IN");
                           }
@@ -1671,7 +2349,8 @@ export default function ExpenseBalances() {
                           } else if (payTargetType === "supplier") {
                             return Number(selectedTarget.balance || 0).toLocaleString("en-IN");
                           } else if (payTargetType === "worker") {
-                            return (Number(selectedTarget.totalWages || 0) - Number(selectedTarget.totalPaid || 0)).toLocaleString("en-IN");
+                            const fin = workerFinancialsMap.get(selectedTarget.id);
+                            return (fin ? fin.pending : (Number(selectedTarget.totalWages || 0) - Number(selectedTarget.totalPaid || 0))).toLocaleString("en-IN");
                           } else {
                             return Number(selectedTarget.totalPending || 0).toLocaleString("en-IN");
                           }
@@ -1767,7 +2446,8 @@ export default function ExpenseBalances() {
                     } else if (payTargetType === "supplier") {
                       rem = Number(selectedTarget.balance || 0);
                     } else if (payTargetType === "worker") {
-                      rem = Number(selectedTarget.totalWages || 0) - Number(selectedTarget.totalPaid || 0);
+                      const fin = workerFinancialsMap.get(selectedTarget.id);
+                      rem = fin ? fin.pending : (Number(selectedTarget.totalWages || 0) - Number(selectedTarget.totalPaid || 0));
                     } else if (payTargetType === "delivery") {
                       rem = Number(selectedTarget.totalPending || 0);
                     }
@@ -1800,7 +2480,8 @@ export default function ExpenseBalances() {
                       } else if (payTargetType === "supplier") {
                         remaining = Number(selectedTarget.balance || 0);
                       } else if (payTargetType === "worker") {
-                        remaining = Number(selectedTarget.totalWages || 0) - Number(selectedTarget.totalPaid || 0);
+                        const fin = workerFinancialsMap.get(selectedTarget.id);
+                        remaining = fin ? fin.pending : (Number(selectedTarget.totalWages || 0) - Number(selectedTarget.totalPaid || 0));
                       } else if (payTargetType === "delivery") {
                         remaining = Number(selectedTarget.totalPending || 0);
                       }
@@ -1816,7 +2497,10 @@ export default function ExpenseBalances() {
                         if (!selectedTarget) return;
                         let rem = 0;
                         if (payTargetType === "supplier") rem = Number(selectedTarget.balance || 0);
-                        else if (payTargetType === "worker") rem = Number(selectedTarget.totalWages || 0) - Number(selectedTarget.totalPaid || 0);
+                        else if (payTargetType === "worker") {
+                          const fin = workerFinancialsMap.get(selectedTarget.id);
+                          rem = fin ? fin.pending : (Number(selectedTarget.totalWages || 0) - Number(selectedTarget.totalPaid || 0));
+                        }
                         else if (payTargetType === "delivery") rem = Number(selectedTarget.totalPending || 0);
                         const advanceTarget = Math.max(0, rem) + 1000;
                         setPayAmount(String(advanceTarget));
@@ -2100,6 +2784,666 @@ export default function ExpenseBalances() {
           </View>
         </View>
       </Modal>
+
+      {/* Full Calculation Details & Account Ledger Modal (Press and Hold Triggered) */}
+      <Modal
+        visible={isCalcModalOpen}
+        animationType="slide"
+        transparent={true}
+        onRequestClose={handleCloseCalcModal}
+      >
+        <View style={styles.modalBackdrop}>
+          <Pressable style={styles.modalFlexSpacer} onPress={handleCloseCalcModal} />
+
+          <View style={[styles.modalContent, { maxHeight: "88%", paddingBottom: 16 }]}>
+            {/* Modal Header */}
+            <View style={styles.modalHeader}>
+              <View style={{ flexDirection: "row", alignItems: "center", gap: 10, flex: 1 }}>
+                <View
+                  style={{
+                    width: 42,
+                    height: 42,
+                    borderRadius: 12,
+                    backgroundColor:
+                      calcTargetType === "supplier"
+                        ? `${colors.accent.warning}20`
+                        : calcTargetType === "worker"
+                        ? `${colors.accent.primary}20`
+                        : `${colors.accent.info}20`,
+                    justifyContent: "center",
+                    alignItems: "center",
+                  }}
+                >
+                  <MaterialIcons
+                    name={
+                      calcTargetType === "supplier"
+                        ? "local-shipping"
+                        : calcTargetType === "worker"
+                        ? "engineering"
+                        : "local-shipping"
+                    }
+                    size={22}
+                    color={
+                      calcTargetType === "supplier"
+                        ? colors.accent.warning
+                        : calcTargetType === "worker"
+                        ? colors.accent.primary
+                        : colors.accent.info
+                    }
+                  />
+                </View>
+                <View style={{ flex: 1 }}>
+                  <View style={{ flexDirection: "row", alignItems: "center", gap: 6 }}>
+                    <Text style={[styles.modalTitle, { fontSize: 16 }]} numberOfLines={1}>
+                      {calcAccountDetails?.name || "Account Statement"}
+                    </Text>
+                  </View>
+                  <Text style={{ fontSize: 11, color: colors.text.muted }} numberOfLines={1}>
+                    {calcAccountDetails?.subtitle || "Live Calculation Statement"}
+                  </Text>
+                </View>
+              </View>
+
+              <Pressable style={styles.modalCloseBtn} onPress={handleCloseCalcModal}>
+                <MaterialIcons name="close" size={24} color={colors.text.secondary} />
+              </Pressable>
+            </View>
+
+            {/* Scrollable Modal Body */}
+            <ScrollView showsVerticalScrollIndicator={false} contentContainerStyle={{ paddingBottom: 20 }}>
+              {/* Overall Balance Hero Status Box */}
+              <View
+                style={{
+                  backgroundColor: colors.bg.primary,
+                  borderRadius: 14,
+                  padding: 14,
+                  marginVertical: 10,
+                  borderWidth: 1.5,
+                  borderColor: calcAccountDetails?.isAdvance
+                    ? `${colors.accent.success}40`
+                    : `${colors.accent.danger}40`,
+                }}
+              >
+                <View style={{ flexDirection: "row", justifyContent: "space-between", alignItems: "center" }}>
+                  <View>
+                    <Text style={{ fontSize: 10, fontWeight: "700", color: colors.text.muted, textTransform: "uppercase", letterSpacing: 0.5 }}>
+                      Net Accounting Position
+                    </Text>
+                    <Text
+                      style={{
+                        fontSize: 22,
+                        fontWeight: "800",
+                        color: calcAccountDetails?.isAdvance ? colors.accent.success : colors.accent.danger,
+                        marginTop: 2,
+                      }}
+                    >
+                      {calcAccountDetails?.isAdvance
+                        ? `₹${Math.abs(calcAccountDetails.netBalance).toLocaleString("en-IN")} Advance Paid`
+                        : `₹${Math.abs(calcAccountDetails?.netBalance || 0).toLocaleString("en-IN")} Outstanding Due`}
+                    </Text>
+                  </View>
+                  <View
+                    style={{
+                      paddingHorizontal: 10,
+                      paddingVertical: 5,
+                      borderRadius: 20,
+                      backgroundColor: calcAccountDetails?.isAdvance
+                        ? `${colors.accent.success}18`
+                        : `${colors.accent.danger}18`,
+                    }}
+                  >
+                    <Text
+                      style={{
+                        fontSize: 11,
+                        fontWeight: "700",
+                        color: calcAccountDetails?.isAdvance ? colors.accent.success : colors.accent.danger,
+                      }}
+                    >
+                      {calcAccountDetails?.isAdvance ? "Dr (Advance Paid)" : "Cr (Outstanding Due)"}
+                    </Text>
+                  </View>
+                </View>
+
+                {/* Mathematical Equation Row */}
+                <View
+                  style={{
+                    flexDirection: "row",
+                    alignItems: "center",
+                    justifyContent: "space-between",
+                    marginTop: 12,
+                    paddingTop: 10,
+                    borderTopWidth: 1,
+                    borderTopColor: colors.border.subtle,
+                  }}
+                >
+                  <View style={{ flex: 1.1 }}>
+                    <Text style={{ fontSize: 9, color: colors.text.muted, fontWeight: "700", textTransform: "uppercase" }}>
+                      Total Credit (Cr)
+                    </Text>
+                    <Text style={{ fontSize: 13, fontWeight: "700", color: colors.accent.danger, marginTop: 2 }}>
+                      ₹{(calcAccountDetails?.totalCredit || 0).toLocaleString("en-IN")}
+                    </Text>
+                  </View>
+                  <Text style={{ fontSize: 15, fontWeight: "800", color: colors.text.muted, paddingHorizontal: 4 }}>-</Text>
+                  <View style={{ flex: 1 }}>
+                    <Text style={{ fontSize: 9, color: colors.text.muted, fontWeight: "700", textTransform: "uppercase" }}>
+                      Total Debit (Dr)
+                    </Text>
+                    <Text style={{ fontSize: 13, fontWeight: "700", color: colors.accent.success, marginTop: 2 }}>
+                      ₹{(calcAccountDetails?.totalDebit || 0).toLocaleString("en-IN")}
+                    </Text>
+                  </View>
+                  <Text style={{ fontSize: 15, fontWeight: "800", color: colors.text.muted, paddingHorizontal: 4 }}>=</Text>
+                  <View style={{ flex: 1.1, alignItems: "flex-end" }}>
+                    <Text style={{ fontSize: 9, color: colors.text.muted, fontWeight: "700", textTransform: "uppercase" }}>
+                      Closing Balance
+                    </Text>
+                    <Text
+                      style={{
+                        fontSize: 13,
+                        fontWeight: "800",
+                        color: calcAccountDetails?.isAdvance ? colors.accent.success : colors.accent.danger,
+                        marginTop: 2,
+                      }}
+                    >
+                      ₹{Math.abs(calcAccountDetails?.netBalance || 0).toLocaleString("en-IN")} {calcAccountDetails?.isAdvance ? "Dr" : "Cr"}
+                    </Text>
+                  </View>
+                </View>
+              </View>
+
+              {/* View Switcher: Account Ledger vs Formula Breakdown */}
+              <View style={{ flexDirection: "row", gap: 8, marginBottom: 12, marginTop: 2 }}>
+                <Pressable
+                  style={{
+                    flex: 1,
+                    paddingVertical: 9,
+                    borderRadius: 10,
+                    alignItems: "center",
+                    backgroundColor: calcViewTab === "ledger" ? colors.accent.primary : colors.bg.primary,
+                    borderWidth: 1,
+                    borderColor: calcViewTab === "ledger" ? colors.accent.primary : colors.border.subtle,
+                  }}
+                  onPress={() => setCalcViewTab("ledger")}
+                >
+                  <Text
+                    style={{
+                      fontSize: 12,
+                      fontWeight: "700",
+                      color: calcViewTab === "ledger" ? "#ffffff" : colors.text.secondary,
+                    }}
+                  >
+                    Accounting Ledger ({displayedLedger.length})
+                  </Text>
+                </Pressable>
+
+                <Pressable
+                  style={{
+                    flex: 1,
+                    paddingVertical: 9,
+                    borderRadius: 10,
+                    alignItems: "center",
+                    backgroundColor: calcViewTab === "breakdown" ? colors.accent.primary : colors.bg.primary,
+                    borderWidth: 1,
+                    borderColor: calcViewTab === "breakdown" ? colors.accent.primary : colors.border.subtle,
+                  }}
+                  onPress={() => setCalcViewTab("breakdown")}
+                >
+                  <Text
+                    style={{
+                      fontSize: 12,
+                      fontWeight: "700",
+                      color: calcViewTab === "breakdown" ? "#ffffff" : colors.text.secondary,
+                    }}
+                  >
+                    Formula Breakdown
+                  </Text>
+                </Pressable>
+              </View>
+
+              {/* TAB 1: STATEMENT LEDGER (Accounting Debit, Credit & Running Balance Table) */}
+              {calcViewTab === "ledger" && (
+                <View>
+                  {/* Ledger Sub-Header Controls */}
+                  <View
+                    style={{
+                      flexDirection: "row",
+                      justifyContent: "space-between",
+                      alignItems: "center",
+                      marginBottom: 8,
+                    }}
+                  >
+                    <View style={{ flexDirection: "row", alignItems: "center", gap: 6 }}>
+                      <View
+                        style={{
+                          paddingHorizontal: 6,
+                          paddingVertical: 2,
+                          borderRadius: 6,
+                          backgroundColor: `${colors.accent.danger}15`,
+                        }}
+                      >
+                        <Text style={{ fontSize: 9, fontWeight: "700", color: colors.accent.danger }}>
+                          Cr = Payable
+                        </Text>
+                      </View>
+                      <View
+                        style={{
+                          paddingHorizontal: 6,
+                          paddingVertical: 2,
+                          borderRadius: 6,
+                          backgroundColor: `${colors.accent.success}15`,
+                        }}
+                      >
+                        <Text style={{ fontSize: 9, fontWeight: "700", color: colors.accent.success }}>
+                          Dr = Paid
+                        </Text>
+                      </View>
+                    </View>
+
+                    {/* Sort Order Toggle */}
+                    <Pressable
+                      style={{
+                        flexDirection: "row",
+                        alignItems: "center",
+                        gap: 4,
+                        backgroundColor: colors.bg.primary,
+                        paddingVertical: 5,
+                        paddingHorizontal: 8,
+                        borderRadius: 8,
+                        borderWidth: 1,
+                        borderColor: colors.border.subtle,
+                      }}
+                      onPress={() => setLedgerSortOrder((prev) => (prev === "desc" ? "asc" : "desc"))}
+                    >
+                      <MaterialIcons
+                        name={ledgerSortOrder === "desc" ? "arrow-downward" : "arrow-upward"}
+                        size={13}
+                        color={colors.accent.primary}
+                      />
+                      <Text style={{ fontSize: 10, fontWeight: "700", color: colors.text.secondary }}>
+                        {ledgerSortOrder === "desc" ? "Newest First" : "Oldest First"}
+                      </Text>
+                    </Pressable>
+                  </View>
+
+                  {/* Horizontal Scrollable Accounting Table */}
+                  <ScrollView
+                    horizontal
+                    showsHorizontalScrollIndicator={true}
+                    nestedScrollEnabled={true}
+                    contentContainerStyle={{ minWidth: 540, flexDirection: "column" }}
+                  >
+                    {/* Table Header Row */}
+                    <View
+                      style={{
+                        flexDirection: "row",
+                        backgroundColor: colors.bg.card,
+                        paddingVertical: 9,
+                        paddingHorizontal: 10,
+                        borderRadius: 8,
+                        borderWidth: 1,
+                        borderColor: colors.border.subtle,
+                        marginBottom: 6,
+                      }}
+                    >
+                      <Text style={{ width: 175, fontSize: 10, fontWeight: "800", color: colors.text.muted, textTransform: "uppercase", letterSpacing: 0.5 }}>
+                        Date & Particulars
+                      </Text>
+                      <Text style={{ width: 110, fontSize: 10, fontWeight: "800", color: colors.accent.success, textAlign: "right", textTransform: "uppercase", letterSpacing: 0.5 }}>
+                        Debit (Dr)
+                      </Text>
+                      <Text style={{ width: 110, fontSize: 10, fontWeight: "800", color: colors.accent.danger, textAlign: "right", textTransform: "uppercase", letterSpacing: 0.5 }}>
+                        Credit (Cr)
+                      </Text>
+                      <Text style={{ width: 125, fontSize: 10, fontWeight: "800", color: colors.text.primary, textAlign: "right", textTransform: "uppercase", letterSpacing: 0.5 }}>
+                        Balance
+                      </Text>
+                    </View>
+
+                    {/* Data Rows */}
+                    {displayedLedger.length === 0 ? (
+                      <View style={{ padding: 28, alignItems: "center", justifyContent: "center" }}>
+                        <MaterialIcons name="receipt-long" size={38} color={colors.text.muted} />
+                        <Text style={{ fontSize: 12, color: colors.text.muted, marginTop: 8 }}>
+                          No ledger entries logged yet for this account.
+                        </Text>
+                      </View>
+                    ) : (
+                      displayedLedger.map((entry: any, idx: number) => {
+                        const entryDate = entry.date instanceof Date ? entry.date : new Date(entry.date);
+                        const isPayment = entry.type === "payment";
+                        const isCr = (entry.credit || 0) > 0;
+                        const isDr = (entry.debit || 0) > 0;
+                        const balVal = Number(entry.runningBalance || 0);
+                        const balType = balVal > 0 ? "Cr (Due)" : balVal < 0 ? "Dr (Adv)" : "Nil";
+
+                        return (
+                          <View
+                            key={entry.id || idx}
+                            style={{
+                              flexDirection: "row",
+                              alignItems: "center",
+                              backgroundColor: idx % 2 === 0 ? colors.bg.primary : `${colors.bg.card}60`,
+                              paddingVertical: 9,
+                              paddingHorizontal: 10,
+                              borderBottomWidth: 1,
+                              borderBottomColor: colors.border.subtle,
+                              borderRadius: 6,
+                            }}
+                          >
+                            {/* Date & Particulars */}
+                            <View style={{ width: 175, paddingRight: 8 }}>
+                              <View style={{ flexDirection: "row", alignItems: "center", gap: 5 }}>
+                                <View
+                                  style={{
+                                    paddingHorizontal: 5,
+                                    paddingVertical: 1,
+                                    borderRadius: 4,
+                                    backgroundColor: isPayment ? `${colors.accent.success}18` : `${colors.accent.primary}18`,
+                                  }}
+                                >
+                                  <Text
+                                    style={{
+                                      fontSize: 8,
+                                      fontWeight: "800",
+                                      textTransform: "uppercase",
+                                      color: isPayment ? colors.accent.success : colors.accent.primary,
+                                    }}
+                                  >
+                                    {entry.type}
+                                  </Text>
+                                </View>
+                                <Text style={{ fontSize: 10, color: colors.text.muted, fontWeight: "600" }}>
+                                  {entryDate.toLocaleDateString("en-IN", {
+                                    day: "2-digit",
+                                    month: "short",
+                                    year: "numeric",
+                                  })}
+                                </Text>
+                              </View>
+
+                              <Text
+                                style={{
+                                  fontSize: 12,
+                                  fontWeight: "700",
+                                  color: colors.text.primary,
+                                  marginTop: 3,
+                                }}
+                                numberOfLines={1}
+                              >
+                                {entry.title}
+                              </Text>
+
+                              {entry.subtitle ? (
+                                <Text
+                                  style={{
+                                    fontSize: 10,
+                                    color: colors.text.secondary,
+                                    marginTop: 1,
+                                    lineHeight: 14,
+                                  }}
+                                  numberOfLines={2}
+                                >
+                                  {entry.subtitle}
+                                </Text>
+                              ) : null}
+                            </View>
+
+                            {/* Debit (Dr) Column - Payments Disbursed */}
+                            <View style={{ width: 110, alignItems: "flex-end", paddingRight: 6 }}>
+                              {isDr ? (
+                                <View style={{ alignItems: "flex-end" }}>
+                                  <Text style={{ fontSize: 13, fontWeight: "800", color: colors.accent.success }}>
+                                    ₹{Number(entry.debit).toLocaleString("en-IN")}
+                                  </Text>
+                                  <Text style={{ fontSize: 8, fontWeight: "700", color: colors.accent.success }}>
+                                    Dr (Paid)
+                                  </Text>
+                                </View>
+                              ) : (
+                                <Text style={{ fontSize: 13, color: colors.text.muted, fontWeight: "600" }}>—</Text>
+                              )}
+                            </View>
+
+                            {/* Credit (Cr) Column - Purchases / Wages / Owed */}
+                            <View style={{ width: 110, alignItems: "flex-end", paddingRight: 6 }}>
+                              {isCr ? (
+                                <View style={{ alignItems: "flex-end" }}>
+                                  <Text style={{ fontSize: 13, fontWeight: "800", color: colors.accent.danger }}>
+                                    ₹{Number(entry.credit).toLocaleString("en-IN")}
+                                  </Text>
+                                  <Text style={{ fontSize: 8, fontWeight: "700", color: colors.accent.danger }}>
+                                    Cr (Owed)
+                                  </Text>
+                                </View>
+                              ) : (
+                                <Text style={{ fontSize: 13, color: colors.text.muted, fontWeight: "600" }}>—</Text>
+                              )}
+                            </View>
+
+                            {/* Balance Column - Cumulative Running Balance */}
+                            <View style={{ width: 125, alignItems: "flex-end" }}>
+                              <Text
+                                style={{
+                                  fontSize: 13,
+                                  fontWeight: "800",
+                                  color: balVal < 0 ? colors.accent.success : balVal > 0 ? colors.accent.danger : colors.text.muted,
+                                }}
+                              >
+                                ₹{Math.abs(balVal).toLocaleString("en-IN")}
+                              </Text>
+                              <View
+                                style={{
+                                  marginTop: 2,
+                                  paddingHorizontal: 5,
+                                  paddingVertical: 1,
+                                  borderRadius: 4,
+                                  backgroundColor:
+                                    balVal < 0
+                                      ? `${colors.accent.success}18`
+                                      : balVal > 0
+                                      ? `${colors.accent.danger}18`
+                                      : `${colors.border.subtle}40`,
+                                }}
+                              >
+                                <Text
+                                  style={{
+                                    fontSize: 9,
+                                    fontWeight: "800",
+                                    color:
+                                      balVal < 0
+                                        ? colors.accent.success
+                                        : balVal > 0
+                                        ? colors.accent.danger
+                                        : colors.text.muted,
+                                  }}
+                                >
+                                  {balType}
+                                </Text>
+                              </View>
+                            </View>
+                          </View>
+                        );
+                      })
+                    )}
+
+                    {/* Table Summary Footer Row (Totals) */}
+                    {displayedLedger.length > 0 && (
+                      <View
+                        style={{
+                          flexDirection: "row",
+                          alignItems: "center",
+                          backgroundColor: colors.bg.card,
+                          paddingVertical: 10,
+                          paddingHorizontal: 10,
+                          borderRadius: 8,
+                          borderTopWidth: 2,
+                          borderTopColor: colors.border.medium,
+                          marginTop: 6,
+                        }}
+                      >
+                        <View style={{ width: 175 }}>
+                          <Text style={{ fontSize: 11, fontWeight: "800", color: colors.text.primary, textTransform: "uppercase" }}>
+                            Total / Closing
+                          </Text>
+                          <Text style={{ fontSize: 9, color: colors.text.muted, fontWeight: "600" }}>
+                            Account Totals
+                          </Text>
+                        </View>
+
+                        {/* Total Debit */}
+                        <View style={{ width: 110, alignItems: "flex-end", paddingRight: 6 }}>
+                          <Text style={{ fontSize: 13, fontWeight: "800", color: colors.accent.success }}>
+                            ₹{Number(calcAccountDetails?.totalDebit || 0).toLocaleString("en-IN")}
+                          </Text>
+                          <Text style={{ fontSize: 8, fontWeight: "700", color: colors.accent.success }}>
+                            Total Dr
+                          </Text>
+                        </View>
+
+                        {/* Total Credit */}
+                        <View style={{ width: 110, alignItems: "flex-end", paddingRight: 6 }}>
+                          <Text style={{ fontSize: 13, fontWeight: "800", color: colors.accent.danger }}>
+                            ₹{Number(calcAccountDetails?.totalCredit || 0).toLocaleString("en-IN")}
+                          </Text>
+                          <Text style={{ fontSize: 8, fontWeight: "700", color: colors.accent.danger }}>
+                            Total Cr
+                          </Text>
+                        </View>
+
+                        {/* Net Closing Balance */}
+                        <View style={{ width: 125, alignItems: "flex-end" }}>
+                          <Text
+                            style={{
+                              fontSize: 13,
+                              fontWeight: "800",
+                              color: calcAccountDetails?.isAdvance ? colors.accent.success : colors.accent.danger,
+                            }}
+                          >
+                            ₹{Math.abs(calcAccountDetails?.netBalance || 0).toLocaleString("en-IN")}
+                          </Text>
+                          <Text
+                            style={{
+                              fontSize: 9,
+                              fontWeight: "800",
+                              color: calcAccountDetails?.isAdvance ? colors.accent.success : colors.accent.danger,
+                            }}
+                          >
+                            {calcAccountDetails?.isAdvance ? "Dr (Advance Paid)" : "Cr (Outstanding Due)"}
+                          </Text>
+                        </View>
+                      </View>
+                    )}
+                  </ScrollView>
+                </View>
+              )}
+
+              {/* TAB 2: STEP-BY-STEP FORMULA BREAKDOWN */}
+              {calcViewTab === "breakdown" && (
+                <View style={{ gap: 8 }}>
+                  {calcAccountDetails?.breakdownStats?.map((stat: any, idx: number) => (
+                    <View
+                      key={idx}
+                      style={{
+                        backgroundColor: colors.bg.primary,
+                        borderRadius: 12,
+                        padding: 12,
+                        borderWidth: 1,
+                        borderColor: colors.border.subtle,
+                        flexDirection: "row",
+                        alignItems: "center",
+                        justifyContent: "space-between",
+                      }}
+                    >
+                      <View style={{ flexDirection: "row", alignItems: "center", gap: 10 }}>
+                        <View
+                          style={{
+                            width: 36,
+                            height: 36,
+                            borderRadius: 10,
+                            backgroundColor: `${stat.color}18`,
+                            justifyContent: "center",
+                            alignItems: "center",
+                          }}
+                        >
+                          <MaterialIcons name={stat.icon as any} size={18} color={stat.color} />
+                        </View>
+                        <Text style={{ fontSize: 13, fontWeight: "600", color: colors.text.primary }}>
+                          {stat.label}
+                        </Text>
+                      </View>
+                      <Text style={{ fontSize: 14, fontWeight: "800", color: stat.color }}>
+                        ₹{Number(stat.value || 0).toLocaleString("en-IN")}
+                      </Text>
+                    </View>
+                  ))}
+                </View>
+              )}
+
+              {/* Modal Actions Footer */}
+              <View style={{ marginTop: 14, gap: 8 }}>
+                <Pressable
+                  style={{
+                    backgroundColor: colors.accent.primary,
+                    borderRadius: 12,
+                    height: 46,
+                    flexDirection: "row",
+                    alignItems: "center",
+                    justifyContent: "center",
+                    gap: 6,
+                  }}
+                  onPress={() => {
+                    const tgt = calcTarget;
+                    const type = calcTargetType;
+                    handleCloseCalcModal();
+                    if (tgt && type) {
+                      setTimeout(() => {
+                        handleOpenPayModal(tgt, type as any, false);
+                      }, 200);
+                    }
+                  }}
+                >
+                  <MaterialIcons name="payment" size={18} color="#1A1D27" />
+                  <Text style={{ fontSize: 14, fontWeight: "700", color: "#1A1D27" }}>
+                    Record / Settle Payment
+                  </Text>
+                </Pressable>
+
+                <Pressable
+                  style={{
+                    backgroundColor: colors.bg.primary,
+                    borderRadius: 12,
+                    height: 44,
+                    borderWidth: 1,
+                    borderColor: colors.border.medium,
+                    flexDirection: "row",
+                    alignItems: "center",
+                    justifyContent: "center",
+                    gap: 6,
+                  }}
+                  onPress={() => {
+                    const tgt = calcTarget;
+                    const type = calcTargetType;
+                    handleCloseCalcModal();
+                    if (type === "supplier") {
+                      router.push({ pathname: "/settings/raw-materials/suppliers/details", params: { id: tgt.id } } as any);
+                    } else if (type === "worker") {
+                      router.push({ pathname: "/settings/workers/details", params: { id: tgt.id } } as any);
+                    } else if (type === "delivery") {
+                      router.push({ pathname: "/settings/delivery-partners/details", params: { id: tgt.id } } as any);
+                    }
+                  }}
+                >
+                  <MaterialIcons name="person" size={18} color={colors.text.primary} />
+                  <Text style={{ fontSize: 13, fontWeight: "700", color: colors.text.primary }}>
+                    Open Full Profile & History Page
+                  </Text>
+                </Pressable>
+              </View>
+            </ScrollView>
+          </View>
+        </View>
+      </Modal>
     </AnimatedPage>
   );
 }
@@ -2351,11 +3695,13 @@ const getStyles = (theme: any) => {
   },
   cardHeaderInfo: {
     flex: 1,
+    marginRight: 8,
   },
   expenseTitle: {
     fontSize: 15,
     fontWeight: "700",
     color: colors.text.primary,
+    flexShrink: 1,
   },
   categoryLabel: {
     fontSize: 11,
@@ -2731,6 +4077,23 @@ const getStyles = (theme: any) => {
     fontSize: 10,
     fontWeight: "700",
     color: colors.accent.danger,
+  },
+  longPressHintChip: {
+    flexDirection: "row",
+    alignItems: "center",
+    gap: 3,
+    paddingHorizontal: 6,
+    paddingVertical: 2,
+    borderRadius: 8,
+    backgroundColor: colors.bg.primary,
+    borderWidth: 1,
+    borderColor: colors.border.subtle,
+    flexShrink: 0,
+  },
+  longPressHintText: {
+    fontSize: 9,
+    fontWeight: "700",
+    letterSpacing: 0.2,
   },
 });
 };

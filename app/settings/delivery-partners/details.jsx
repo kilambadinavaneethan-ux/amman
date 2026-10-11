@@ -482,9 +482,13 @@ function PartnerDetailsScreen() {
       const itemText = formatItemString(t) || (linkedOrder ? formatItemString(linkedOrder) : "");
 
       // Resolve base, loading, and unloading charges
-      let baseCharge = Number(t.baseDeliveryCharge !== undefined ? t.baseDeliveryCharge : (t.deliveryCharge || 0));
       let loadingFee = Number(t.loadingCharge || 0);
       let unloadingFee = Number(t.unloadingCharge || 0);
+      let baseCharge = Number(
+        t.baseDeliveryCharge !== undefined
+          ? t.baseDeliveryCharge
+          : Math.max(0, Number(t.deliveryCharge || 0) - loadingFee - unloadingFee)
+      );
 
       if (linkedOrder) {
         const orderBase = Number(linkedOrder.shipmentCharge || linkedOrder.deliveryRate || 0);
