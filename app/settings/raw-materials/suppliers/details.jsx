@@ -62,40 +62,41 @@ function SupplierDetailsScreen() {
   // Find supplier details
   const supplier = suppliers.find((s) => s.id === id);
 
-  if (!supplier) {
-    return (
-      <View style={styles.errorContainer}>
-        <MaterialIcons name="error-outline" size={48} color={colors.accent.danger} />
-        <Text style={styles.errorTitle}>Supplier Not Found</Text>
-        <Text style={styles.errorDesc}>The supplier you are looking for does not exist or has been deleted.</Text>
-        <Pressable style={styles.backLink} onPress={() => router.push("/settings/raw-materials/suppliers")}>
-          <Text style={styles.backLinkText}>Return to List</Text>
-        </Pressable>
-      </View>
-    );
-  }
-
-  const suppliedMaterialsList = items.filter(item => 
-    supplier.suppliedMaterials && supplier.suppliedMaterials.includes(item.id)
-  );
+  // Helper to safely parse dates
+  const parseLogDate = (val) => {
+    if (!val) return new Date();
+    if (val instanceof Date) return val;
+    if (typeof val?.toDate === "function") return val.toDate();
+    const d = new Date(val);
+    return isNaN(d.getTime()) ? new Date() : d;
+  };
 
   // Filter transaction ledger logs for this supplier (linked purchases or payments)
-  const ledgerLogs = logs
-    .filter((log) => log.supplierId === supplier.id)
-    .sort((a, b) => new Date(b.date).getTime() - new Date(a.date).getTime());
+  const ledgerLogs = useMemo(() => {
+    if (!supplier?.id) return [];
+    return logs
+      .filter((log) => log.supplierId === supplier.id)
+      .sort((a, b) => parseLogDate(b.date).getTime() - parseLogDate(a.date).getTime());
+  }, [logs, supplier?.id]);
 
-  // Unified Stock Movement & Order Logs stream
+  // Unified Stock Movement & Order Logs stream with Opening Balance and Running Balance calculation
   const combinedLogs = useMemo(() => {
-    const stockLogs = (ledgerLogs || []).map((l) => ({
-      ...l,
-      logKind: "ledger",
-      timestamp: new Date(l.date || l.createdAt).getTime(),
-    }));
+    if (!supplier?.id) return [];
+
+    const stockLogs = (ledgerLogs || []).map((l) => {
+      const dt = parseLogDate(l.date || l.createdAt);
+      return {
+        ...l,
+        logKind: "ledger",
+        date: dt,
+        timestamp: dt.getTime(),
+      };
+    });
 
     const orderLogs = (orders || [])
       .filter((o) => o.customerId === supplier.id || o.customerId === `sup_${supplier.id}` || o.customerId === `supplier_${supplier.id}`)
       .map((o) => {
-        const dt = o.createdAt instanceof Date ? o.createdAt : (o.createdAt?.toDate ? o.createdAt.toDate() : new Date(o.createdAt));
+        const dt = parseLogDate(o.createdAt || o.date);
         return {
           id: `order-${o.id}`,
           logKind: "order",
@@ -110,14 +111,102 @@ function SupplierDetailsScreen() {
         };
       });
 
-    return [...stockLogs, ...orderLogs].sort((a, b) => b.timestamp - a.timestamp);
-  }, [ledgerLogs, orders, supplier.id]);
+    // Check if an opening balance log is already recorded in stockLogs
+    const hasOpeningLog = stockLogs.some((l) => l.type === "opening" || l.isOpening);
+    let openingEntry = null;
+
+    if (!hasOpeningLog) {
+      const supplierCreatedDt = parseLogDate(supplier.createdAt);
+      const storedBal = Number(supplier.balance || 0);
+      const storedOpening = supplier.openingBalance !== undefined ? Number(supplier.openingBalance) : null;
+
+      // Net transactions from existing logs & orders
+      const purchasesDebt = stockLogs.filter(l => l.type === "purchase").reduce((sum, l) => {
+        const totalCost = Number(l.totalCost || 0);
+        const paid = Number(l.amountPaid !== undefined ? l.amountPaid : 0);
+        const rem = l.remainingBalance !== undefined ? Number(l.remainingBalance) : Math.max(0, totalCost - paid);
+        return sum + rem;
+      }, 0);
+      const paymentsReduction = stockLogs.filter(l => l.type === "payment").reduce((sum, l) => sum + Number(l.amount || 0), 0);
+      const adjustmentsDebt = stockLogs.filter(l => l.type === "adjustment").reduce((sum, l) => sum + Number(l.amount || 0), 0);
+      const ordersReduction = orderLogs.reduce((sum, o) => {
+        const balDue = o.balanceDue !== undefined && o.balanceDue !== null ? Number(o.balanceDue) : Math.max(0, o.total - o.paidAmount);
+        return sum + (balDue > 0 ? balDue : (o.paidAmount === 0 ? o.total : 0));
+      }, 0);
+
+      const netTransacted = purchasesDebt + adjustmentsDebt - paymentsReduction - ordersReduction;
+      const unallocatedDiff = storedBal - netTransacted;
+
+      let effectiveOpening = 0;
+      if (storedOpening !== null && storedOpening !== undefined && storedOpening !== 0) {
+        effectiveOpening = storedOpening;
+      } else if (Math.abs(unallocatedDiff) > 0.01) {
+        effectiveOpening = unallocatedDiff;
+      }
+
+      if (effectiveOpening !== 0) {
+        openingEntry = {
+          id: `opening-${supplier.id}`,
+          logKind: "ledger",
+          type: "opening",
+          isOpening: true,
+          isSynthetic: true,
+          amount: Math.abs(effectiveOpening),
+          balanceType: effectiveOpening >= 0 ? "owed" : "advance",
+          date: supplierCreatedDt,
+          timestamp: supplierCreatedDt.getTime() - 1000,
+          notes: "Opening Outstanding Balance recorded at profile creation",
+        };
+      }
+    }
+
+    const allEntries = [...stockLogs, ...orderLogs];
+    if (openingEntry) {
+      allEntries.push(openingEntry);
+    }
+
+    // Sort chronologically (oldest to newest) to calculate running balance
+    allEntries.sort((a, b) => a.timestamp - b.timestamp);
+
+    let running = 0;
+    const computedLogs = allEntries.map((log) => {
+      let change = 0;
+      if (log.logKind === "order") {
+        const balDue = log.balanceDue !== undefined && log.balanceDue !== null ? Number(log.balanceDue) : Math.max(0, log.total - log.paidAmount);
+        const offset = balDue > 0 ? balDue : (log.paidAmount === 0 ? log.total : 0);
+        change = -offset;
+      } else if (log.type === "opening") {
+        const amt = Number(log.amount || 0);
+        change = log.balanceType === "advance" ? -amt : amt;
+      } else if (log.type === "purchase") {
+        const totalCost = Number(log.totalCost || 0);
+        const paid = Number(log.amountPaid !== undefined ? log.amountPaid : 0);
+        const rem = log.remainingBalance !== undefined ? Number(log.remainingBalance) : Math.max(0, totalCost - paid);
+        change = rem;
+      } else if (log.type === "payment") {
+        change = -Number(log.amount || 0);
+      } else if (log.type === "adjustment") {
+        change = Number(log.amount || 0);
+      }
+
+      running += change;
+      return {
+        ...log,
+        balanceChange: change,
+        runningBalance: running,
+      };
+    });
+
+    // Return descending (newest first) for display
+    return computedLogs.sort((a, b) => b.timestamp - a.timestamp);
+  }, [ledgerLogs, orders, supplier]);
 
   const supplierOrders = useMemo(() => {
+    if (!supplier?.id) return [];
     return (orders || []).filter(
       (o) => o.customerId === supplier.id || o.customerId === `sup_${supplier.id}` || o.customerId === `supplier_${supplier.id}`
     );
-  }, [orders, supplier.id]);
+  }, [orders, supplier?.id]);
 
   const orderSummary = useMemo(() => {
     let totalOrderValue = 0;
@@ -138,7 +227,31 @@ function SupplierDetailsScreen() {
     };
   }, [supplierOrders]);
 
+  if (!supplier) {
+    return (
+      <View style={styles.errorContainer}>
+        <MaterialIcons name="error-outline" size={48} color={colors.accent.danger} />
+        <Text style={styles.errorTitle}>Supplier Not Found</Text>
+        <Text style={styles.errorDesc}>The supplier you are looking for does not exist or has been deleted.</Text>
+        <Pressable style={styles.backLink} onPress={() => router.push("/settings/raw-materials/suppliers")}>
+          <Text style={styles.backLinkText}>Return to List</Text>
+        </Pressable>
+      </View>
+    );
+  }
+
+  const suppliedMaterialsList = items.filter(item => 
+    supplier.suppliedMaterials && supplier.suppliedMaterials.includes(item.id)
+  );
+
   const balance = Number(supplier.balance || 0);
+  const openingBalanceVal = useMemo(() => {
+    if (!supplier) return 0;
+    if (supplier.openingBalance !== undefined) return Number(supplier.openingBalance || 0);
+    const openingLog = combinedLogs.find((l) => l.type === "opening" || l.isOpening);
+    if (openingLog) return Number(openingLog.amount || 0);
+    return 0;
+  }, [supplier, combinedLogs]);
 
   // Calculate accumulated purchase costs and payments
   const purchases = ledgerLogs.filter((l) => l.type === "purchase");
@@ -463,18 +576,24 @@ function SupplierDetailsScreen() {
       </View>
 
       {/* Balance Metrics Grid */}
-      <Text style={[styles.sectionTitle, { marginBottom: 8 }]}>Raw Material Purchases</Text>
-      <View style={styles.metricsGrid}>
-        <View style={styles.metricCardItem}>
+      <Text style={[styles.sectionTitle, { marginBottom: 8 }]}>Raw Material Purchases & Balance</Text>
+      <View style={[styles.metricsGrid, { flexWrap: "wrap" }]}>
+        <View style={[styles.metricCardItem, { minWidth: "47%" }]}>
+          <Text style={styles.metricCardLabel}>Opening Balance</Text>
+          <Text style={[styles.metricCardVal, { color: colors.accent.primary }]}>
+            {currencySymbol}{openingBalanceVal.toFixed(2)}
+          </Text>
+        </View>
+        <View style={[styles.metricCardItem, { minWidth: "47%" }]}>
           <Text style={styles.metricCardLabel}>Total Purchased</Text>
           <Text style={styles.metricCardVal}>{currencySymbol}{totalPurchases.toFixed(2)}</Text>
         </View>
-        <View style={styles.metricCardItem}>
+        <View style={[styles.metricCardItem, { minWidth: "47%" }]}>
           <Text style={styles.metricCardLabel}>Total Paid</Text>
           <Text style={styles.metricCardVal}>{currencySymbol}{totalPaid.toFixed(2)}</Text>
         </View>
         <Pressable
-          style={({ pressed }) => [styles.metricCardItem, pressed && styles.buttonPressed]}
+          style={({ pressed }) => [styles.metricCardItem, { minWidth: "47%" }, pressed && styles.buttonPressed]}
           onPress={handleOpenEditBalance}
         >
           <View style={{ flexDirection: "row", justifyContent: "space-between", alignItems: "center" }}>
@@ -576,6 +695,13 @@ function SupplierDetailsScreen() {
                           Due: {currencySymbol}{log.balanceDue.toFixed(2)}
                         </Text>
                       </View>
+                      {log.runningBalance !== undefined ? (
+                        <View style={{ flexDirection: "row", alignItems: "center", marginTop: 4 }}>
+                          <Text style={{ fontSize: 11, fontWeight: "700", color: log.runningBalance > 0 ? colors.accent.danger : (log.runningBalance < 0 ? "#16a34a" : colors.text.muted) }}>
+                            Running Balance: {currencySymbol}{Math.abs(log.runningBalance).toFixed(2)} {log.runningBalance > 0 ? "Due" : log.runningBalance < 0 ? "Advance" : "Settled"}
+                          </Text>
+                        </View>
+                      ) : null}
                     </View>
                   </View>
                 </View>
@@ -585,9 +711,63 @@ function SupplierDetailsScreen() {
             const isPurchase = log.type === "purchase";
             const isPayment = log.type === "payment";
             const isAdjustment = log.type === "adjustment";
+            const isOpening = log.type === "opening" || log.isOpening;
             const logDateStr = log.date ? log.date.toLocaleDateString() : "N/A";
             const logTimeStr = log.date ? log.date.toLocaleTimeString([], { hour: "2-digit", minute: "2-digit" }) : "";
             
+            if (isOpening) {
+              return (
+                <View key={log.id} style={styles.logItem}>
+                  <View style={styles.logItemLeft}>
+                    <View style={[styles.logIndicatorCircle, { backgroundColor: "#e0e7ff" }]}>
+                      <MaterialIcons
+                        name="account-balance-wallet"
+                        size={16}
+                        color="#4f46e5"
+                      />
+                    </View>
+                    <View style={{ flex: 1 }}>
+                      <View style={{ flexDirection: "row", alignItems: "center", gap: 6, flexWrap: "wrap" }}>
+                        <Text style={styles.logItemTitle}>
+                          Opening Outstanding Balance
+                        </Text>
+                        <Text style={[styles.logQtyText, { color: log.balanceType === "advance" ? "#16a34a" : colors.accent.danger }]}>
+                          {log.balanceType === "advance" ? "-" : "+"}{currencySymbol}{Math.abs(Number(log.amount || 0)).toFixed(2)}
+                        </Text>
+                      </View>
+                      <Text style={styles.logItemDate}>{logDateStr} • {logTimeStr}</Text>
+                      {log.notes ? (
+                        <Text style={styles.logItemNotes}>{log.notes}</Text>
+                      ) : null}
+                      {log.runningBalance !== undefined ? (
+                        <View style={{ flexDirection: "row", alignItems: "center", marginTop: 4 }}>
+                          <Text style={{ fontSize: 11, fontWeight: "700", color: log.runningBalance > 0 ? colors.accent.danger : (log.runningBalance < 0 ? "#16a34a" : colors.text.muted) }}>
+                            Running Balance: {currencySymbol}{Math.abs(log.runningBalance).toFixed(2)} {log.runningBalance > 0 ? "Due" : log.runningBalance < 0 ? "Advance" : "Settled"}
+                          </Text>
+                        </View>
+                      ) : null}
+                    </View>
+                  </View>
+                  <View style={{ flexDirection: "row", alignItems: "center", gap: 4 }}>
+                    <Pressable
+                      style={({ pressed }) => [styles.deleteLogBtn, pressed && styles.buttonPressed]}
+                      onPress={handleOpenEditBalance}
+                    >
+                      <MaterialIcons name="edit" size={18} color={colors.border.medium} />
+                    </Pressable>
+                    {!log.isSynthetic ? (
+                      <Pressable
+                        style={({ pressed }) => [styles.deleteLogBtn, pressed && styles.buttonPressed]}
+                        onPress={() => handleOpenDeleteLog(log.id)}
+                      >
+                        <MaterialIcons name="delete" size={18} color={colors.border.medium} />
+                      </Pressable>
+                    ) : null}
+                  </View>
+                </View>
+              );
+            }
+
             if (isAdjustment) {
               return (
                 <View key={log.id} style={styles.logItem}>
@@ -611,6 +791,13 @@ function SupplierDetailsScreen() {
                       <Text style={styles.logItemDate}>{logDateStr} • {logTimeStr}</Text>
                       {log.notes ? (
                         <Text style={styles.logItemNotes}>{log.notes}</Text>
+                      ) : null}
+                      {log.runningBalance !== undefined ? (
+                        <View style={{ flexDirection: "row", alignItems: "center", marginTop: 4 }}>
+                          <Text style={{ fontSize: 11, fontWeight: "700", color: log.runningBalance > 0 ? colors.accent.danger : (log.runningBalance < 0 ? "#16a34a" : colors.text.muted) }}>
+                            Running Balance: {currencySymbol}{Math.abs(log.runningBalance).toFixed(2)} {log.runningBalance > 0 ? "Due" : log.runningBalance < 0 ? "Advance" : "Settled"}
+                          </Text>
+                        </View>
                       ) : null}
                     </View>
                   </View>
@@ -649,6 +836,13 @@ function SupplierDetailsScreen() {
                       <Text style={styles.logItemDate}>{logDateStr} • {logTimeStr}</Text>
                       {log.notes ? (
                         <Text style={styles.logItemNotes}>{log.notes}</Text>
+                      ) : null}
+                      {log.runningBalance !== undefined ? (
+                        <View style={{ flexDirection: "row", alignItems: "center", marginTop: 4 }}>
+                          <Text style={{ fontSize: 11, fontWeight: "700", color: log.runningBalance > 0 ? colors.accent.danger : (log.runningBalance < 0 ? "#16a34a" : colors.text.muted) }}>
+                            Running Balance: {currencySymbol}{Math.abs(log.runningBalance).toFixed(2)} {log.runningBalance > 0 ? "Due" : log.runningBalance < 0 ? "Advance" : "Settled"}
+                          </Text>
+                        </View>
                       ) : null}
                     </View>
                   </View>
@@ -697,6 +891,13 @@ function SupplierDetailsScreen() {
                     ) : null}
                     {log.notes ? (
                       <Text style={styles.logItemNotes}>{log.notes}</Text>
+                    ) : null}
+                    {log.runningBalance !== undefined ? (
+                      <View style={{ flexDirection: "row", alignItems: "center", marginTop: 4 }}>
+                        <Text style={{ fontSize: 11, fontWeight: "700", color: log.runningBalance > 0 ? colors.accent.danger : (log.runningBalance < 0 ? "#16a34a" : colors.text.muted) }}>
+                          Running Balance: {currencySymbol}{Math.abs(log.runningBalance).toFixed(2)} {log.runningBalance > 0 ? "Due" : log.runningBalance < 0 ? "Advance" : "Settled"}
+                        </Text>
+                      </View>
                     ) : null}
                   </View>
                 </View>

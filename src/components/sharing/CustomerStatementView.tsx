@@ -379,7 +379,7 @@ const CustomerStatementViewComponent: React.ForwardRefRenderFunction<View, Custo
                       { borderBottomColor: borderColor, backgroundColor: idx % 2 === 0 ? cardBg : innerCardBg }
                     ]}
                   >
-                    <Text style={[styles.td, { flex: 1.05, color: subTextColor, fontSize: 9, paddingTop: 1 }]}>{formatDate(item.date)}</Text>
+                    <Text style={[styles.td, { flex: 1.05, color: subTextColor, fontSize: 9, paddingTop: 1 }]}>{item.type === 'opening' ? '' : formatDate(item.date)}</Text>
                     <View style={{ flex: 2.2, paddingRight: 4 }}>
                       <Text style={[styles.td, { color: textColor, fontWeight: '700' }]}>
                         {item.description}

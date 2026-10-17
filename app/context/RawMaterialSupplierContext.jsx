@@ -57,10 +57,17 @@ export function RawMaterialSupplierProvider({ children }) {
   const addSupplier = async (supplierData) => {
     const uid = "default_user";
     try {
+      const bal = Number(supplierData.balance || 0);
+      const openingBal = Number(
+        supplierData.openingBalance !== undefined
+          ? supplierData.openingBalance
+          : bal
+      );
       const docRef = await addDoc(collection(db, "raw_material_suppliers"), {
         ...supplierData,
         userId: uid,
-        balance: Number(supplierData.balance || 0),
+        balance: bal,
+        openingBalance: openingBal,
         createdAt: new Date(),
         updatedAt: new Date(),
       });

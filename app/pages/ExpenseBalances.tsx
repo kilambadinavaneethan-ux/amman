@@ -23,6 +23,7 @@ import AnimatedPage from "../components/AnimatedPage";
 import BackButton from "../components/BackButton";
 
 // Contexts
+import { UserContext } from "../context/UserContext";
 import { ExpenseContext } from "../context/ExpenseContext";
 import { RawMaterialSupplierContext } from "../context/RawMaterialSupplierContext";
 import { WorkerContext } from "../context/WorkerContext";
@@ -35,6 +36,8 @@ import { getDocsOfflineSafe } from "../../src/utils/offlineHelpers";
 
 // Components
 import AnimatedCounter from "../components/AnimatedCounter";
+import { CustomerShareBottomSheet } from "../../src/components/sharing/CustomerShareBottomSheet";
+import { CustomerShareData } from "../../src/types/sharing";
 
 const CATEGORY_CONFIG: Record<string, { icon: string; color: string; label: string }> = {
   "Fuel": { icon: "local-gas-station", color: "#059669", label: "Fuel" },
@@ -149,11 +152,31 @@ export default function ExpenseBalances() {
   const { orders, loading: ordersLoading } = useContext(OrderContext) as any;
   const { addTransaction, logs, deleteTransaction: deleteRawTransaction } = useContext(RawMaterialContext) as any;
   const { partners: deliveryPartners, loading: partnersLoading } = useContext(DeliveryPartnerContext) as any;
+  const { profile: userProfile } = useContext(UserContext) as any;
   const loading = expensesLoading || suppliersLoading || workersLoading || partnersLoading || ordersLoading;
+
+  const companyInfo = useMemo(() => ({
+    name: userProfile?.company?.name || userProfile?.businessName || userProfile?.fullName || 'Company Name',
+    phone: userProfile?.company?.phone || userProfile?.mobile || '',
+    email: userProfile?.company?.email || userProfile?.email || '',
+    address: userProfile?.company?.address || userProfile?.address || '',
+    gstin: userProfile?.company?.gstin || userProfile?.taxId || userProfile?.gstNo || '',
+    logoUrl: userProfile?.company?.logoUrl || userProfile?.photoURL || userProfile?.logoUrl || '',
+    signatureUrl: userProfile?.company?.signatureUrl || userProfile?.signatureUrl || '',
+    bankName: userProfile?.company?.bankName || userProfile?.bankName || '',
+    accountNo: userProfile?.company?.accountNo || userProfile?.accountNo || '',
+    ifscCode: userProfile?.company?.ifscCode || userProfile?.ifscCode || '',
+    upiId: userProfile?.company?.upiId || userProfile?.upiId || '',
+    ...userProfile?.company,
+  }), [userProfile]);
 
   const [refreshing, setRefreshing] = useState(false);
   const [searchQuery, setSearchQuery] = useState("");
   const [activeTab, setActiveTab] = useState<"pending" | "history">("pending");
+
+  // Account Statement Sharing State
+  const [shareAccountModalVisible, setShareAccountModalVisible] = useState(false);
+  const [selectedShareAccountData, setSelectedShareAccountData] = useState<CustomerShareData | null>(null);
 
   // Payment Modal State
   const [isPayModalOpen, setIsPayModalOpen] = useState(false);
@@ -861,12 +884,12 @@ export default function ExpenseBalances() {
     }
   };
 
-  // Comprehensive Calculation & Itemized Account Ledger Engine for Long-Pressed Profile
-  const calcAccountDetails = useMemo(() => {
-    if (!calcTarget || !calcTargetType) return null;
+  // Comprehensive Calculation & Itemized Account Ledger Engine for Any Target Account
+  const getAccountDetails = React.useCallback((target: any, type: "supplier" | "worker" | "delivery") => {
+    if (!target || !type) return null;
 
-    if (calcTargetType === "supplier") {
-      const sId = calcTarget.id;
+    if (type === "supplier") {
+      const sId = target.id;
       const rawEntries: any[] = [];
 
       (logs || []).forEach((log: any) => {
@@ -905,6 +928,24 @@ export default function ExpenseBalances() {
             notes: log.notes || "",
             raw: log,
           });
+        } else if (log.type === "opening" || log.type === "adjustment" || log.materialName?.toLowerCase().includes("adjustment")) {
+          const amt = Number(log.amount || 0);
+          const isPayable = amt >= 0;
+          const absAmt = Math.abs(amt);
+          const isOpening = log.type === "opening";
+          rawEntries.push({
+            id: `log-${log.id}`,
+            date: d,
+            type: isOpening ? "opening" : "adjustment",
+            title: isOpening ? "Opening Outstanding Balance" : (log.materialName || "Balance Adjustment"),
+            subtitle: log.notes ? log.notes : (isPayable ? (isOpening ? "Initial Balance Owed" : "Balance Adjustment (Payable)") : (isOpening ? "Initial Advance Balance" : "Balance Adjustment (Advance)")),
+            creditAmount: isPayable ? absAmt : 0,
+            debitAmount: isPayable ? 0 : absAmt,
+            incurredAmount: isPayable ? absAmt : 0,
+            paidAmount: isPayable ? 0 : absAmt,
+            notes: log.notes || "",
+            raw: log,
+          });
         }
       });
 
@@ -913,31 +954,98 @@ export default function ExpenseBalances() {
           const d = parseDate(o.createdAt || o.date);
           const total = Number(o.total || 0);
           const paid = Number(o.paidAmount || 0);
+          const balDue = o.balanceDue !== undefined && o.balanceDue !== null ? Number(o.balanceDue) : Math.max(0, total - paid);
+          // In double-entry supplier accounting, product orders taken by the supplier offset/reduce what the business owes them.
+          // Therefore, the order value is a debit (Dr / deduction) against the supplier's balance, matching OrderContext.
+          const orderOffset = balDue > 0 ? balDue : (paid === 0 ? total : 0);
           rawEntries.push({
             id: `order-${o.id}`,
             date: d,
             type: "order",
             title: `Product Order #${o.id.slice(-6).toUpperCase()}`,
-            subtitle: `${o.itemName || "Bricks"} (${o.quantity || 0} pcs)`,
-            creditAmount: total,
-            debitAmount: paid,
-            incurredAmount: total,
-            paidAmount: paid,
+            subtitle: `${o.itemName || "Bricks"} (${o.quantity || 0} pcs)${paid > 0 ? ` • Cash Paid: ₹${paid}` : ""}`,
+            creditAmount: 0,
+            debitAmount: orderOffset,
+            incurredAmount: 0,
+            paidAmount: orderOffset,
+            orderTotal: total,
+            orderPaid: paid,
+            orderBalanceDue: balDue,
             notes: o.notes || "",
             raw: o,
           });
         }
       });
 
-      rawEntries.sort((a, b) => a.date.getTime() - b.date.getTime());
+      // Reconcile unallocated initial balance if target.balance has an opening balance not covered by transaction logs
+      const netTransacted = rawEntries.reduce(
+        (sum, e) => sum + (Number(e.creditAmount || 0) - Number(e.debitAmount || 0)),
+        0
+      );
+      const currentStoredBal = Number(target.balance !== undefined ? target.balance : netTransacted);
+      const unallocatedDiff = currentStoredBal - netTransacted;
+
+      if (Math.abs(unallocatedDiff) > 0.01 && !rawEntries.some((e: any) => e.type === "adjustment" || e.type === "opening")) {
+        const isOpeningPayable = unallocatedDiff > 0;
+        const absDiff = Math.abs(unallocatedDiff);
+        const openingDate = target.createdAt
+          ? parseDate(target.createdAt)
+          : (rawEntries.length > 0 ? new Date(rawEntries[0].date.getTime() - 86400000) : new Date());
+
+        rawEntries.unshift({
+          id: `opening-${target.id}`,
+          date: openingDate,
+          type: "opening",
+          title: "Opening Outstanding Balance",
+          subtitle: isOpeningPayable ? "Initial Balance Owed" : "Initial Advance Balance",
+          creditAmount: isOpeningPayable ? absDiff : 0,
+          debitAmount: isOpeningPayable ? 0 : absDiff,
+          incurredAmount: isOpeningPayable ? absDiff : 0,
+          paidAmount: isOpeningPayable ? 0 : absDiff,
+          notes: "Opening Balance on Record",
+          raw: target,
+        });
+      }
+
+      rawEntries.sort((a, b) => {
+        const isAOpening = a.type === "opening" || String(a.id).startsWith("opening-");
+        const isBOpening = b.type === "opening" || String(b.id).startsWith("opening-");
+        if (isAOpening && !isBOpening) return -1;
+        if (!isAOpening && isBOpening) return 1;
+
+        const diff = a.date.getTime() - b.date.getTime();
+        if (diff !== 0) return diff;
+
+        // On same date: purchases come before payments/offsets
+        if (a.type === "purchase" && b.type !== "purchase") return -1;
+        if (b.type === "purchase" && a.type !== "purchase") return 1;
+
+        return 0;
+      });
 
       let running = 0;
       let totalCredit = 0;
       let totalDebit = 0;
+      let totalPurchases = 0;
+      let totalPaidDirect = 0;
+      let totalOrderOffsets = 0;
+      let totalAdjustments = 0;
 
       const ledger = rawEntries.map((entry) => {
         const cr = Number(entry.creditAmount || 0);
         const dr = Number(entry.debitAmount || 0);
+
+        if (entry.type === "purchase") {
+          totalPurchases += cr;
+          totalPaidDirect += dr;
+        } else if (entry.type === "payment") {
+          totalPaidDirect += dr;
+        } else if (entry.type === "order") {
+          totalOrderOffsets += dr;
+        } else if (entry.type === "adjustment") {
+          totalAdjustments += (cr - dr);
+        }
+
         totalCredit += cr;
         totalDebit += dr;
         running += (cr - dr);
@@ -951,36 +1059,46 @@ export default function ExpenseBalances() {
       });
 
       const displayLedger = [...ledger].reverse();
-      const netBalance = Number(calcTarget.balance !== undefined ? calcTarget.balance : (totalCredit - totalDebit));
+      const netBalance = Number(target.balance !== undefined ? target.balance : (totalCredit - totalDebit));
       const isAdvance = netBalance < 0;
 
       return {
         type: "supplier",
-        name: calcTarget.name,
-        subtitle: `Agent: ${calcTarget.contactPerson || "N/A"}${calcTarget.phone ? ` • ${calcTarget.phone}` : ""}`,
+        name: target.name,
+        subtitle: `Agent: ${target.contactPerson || "N/A"}${target.phone ? ` • ${target.phone}` : ""}`,
         netBalance,
         isAdvance,
         totalIncurred: totalCredit,
         totalPaid: totalDebit,
         totalCredit,
         totalDebit,
+        totalPurchases,
+        totalAdjustments,
+        totalOrderOffsets,
         ledger,
         displayLedger,
         breakdownStats: [
-          { label: "Total Purchases (Cr)", value: totalCredit, icon: "inventory-2", color: colors.accent.warning },
-          { label: "Total Paid (Dr)", value: totalDebit, icon: "payments", color: colors.accent.success },
+          { label: "Total Purchases (Cr)", value: totalPurchases, icon: "inventory-2", color: colors.accent.warning },
+          ...(totalOrderOffsets > 0 ? [{ label: "Product Orders Offset (Dr)", value: totalOrderOffsets, icon: "local-mall", color: colors.accent.primary }] : []),
+          ...(totalAdjustments !== 0 ? [{
+            label: totalAdjustments > 0 ? "Balance Adjustment (Cr)" : "Balance Adjustment (Dr)",
+            value: Math.abs(totalAdjustments),
+            icon: "tune",
+            color: "#8b5cf6"
+          }] : []),
+          { label: "Total Paid / Offsets (Dr)", value: totalDebit, icon: "payments", color: colors.accent.success },
           { label: isAdvance ? "Advance Paid (Dr)" : "Balance Due (Cr)", value: Math.abs(netBalance), icon: "account-balance-wallet", color: isAdvance ? colors.accent.success : colors.accent.danger },
         ],
       };
     }
 
-    if (calcTargetType === "worker") {
-      const wId = calcTarget.id;
+    if (type === "worker") {
+      const wId = target.id;
       const rawEntries: any[] = [];
-      const isPieceRate = calcTarget.billingSystem === "Piece-Rate";
-      const pieceRate = Number(calcTarget.pieceRate || 0);
-      const dailyWage = Number(calcTarget.dailyWage || 0);
-      const overtimeRate = Number(calcTarget.overtimeRate || (dailyWage > 0 ? dailyWage / 8 : 0));
+      const isPieceRate = target.billingSystem === "Piece-Rate";
+      const pieceRate = Number(target.pieceRate || 0);
+      const dailyWage = Number(target.dailyWage || 0);
+      const overtimeRate = Number(target.overtimeRate || (dailyWage > 0 ? dailyWage / 8 : 0));
 
       (workerAttendance || []).forEach((att: any) => {
         if (String(att.workerId) !== String(wId) || att.status === "absent") return;
@@ -1137,16 +1255,16 @@ export default function ExpenseBalances() {
       });
 
       const displayLedger = [...ledger].reverse();
-      const fin = workerFinancialsMap.get(calcTarget.id);
+      const fin = workerFinancialsMap.get(target.id);
       const pending = fin ? fin.pending : (totalCredit - totalDebit);
-      const storedAdvance = Number(calcTarget.advanceAmount || 0);
+      const storedAdvance = Number(target.advanceAmount || 0);
       const effectiveAdvance = fin ? fin.effectiveAdvance : (pending < 0 ? Math.abs(pending) : storedAdvance);
       const isAdvance = fin ? fin.isAdvance : (pending < 0 || (pending === 0 && storedAdvance > 0));
 
       return {
         type: "worker",
-        name: calcTarget.name,
-        subtitle: `${calcTarget.role || "Worker"} • ${isPieceRate ? "Piece-Rate System" : "Time-Based Wage System"}`,
+        name: target.name,
+        subtitle: `${target.role || "Worker"} • ${isPieceRate ? "Piece-Rate System" : "Time-Based Wage System"}`,
         netBalance: isAdvance ? -effectiveAdvance : pending,
         isAdvance,
         totalIncurred: totalCredit,
@@ -1166,8 +1284,8 @@ export default function ExpenseBalances() {
       };
     }
 
-    if (calcTargetType === "delivery") {
-      const pId = calcTarget.id;
+    if (type === "delivery") {
+      const pId = target.id;
       const rawEntries: any[] = [];
 
       (deliveryTrips || []).forEach((t: any) => {
@@ -1176,10 +1294,6 @@ export default function ExpenseBalances() {
         const load = Number(t.loadingCharge || 0);
         const unload = Number(t.unloadingCharge || 0);
 
-        // Resolve base freight charge correctly:
-        // Priority 1: Use baseDeliveryCharge if present (e.g. ₹4 for 2 bricks @ ₹2)
-        // Priority 2: If deliveryCharge is present, it is the total trip payout (e.g. ₹8), so base = deliveryCharge - load - unload (8 - 2 - 2 = 4)
-        // Priority 3: Otherwise fallback to deliveryCharge
         let base = 0;
         if (t.baseDeliveryCharge !== undefined && t.baseDeliveryCharge !== null) {
           base = Number(t.baseDeliveryCharge);
@@ -1192,8 +1306,6 @@ export default function ExpenseBalances() {
           }
         }
 
-        // The total credit owed to the driver for this trip is base freight + loading + unloading
-        // (which matches t.deliveryCharge when deliveryCharge represents the total trip payout)
         const total = (t.deliveryCharge !== undefined && Number(t.deliveryCharge) > 0)
           ? Math.max(Number(t.deliveryCharge), base + load + unload)
           : (base + load + unload);
@@ -1294,13 +1406,13 @@ export default function ExpenseBalances() {
       });
 
       const displayLedger = [...ledger].reverse();
-      const pending = Number(calcTarget.totalPending !== undefined ? calcTarget.totalPending : (totalCredit - totalDebit));
+      const pending = Number(target.totalPending !== undefined ? target.totalPending : (totalCredit - totalDebit));
       const isAdvance = pending < 0;
 
       return {
         type: "delivery",
-        name: calcTarget.name,
-        subtitle: `Vehicle: ${calcTarget.vehicleNo || "N/A"}${calcTarget.phone ? ` • ${calcTarget.phone}` : ""}`,
+        name: target.name,
+        subtitle: `Vehicle: ${target.vehicleNo || "N/A"}${target.phone ? ` • ${target.phone}` : ""}`,
         netBalance: pending,
         isAdvance,
         totalIncurred: totalCredit,
@@ -1320,7 +1432,90 @@ export default function ExpenseBalances() {
     }
 
     return null;
-  }, [calcTarget, calcTargetType, logs, orders, workerAttendance, workerPayments, workerBonuses, deliveryTrips, deliveryPayments, deliveryBonuses, workerFinancialsMap, colors]);
+  }, [logs, orders, workerAttendance, workerPayments, workerBonuses, deliveryTrips, deliveryPayments, deliveryBonuses, workerFinancialsMap, colors]);
+
+  const calcAccountDetails = useMemo(() => {
+    if (!calcTarget || !calcTargetType) return null;
+    return getAccountDetails(calcTarget, calcTargetType);
+  }, [calcTarget, calcTargetType, getAccountDetails]);
+
+  // Maps calculated account details into CustomerShareData for CustomerShareBottomSheet
+  const buildAccountShareData = React.useCallback((target: any, type: "supplier" | "worker" | "delivery", details: any): CustomerShareData => {
+    const rawLedger = details?.ledger || [];
+    const ledger = rawLedger.map((entry: any, idx: number) => {
+      const isSupplierOrder = type === "supplier" && entry.type === "order";
+      const isAdjustmentReduction = type === "supplier" && entry.type === "adjustment" && Number(entry.debitAmount || 0) > 0;
+      // In the share statement (CustomerStatementView & AppaEstimateBillView):
+      // - 'order' items are placed in the Debit (+) column (increases balance due)
+      // - 'payment' items are placed in the Credit (-) column (reduces balance due)
+      // For a supplier statement:
+      // Product orders and adjustment reductions taken by the supplier offset/reduce what the business owes the supplier.
+      // Therefore, they must calculate to Credit (-), not Debit (+).
+      const isCreditReduction = (entry.debitAmount > 0 && (!entry.creditAmount || entry.creditAmount === 0)) || isSupplierOrder || isAdjustmentReduction;
+
+      const isOpening = entry.type === "opening" || (entry.type === "adjustment" && String(entry.id).startsWith("opening-"));
+
+      return {
+        id: entry.id || String(idx),
+        date: entry.date instanceof Date ? entry.date : new Date(entry.date),
+        type: isOpening ? ("opening" as const) : isCreditReduction ? ("payment" as const) : ("order" as const),
+        description: entry.title + (entry.subtitle ? `\n• ${entry.subtitle}` : ""),
+        notes: entry.notes || "",
+        amount: isCreditReduction ? 0 : Number(entry.creditAmount || entry.incurredAmount || 0),
+        paid: isCreditReduction ? Number(entry.debitAmount || entry.paidAmount || 0) : Number(entry.debitAmount || entry.paidAmount || 0),
+        balance: Number(entry.runningBalance || 0),
+      };
+    });
+
+    const netBal = Number(details?.netBalance || 0);
+    const totalIncurred = Number(details?.totalCredit || details?.totalIncurred || 0);
+    const totalPaid = Number(details?.totalDebit || details?.totalPaid || 0);
+    const openingEntry = ledger.find((l: any) => l.type === 'opening');
+    const oldBalanceDue = openingEntry ? Number(openingEntry.amount || 0) : 0;
+
+    let roleTag = '';
+    if (type === 'supplier') roleTag = ' (Supplier)';
+    else if (type === 'worker') roleTag = ` (${target?.role || 'Worker'})`;
+    else if (type === 'delivery') roleTag = ' (Delivery Partner)';
+
+    return {
+      customer: {
+        id: String(target?.id || Math.random()),
+        name: (target?.name || 'Account') + roleTag,
+        phone: target?.phone || target?.mobile || target?.contactPhone || '',
+        phoneNumbers: target?.phone ? [target.phone] : [],
+        address: target?.address || target?.city || (target?.vehicleNo ? `Vehicle: ${target.vehicleNo}` : ''),
+        openingBalance: oldBalanceDue,
+        totalBalance: Math.abs(netBal),
+      },
+      summary: {
+        totalOrdersCount: ledger.filter((l: any) => l.type === 'order' || l.type === 'opening').length,
+        totalSalesAmount: totalIncurred,
+        totalPaidAmount: totalPaid,
+        oldBalanceDue,
+        netBalanceDue: netBal,
+      },
+      ledger,
+      options: {
+        includeProfileInfo: true,
+        includeDueDates: false,
+        includeSummary: true,
+        includeLedger: true,
+      },
+    };
+  }, []);
+
+  const handleShareAccountStatement = React.useCallback((target: any, type: "supplier" | "worker" | "delivery") => {
+    if (!target || !type) return;
+    const details = getAccountDetails(target, type);
+    if (!details) {
+      Alert.alert('No Records', 'No transactions found for this account.');
+      return;
+    }
+    const shareData = buildAccountShareData(target, type, details);
+    setSelectedShareAccountData(shareData);
+    setShareAccountModalVisible(true);
+  }, [getAccountDetails, buildAccountShareData]);
 
   // Sorted ledger items based on user's sort selection ("desc" = newest first, "asc" = oldest first)
   const displayedLedger = useMemo(() => {
@@ -1747,6 +1942,19 @@ export default function ExpenseBalances() {
                                 .filter((log: any) => log.supplierId === supplier.id && log.type === "purchase")
                                 .reduce((sum: number, log: any) => sum + Number(log.totalCost || 0), 0);
                               
+                              const totalAdjustments = (logs || [])
+                                .filter((log: any) => log.supplierId === supplier.id && (log.type === "adjustment" || log.materialName?.toLowerCase().includes("adjustment")))
+                                .reduce((sum: number, log: any) => sum + Number(log.amount || 0), 0);
+
+                              const totalOrderOffsets = (orders || [])
+                                .filter((o: any) => o.customerId === supplier.id || o.customerId === `sup_${supplier.id}` || o.customerId === `supplier_${supplier.id}`)
+                                .reduce((sum: number, o: any) => {
+                                  const tot = Number(o.total || 0);
+                                  const paid = Number(o.paidAmount || 0);
+                                  const due = o.balanceDue !== undefined && o.balanceDue !== null ? Number(o.balanceDue) : Math.max(0, tot - paid);
+                                  return sum + (due > 0 ? due : (paid === 0 ? tot : 0));
+                                }, 0);
+
                               const totalPaid = (logs || [])
                                 .filter((log: any) => log.supplierId === supplier.id)
                                 .reduce((sum: number, log: any) => {
@@ -1756,7 +1964,7 @@ export default function ExpenseBalances() {
                                     return sum + Number(log.amount || 0);
                                   }
                                   return sum;
-                                }, 0);
+                                }, 0) + totalOrderOffsets;
 
                               return (
                                 <View style={styles.cardDetailsRow}>
@@ -1819,27 +2027,57 @@ export default function ExpenseBalances() {
                                   Repay Advance
                                 </Text>
                               </Pressable>
+
+                              <Pressable
+                                style={[
+                                  styles.shareBtnFlex,
+                                  {
+                                    borderColor: `${colors.accent.warning}50`,
+                                    backgroundColor: `${colors.accent.warning}15`,
+                                  }
+                                ]}
+                                onPress={() => handleShareAccountStatement(supplier, "supplier")}
+                              >
+                                <MaterialIcons name="share" size={15} color={colors.accent.warning} />
+                              </Pressable>
                             </View>
                           ) : (
-                            <Pressable
-                              style={[
-                                styles.payBtn,
-                                {
-                                  backgroundColor: colors.accent.warning,
-                                  marginTop: 12
-                                }
-                              ]}
-                              onPress={() => handleOpenPayModal(supplier, "supplier", false)}
-                            >
-                              <MaterialIcons
-                                name="payment"
-                                size={16}
-                                color="#1A1D27"
-                              />
-                              <Text style={[styles.payBtnText, { color: "#1A1D27" }]}>
-                                Pay Balance
-                              </Text>
-                            </Pressable>
+                            <View style={styles.cardBtnRow}>
+                              <Pressable
+                                style={[
+                                  styles.payBtnFlex,
+                                  {
+                                    backgroundColor: colors.accent.warning,
+                                  }
+                                ]}
+                                onPress={() => handleOpenPayModal(supplier, "supplier", false)}
+                              >
+                                <MaterialIcons
+                                  name="payment"
+                                  size={16}
+                                  color="#1A1D27"
+                                />
+                                <Text style={[styles.payBtnText, { color: "#1A1D27" }]}>
+                                  Pay Balance
+                                </Text>
+                              </Pressable>
+
+                              <Pressable
+                                style={[
+                                  styles.shareBtnFlex,
+                                  {
+                                    borderColor: `${colors.accent.warning}50`,
+                                    backgroundColor: `${colors.accent.warning}15`,
+                                  }
+                                ]}
+                                onPress={() => handleShareAccountStatement(supplier, "supplier")}
+                              >
+                                <MaterialIcons name="share" size={15} color={colors.accent.warning} />
+                                <Text style={{ fontSize: 12, fontWeight: "700", color: colors.accent.warning }}>
+                                  Share
+                                </Text>
+                              </Pressable>
+                            </View>
                           )}
                         </Animated.View>
                       );
@@ -1970,27 +2208,57 @@ export default function ExpenseBalances() {
                                   Repay Advance
                                 </Text>
                               </Pressable>
+
+                              <Pressable
+                                style={[
+                                  styles.shareBtnFlex,
+                                  {
+                                    borderColor: `${colors.accent.primary}50`,
+                                    backgroundColor: `${colors.accent.primary}15`,
+                                  }
+                                ]}
+                                onPress={() => handleShareAccountStatement(worker, "worker")}
+                              >
+                                <MaterialIcons name="share" size={15} color={colors.accent.primary} />
+                              </Pressable>
                             </View>
                           ) : (
-                            <Pressable
-                              style={[
-                                styles.payBtn,
-                                {
-                                  backgroundColor: colors.accent.primary,
-                                  marginTop: 12
-                                }
-                              ]}
-                              onPress={() => handleOpenPayModal(worker, "worker", false)}
-                            >
-                              <MaterialIcons
-                                name="payment"
-                                size={16}
-                                color="#1A1D27"
-                              />
-                              <Text style={[styles.payBtnText, { color: "#1A1D27" }]}>
-                                Pay Balance
-                              </Text>
-                            </Pressable>
+                            <View style={styles.cardBtnRow}>
+                              <Pressable
+                                style={[
+                                  styles.payBtnFlex,
+                                  {
+                                    backgroundColor: colors.accent.primary,
+                                  }
+                                ]}
+                                onPress={() => handleOpenPayModal(worker, "worker", false)}
+                              >
+                                <MaterialIcons
+                                  name="payment"
+                                  size={16}
+                                  color="#1A1D27"
+                                />
+                                <Text style={[styles.payBtnText, { color: "#1A1D27" }]}>
+                                  Pay Balance
+                                </Text>
+                              </Pressable>
+
+                              <Pressable
+                                style={[
+                                  styles.shareBtnFlex,
+                                  {
+                                    borderColor: `${colors.accent.primary}50`,
+                                    backgroundColor: `${colors.accent.primary}15`,
+                                  }
+                                ]}
+                                onPress={() => handleShareAccountStatement(worker, "worker")}
+                              >
+                                <MaterialIcons name="share" size={15} color={colors.accent.primary} />
+                                <Text style={{ fontSize: 12, fontWeight: "700", color: colors.accent.primary }}>
+                                  Share
+                                </Text>
+                              </Pressable>
+                            </View>
                           )}
                         </Animated.View>
                       );
@@ -2105,27 +2373,57 @@ export default function ExpenseBalances() {
                                   Repay Advance
                                 </Text>
                               </Pressable>
+
+                              <Pressable
+                                style={[
+                                  styles.shareBtnFlex,
+                                  {
+                                    borderColor: `${colors.accent.info}50`,
+                                    backgroundColor: `${colors.accent.info}15`,
+                                  }
+                                ]}
+                                onPress={() => handleShareAccountStatement(partner, "delivery")}
+                              >
+                                <MaterialIcons name="share" size={15} color={colors.accent.info} />
+                              </Pressable>
                             </View>
                           ) : (
-                            <Pressable
-                              style={[
-                                styles.payBtn,
-                                {
-                                  backgroundColor: colors.accent.info,
-                                  marginTop: 12
-                                }
-                              ]}
-                              onPress={() => handleOpenPayModal(partner, "delivery", false)}
-                            >
-                              <MaterialIcons
-                                name="payment"
-                                size={16}
-                                color="#1A1D27"
-                              />
-                              <Text style={[styles.payBtnText, { color: "#1A1D27" }]}>
-                                Pay Balance
-                              </Text>
-                            </Pressable>
+                            <View style={styles.cardBtnRow}>
+                              <Pressable
+                                style={[
+                                  styles.payBtnFlex,
+                                  {
+                                    backgroundColor: colors.accent.info,
+                                  }
+                                ]}
+                                onPress={() => handleOpenPayModal(partner, "delivery", false)}
+                              >
+                                <MaterialIcons
+                                  name="payment"
+                                  size={16}
+                                  color="#1A1D27"
+                                />
+                                <Text style={[styles.payBtnText, { color: "#1A1D27" }]}>
+                                  Pay Balance
+                                </Text>
+                              </Pressable>
+
+                              <Pressable
+                                style={[
+                                  styles.shareBtnFlex,
+                                  {
+                                    borderColor: `${colors.accent.info}50`,
+                                    backgroundColor: `${colors.accent.info}15`,
+                                  }
+                                ]}
+                                onPress={() => handleShareAccountStatement(partner, "delivery")}
+                              >
+                                <MaterialIcons name="share" size={15} color={colors.accent.info} />
+                                <Text style={{ fontSize: 12, fontWeight: "700", color: colors.accent.info }}>
+                                  Share
+                                </Text>
+                              </Pressable>
+                            </View>
                           )}
                         </Animated.View>
                       );
@@ -2844,9 +3142,35 @@ export default function ExpenseBalances() {
                 </View>
               </View>
 
-              <Pressable style={styles.modalCloseBtn} onPress={handleCloseCalcModal}>
-                <MaterialIcons name="close" size={24} color={colors.text.secondary} />
-              </Pressable>
+              <View style={{ flexDirection: "row", alignItems: "center", gap: 8 }}>
+                <Pressable
+                  style={{
+                    flexDirection: "row",
+                    alignItems: "center",
+                    gap: 4,
+                    paddingHorizontal: 10,
+                    paddingVertical: 6,
+                    borderRadius: 10,
+                    backgroundColor: `${colors.accent.primary}15`,
+                    borderWidth: 1,
+                    borderColor: `${colors.accent.primary}40`,
+                  }}
+                  onPress={() => {
+                    if (calcTarget && calcTargetType) {
+                      handleShareAccountStatement(calcTarget, calcTargetType);
+                    }
+                  }}
+                >
+                  <MaterialIcons name="share" size={16} color={colors.accent.primary} />
+                  <Text style={{ fontSize: 12, fontWeight: "700", color: colors.accent.primary }}>
+                    Share
+                  </Text>
+                </Pressable>
+
+                <Pressable style={styles.modalCloseBtn} onPress={handleCloseCalcModal}>
+                  <MaterialIcons name="close" size={24} color={colors.text.secondary} />
+                </Pressable>
+              </View>
             </View>
 
             {/* Scrollable Modal Body */}
@@ -3384,6 +3708,30 @@ export default function ExpenseBalances() {
               <View style={{ marginTop: 14, gap: 8 }}>
                 <Pressable
                   style={{
+                    backgroundColor: `${colors.accent.primary}18`,
+                    borderRadius: 12,
+                    height: 46,
+                    borderWidth: 1.5,
+                    borderColor: colors.accent.primary,
+                    flexDirection: "row",
+                    alignItems: "center",
+                    justifyContent: "center",
+                    gap: 8,
+                  }}
+                  onPress={() => {
+                    if (calcTarget && calcTargetType) {
+                      handleShareAccountStatement(calcTarget, calcTargetType);
+                    }
+                  }}
+                >
+                  <MaterialIcons name="share" size={18} color={colors.accent.primary} />
+                  <Text style={{ fontSize: 13, fontWeight: "700", color: colors.accent.primary }}>
+                    Share Account Statement (அறிக்கை பகிர்)
+                  </Text>
+                </Pressable>
+
+                <Pressable
+                  style={{
                     backgroundColor: colors.accent.primary,
                     borderRadius: 12,
                     height: 46,
@@ -3444,6 +3792,16 @@ export default function ExpenseBalances() {
           </View>
         </View>
       </Modal>
+
+      {selectedShareAccountData && (
+        <CustomerShareBottomSheet
+          visible={shareAccountModalVisible}
+          onClose={() => setShareAccountModalVisible(false)}
+          customerData={selectedShareAccountData}
+          company={companyInfo}
+          isDark={theme.isDark}
+        />
+      )}
     </AnimatedPage>
   );
 }
@@ -3779,6 +4137,16 @@ const getStyles = (theme: any) => {
   repayBtnText: {
     fontSize: 12,
     fontWeight: "700",
+  },
+  shareBtnFlex: {
+    flexDirection: "row",
+    alignItems: "center",
+    justifyContent: "center",
+    borderRadius: 10,
+    borderWidth: 1,
+    height: 36,
+    paddingHorizontal: 12,
+    gap: 4,
   },
 
   // Received Payments card styles (mirrors Home.tsx)

@@ -71,6 +71,8 @@ export const customerShareService = {
         } else if (l.type === 'payment') {
           msg += `${idx + 1}. [${dmy}] 💳 ${l.description || 'ரொக்கம் வரவு'}${l.notes ? ' (' + l.notes + ')' : ''}\n`;
           msg += `   🟢 வரவு: -${formatCurrency(l.paid)} | பாக்கி: ${formatCurrency(l.balance)}\n\n`;
+        } else if (l.type === 'opening') {
+          msg += `${idx + 1}. 📌 *${l.description || 'முந்தைய பாக்கி (Old Balance Due)'}:* +${formatCurrency(l.amount)}\n\n`;
         } else {
           msg += `${idx + 1}. [${dmy}] 📌 ${l.description}: +${formatCurrency(l.amount)}\n\n`;
         }
@@ -308,7 +310,7 @@ export const customerShareService = {
 
       return `
         <tr style="background: ${idx % 2 === 0 ? '#FFFFFF' : '#F8FAFC'};">
-          <td style="padding: 10px; border-bottom: 1px solid #E2E8F0; font-size: 12px; color: #475569; vertical-align: top;">${formatDate(l.date)}</td>
+          <td style="padding: 10px; border-bottom: 1px solid #E2E8F0; font-size: 12px; color: #475569; vertical-align: top;">${l.type === 'opening' ? '' : formatDate(l.date)}</td>
           <td style="padding: 10px; border-bottom: 1px solid #E2E8F0; font-size: 12px; font-weight: 600; color: #0F172A; vertical-align: top;">
             <div>${l.description}</div>
             ${l.notes ? `<div style="font-size: 10px; color: #64748B; font-weight: 400; font-style: italic; margin-top: 2px;">📝 Note: ${l.notes}</div>` : ''}
@@ -638,7 +640,7 @@ export const customerShareService = {
       return `
         <tr style="border-bottom: 1px solid ${t.gridLineColor}; font-size: 12px; ${index % 2 === 1 ? `background-color: ${t.headerBg}30;` : ''}">
           <td style="padding: 7px 4px; text-align: center; border-right: 1px solid ${t.gridLineColor}; font-weight: 700;">${index + 1}</td>
-          <td style="padding: 7px 4px; text-align: center; border-right: 1px solid ${t.gridLineColor}; white-space: nowrap; font-size: 11px;">${dmy}</td>
+          <td style="padding: 7px 4px; text-align: center; border-right: 1px solid ${t.gridLineColor}; white-space: nowrap; font-size: 11px;">${isOpening ? '' : dmy}</td>
           <td style="padding: 7px 8px; border-right: 1px solid ${t.gridLineColor};">${particulars}</td>
           <td style="padding: 7px 6px; text-align: right; border-right: 1px solid ${t.gridLineColor}; color: ${debitVal ? '#64748B' : t.subTextColor}; font-weight: ${debitVal ? '700' : '400'};">${debitVal ? formatCurrency(debitVal) : '-'}</td>
           <td style="padding: 7px 6px; text-align: right; border-right: 1px solid ${t.gridLineColor}; color: ${creditVal ? '#047857' : t.subTextColor}; font-weight: ${creditVal ? '800' : '400'};">${creditVal ? formatCurrency(creditVal) : '-'}</td>

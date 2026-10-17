@@ -209,37 +209,50 @@ export function CustomerShareBottomSheet({
       }
     }
 
-    // Apply Sort Order to Ledger
+    // Apply Sort Order to Ledger & Calculate True Running Balance
     const opening = filteredLedger.find((e: any) => e.type === 'opening');
     const nonOpening = filteredLedger
       .filter((e: any) => e.type !== 'opening')
       .map((item: any, index: number) => ({ ...item, _origIdx: index }));
 
+    // Always sort nonOpening chronologically (oldest first) to establish the correct running balance sequence
     nonOpening.sort((a: any, b: any) => {
       const da = normalizeDateValue(a.date);
       const db = normalizeDateValue(b.date);
       const diff = da.getTime() - db.getTime();
+      if (diff !== 0) return diff;
 
-      if (sortOrder === 'desc') {
-        if (diff !== 0) return db.getTime() - da.getTime();
-        // For desc (newest first), payment happens after order so payment comes before order
-        if (a.type === 'payment' && b.type === 'order') return -1;
-        if (a.type === 'order' && b.type === 'payment') return 1;
-        return b._origIdx - a._origIdx;
-      } else {
-        if (diff !== 0) return da.getTime() - db.getTime();
-        // For asc (oldest first), order happens before payment so order comes before payment
-        if (a.type === 'order' && b.type === 'payment') return -1;
-        if (a.type === 'payment' && b.type === 'order') return 1;
-        return a._origIdx - b._origIdx;
-      }
+      // On same date: orders/purchases before payments
+      if (a.type === 'order' && b.type === 'payment') return -1;
+      if (a.type === 'payment' && b.type === 'order') return 1;
+      return a._origIdx - b._origIdx;
+    });
+
+    // Chronological full ledger: opening is always the initial state
+    const chronologicalLedger = opening ? [opening, ...nonOpening] : nonOpening;
+
+    // Recalculate true running balance chronologically
+    let running = 0;
+    const ledgerWithRunning = chronologicalLedger.map((item: any) => {
+      const isOrder = item.type === 'order';
+      const isOpeningItem = item.type === 'opening';
+      const isPayment = item.type === 'payment';
+      const debitVal = (isOrder || isOpeningItem) ? Number(item.amount || 0) : 0;
+      const creditVal = isPayment ? Number(item.paid || 0) : 0;
+      running += (debitVal - creditVal);
+      return {
+        ...item,
+        balance: running,
+      };
     });
 
     let sortedLedger: any[];
     if (sortOrder === 'desc') {
-      sortedLedger = opening ? [...nonOpening, opening] : nonOpening;
+      const openingItem = ledgerWithRunning.find((e: any) => e.type === 'opening');
+      const nonOpeningItems = ledgerWithRunning.filter((e: any) => e.type !== 'opening').reverse();
+      sortedLedger = openingItem ? [...nonOpeningItems, openingItem] : nonOpeningItems;
     } else {
-      sortedLedger = opening ? [opening, ...nonOpening] : nonOpening;
+      sortedLedger = ledgerWithRunning;
     }
 
     const totalOrders = sortedLedger.filter((l) => l.type === 'order').length;

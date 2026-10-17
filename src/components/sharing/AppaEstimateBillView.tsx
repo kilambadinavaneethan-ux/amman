@@ -472,7 +472,7 @@ export const AppaEstimateBillView = React.forwardRef<View, AppaEstimateBillViewP
                       </View>
                       <View style={[styles.colDate, { borderRightColor: theme.gridLineColor }]}>
                         <Text style={[styles.rowCellText, { color: theme.inkColor, textAlign: 'center', fontSize: 11 }]}>
-                          {dmy}
+                          {isOpening ? '' : dmy}
                         </Text>
                       </View>
 
@@ -487,7 +487,9 @@ export const AppaEstimateBillView = React.forwardRef<View, AppaEstimateBillViewP
                         ) : isPayment ? (
                           <View>
                             <View style={{ flexDirection: 'row', alignItems: 'center', gap: 4 }}>
-                              <Text style={{ fontSize: 11, color: '#047857' }}>💳</Text>
+                              <Text style={{ fontSize: 11, color: '#047857' }}>
+                                {item.description?.toLowerCase().includes('order') ? '📦' : item.description?.toLowerCase().includes('adjustment') ? '⚖️' : '💳'}
+                              </Text>
                               <Text style={[styles.rowCellText, { color: '#047857', fontWeight: '800' }]}>
                                 {item.description || 'ரொக்கம் வரவு (Payment)'}
                               </Text>

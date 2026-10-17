@@ -85,7 +85,6 @@ function EditSupplierScreen() {
     }
 
     setSaving(true);
-
     try {
       const ok = await updateSupplier(supplier.id, {
         name: name.trim(),
@@ -94,6 +93,7 @@ function EditSupplierScreen() {
         email: email.trim(),
         address: address.trim(),
         balance: parsedBalance,
+        ...(supplier.openingBalance !== undefined ? { openingBalance: supplier.openingBalance } : {}),
         status,
         suppliedMaterials: selectedMaterials,
         notes: notes.trim(),

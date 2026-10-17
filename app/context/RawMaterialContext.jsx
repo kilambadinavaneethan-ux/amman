@@ -245,6 +245,11 @@ export function RawMaterialProvider({ children }) {
           );
         } else if (logData.type === "payment" && logData.amount) {
           rollbackedBalance = currentBalance + Number(logData.amount);
+        } else if (logData.type === "opening" && logData.amount) {
+          rollbackedBalance = Math.max(
+            0,
+            currentBalance - Number(logData.amount),
+          );
         }
 
         batch.update(supplierRef, {
@@ -392,6 +397,8 @@ export function RawMaterialProvider({ children }) {
           );
         } else if (oldData.type === "payment" && oldData.amount) {
           oldBalance = oldBalance + Number(oldData.amount);
+        } else if (oldData.type === "opening" && oldData.amount) {
+          oldBalance = oldBalance - Number(oldData.amount);
         }
 
         if (newSupplierId === oldData.supplierId) {
@@ -409,6 +416,13 @@ export function RawMaterialProvider({ children }) {
                 : oldData.amount,
             );
             oldBalance = Math.max(0, oldBalance - newAmount);
+          } else if (oldData.type === "opening") {
+            const newAmount = Number(
+              updatedData.amount !== undefined
+                ? updatedData.amount
+                : oldData.amount,
+            );
+            oldBalance = oldBalance + newAmount;
           }
           batch.update(oldSupplierRef, {
             balance: oldBalance,

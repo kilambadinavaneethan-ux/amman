@@ -3,6 +3,7 @@ import { View, Text, StyleSheet, ScrollView, TextInput, Pressable, ActivityIndic
 import { useRouter } from "expo-router";
 import { MaterialIcons } from "@expo/vector-icons";
 import { RawMaterialSupplierContext } from "../../../context/RawMaterialSupplierContext";
+import { RawMaterialContext } from "../../../context/RawMaterialContext";
 import { ItemContext } from "../../../context/ItemContext";
 import ProtectedRoute from "../../../components/ProtectedRoute";
 import BackButton from "../../../components/BackButton";
@@ -15,6 +16,7 @@ function AddSupplierScreen() {
   const styles = useMemo(() => getStyles(theme), [theme]);
   const router = useRouter();
   const { addSupplier } = useContext(RawMaterialSupplierContext);
+  const { addTransaction } = useContext(RawMaterialContext);
   const { items } = useContext(ItemContext);
 
   const rawMaterials = items.filter(i => i.itemType === "raw_material");
@@ -74,12 +76,30 @@ function AddSupplierScreen() {
         email: email.trim(),
         address: address.trim(),
         balance: balanceVal,
+        openingBalance: balanceVal,
         status: "active",
         suppliedMaterials: selectedMaterials,
         notes: notes.trim(),
       });
 
       if (supplierId) {
+        if (balanceVal > 0) {
+          try {
+            await addTransaction({
+              materialId: null,
+              materialName: "Opening Balance",
+              type: "opening",
+              quantity: 0,
+              amount: balanceVal,
+              supplierId: supplierId,
+              supplierName: name.trim(),
+              notes: "Opening Outstanding Balance",
+              date: new Date(),
+            });
+          } catch (txErr) {
+            console.error("Failed to log opening balance transaction:", txErr);
+          }
+        }
         router.push("/settings/raw-materials/suppliers");
       } else {
         setError("Failed to register supplier in the database.");
