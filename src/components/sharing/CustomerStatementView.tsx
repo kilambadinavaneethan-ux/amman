@@ -25,6 +25,20 @@ function formatDate(dateVal: Date | string): string {
   return d.toLocaleDateString('en-IN', { day: '2-digit', month: 'short', year: 'numeric' });
 }
 
+function formatDateTime(dateVal: Date | string): string {
+  if (!dateVal) return '';
+  const d = dateVal instanceof Date ? dateVal : new Date(dateVal);
+  if (isNaN(d.getTime())) return String(dateVal);
+  const datePart = d.toLocaleDateString('en-IN', { day: '2-digit', month: 'short', year: 'numeric' });
+  const isMidnight =
+    (d.getHours() === 0 && d.getMinutes() === 0 && d.getSeconds() === 0) ||
+    (d.getUTCHours() === 0 && d.getUTCMinutes() === 0 && d.getUTCSeconds() === 0) ||
+    (d.getHours() === 5 && d.getMinutes() === 30 && d.getSeconds() === 0);
+  if (isMidnight) return datePart;
+  const timePart = d.toLocaleTimeString([], { hour: 'numeric', minute: '2-digit', hour12: true });
+  return `${datePart}\n${timePart}`;
+}
+
 const CustomerStatementViewComponent: React.ForwardRefRenderFunction<View, CustomerStatementViewProps> = (
   { data, company = {}, settings, template, isDark = false },
   ref
@@ -379,7 +393,7 @@ const CustomerStatementViewComponent: React.ForwardRefRenderFunction<View, Custo
                       { borderBottomColor: borderColor, backgroundColor: idx % 2 === 0 ? cardBg : innerCardBg }
                     ]}
                   >
-                    <Text style={[styles.td, { flex: 1.05, color: subTextColor, fontSize: 9, paddingTop: 1 }]}>{item.type === 'opening' ? '' : formatDate(item.date)}</Text>
+                    <Text style={[styles.td, { flex: 1.05, color: subTextColor, fontSize: 9, paddingTop: 1 }]}>{item.type === 'opening' ? '' : formatDateTime(item.date)}</Text>
                     <View style={{ flex: 2.2, paddingRight: 4 }}>
                       <Text style={[styles.td, { color: textColor, fontWeight: '700' }]}>
                         {item.description}

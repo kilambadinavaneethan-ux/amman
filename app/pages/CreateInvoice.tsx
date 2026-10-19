@@ -785,28 +785,22 @@ export default function CreateInvoice() {
                 const curBal = Number(cData.totalPending !== undefined ? cData.totalPending : (cData.balance || 0));
                 const curPaid = Number(cData.totalPaid || 0);
 
-                let newBal = curBal;
-                if (curBal < 0) {
-                  // Customer already had advance credit
-                  const netOrderPayable = Math.max(0, calculatedTotal + curBal);
-                  const excessAdv = Math.max(0, paidAmountNum - netOrderPayable);
-                  newBal = -excessAdv;
-                } else {
-                  // Customer had 0 or positive balance (dues)
-                  const excessOverBill = paidAmountNum - calculatedTotal;
-                  if (excessOverBill > 0) {
-                    newBal = curBal - excessOverBill;
-                  }
+                if (excessAdvanceVal > 0) {
+                  const newBal = curBal < 0 ? curBal - excessAdvanceVal : -excessAdvanceVal;
+                  const newAdvance = Math.abs(newBal);
+                  await updateDoc(customerRef, {
+                    balance: newBal,
+                    totalPending: newBal,
+                    advanceAmount: newAdvance,
+                    totalPaid: curPaid + paidAmountNum,
+                    lastTransactionDate: new Date(),
+                  });
+                } else if (paidAmountNum > 0) {
+                  await updateDoc(customerRef, {
+                    totalPaid: curPaid + paidAmountNum,
+                    lastTransactionDate: new Date(),
+                  });
                 }
-
-                const newAdvance = newBal < 0 ? Math.abs(newBal) : 0;
-                await updateDoc(customerRef, {
-                  balance: newBal,
-                  totalPending: newBal,
-                  advanceAmount: newAdvance,
-                  totalPaid: curPaid + paidAmountNum,
-                  lastTransactionDate: new Date(),
-                });
               }
             } else if (finalCustomerType === "worker") {
               const workerRef = doc(db, "workers", finalCustomerId);

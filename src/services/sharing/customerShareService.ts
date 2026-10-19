@@ -17,6 +17,18 @@ function formatDate(dateVal: Date | string): string {
   return d.toLocaleDateString('en-IN', { day: '2-digit', month: 'short', year: 'numeric' });
 }
 
+function formatTime(dateVal: Date | string): string {
+  if (!dateVal) return '';
+  const d = dateVal instanceof Date ? dateVal : new Date(dateVal);
+  if (isNaN(d.getTime())) return '';
+  const isMidnight =
+    (d.getHours() === 0 && d.getMinutes() === 0 && d.getSeconds() === 0) ||
+    (d.getUTCHours() === 0 && d.getUTCMinutes() === 0 && d.getUTCSeconds() === 0) ||
+    (d.getHours() === 5 && d.getMinutes() === 30 && d.getSeconds() === 0);
+  if (isMidnight) return '';
+  return d.toLocaleTimeString([], { hour: 'numeric', minute: '2-digit', hour12: true });
+}
+
 export const customerShareService = {
   /**
    * Format text message for Customer Statement (WhatsApp / SMS)
@@ -160,7 +172,8 @@ export const customerShareService = {
     const ledgerLines = recentLedger.map((l) => {
       const icon = l.type === 'order' ? '🛒' : l.type === 'payment' ? '💳' : '📌';
       const noteStr = l.notes ? ` (Note: ${l.notes})` : '';
-      return `${icon} ${formatDate(l.date)} - ${l.description}${noteStr}: ${l.type === 'payment' ? '-' : '+'}${formatCurrency(l.amount || l.paid || 0)}`;
+      const tStr = formatTime(l.date) ? ` ${formatTime(l.date)}` : '';
+      return `${icon} ${formatDate(l.date)}${tStr} - ${l.description}${noteStr}: ${l.type === 'payment' ? '-' : '+'}${formatCurrency(l.amount || l.paid || 0)}`;
     }).join('\n');
 
     // Format scheduled due dates
@@ -309,8 +322,9 @@ export const customerShareService = {
       const debitVal = l.type === 'payment' ? 0 : (l.amount || 0);
 
       return `
-        <tr style="background: ${idx % 2 === 0 ? '#FFFFFF' : '#F8FAFC'};">
-          <td style="padding: 10px; border-bottom: 1px solid #E2E8F0; font-size: 12px; color: #475569; vertical-align: top;">${l.type === 'opening' ? '' : formatDate(l.date)}</td>
+          <td style="padding: 10px; border-bottom: 1px solid #E2E8F0; font-size: 12px; color: #475569; vertical-align: top;">
+            ${l.type === 'opening' ? '' : `<div>${formatDate(l.date)}</div>${formatTime(l.date) ? `<div style="font-size: 10px; color: #94A3B8; margin-top: 2px;">🕒 ${formatTime(l.date)}</div>` : ''}`}
+          </td>
           <td style="padding: 10px; border-bottom: 1px solid #E2E8F0; font-size: 12px; font-weight: 600; color: #0F172A; vertical-align: top;">
             <div>${l.description}</div>
             ${l.notes ? `<div style="font-size: 10px; color: #64748B; font-weight: 400; font-style: italic; margin-top: 2px;">📝 Note: ${l.notes}</div>` : ''}

@@ -164,7 +164,7 @@ export default function Orders() {
           ? (customerObj.totalPending !== undefined ? Number(customerObj.totalPending) : Number(customerObj.balance || 0))
           : 0;
         const thisOrderUnpaid = Number(itemToShare.balanceDue || 0);
-        itemToShare.previousBalance = Math.max(0, customerCurrentPending - thisOrderUnpaid);
+        itemToShare.previousBalance = customerCurrentPending - thisOrderUnpaid;
       }
     }
     const transaction = adaptToTransactionData(itemToShare, type, userProfile);
@@ -1417,8 +1417,8 @@ export default function Orders() {
       const oldBalanceDue = isSameCustomer
         ? (selectedOrder?.previousBalance !== undefined
             ? Number(selectedOrder.previousBalance)
-            : Math.max(0, customerCurrentPending - originalOrderUnpaid))
-        : Math.max(0, customerCurrentPending);
+            : (customerCurrentPending - originalOrderUnpaid))
+        : customerCurrentPending;
 
       const totalWithOldDues = editTotalVal + oldBalanceDue;
       const excessAdv = Math.max(0, editPaidVal - totalWithOldDues);
@@ -2762,7 +2762,7 @@ export default function Orders() {
 
                           const oldBalanceDue = order.previousBalance !== undefined
                             ? Number(order.previousBalance)
-                            : Math.max(0, customerCurrentPending - thisOrderUnpaid);
+                            : (customerCurrentPending - thisOrderUnpaid);
 
                           const thisOrderTotal = Number(order.total || 0);
                           const totalAmountWithOldDues = thisOrderTotal + oldBalanceDue;
@@ -5045,8 +5045,8 @@ export default function Orders() {
                     const oldBalanceDue = isSameCust
                       ? (selectedOrder?.previousBalance !== undefined
                           ? Number(selectedOrder.previousBalance)
-                          : Math.max(0, customerCurrentPending - originalOrderUnpaid))
-                      : Math.max(0, customerCurrentPending);
+                          : (customerCurrentPending - originalOrderUnpaid))
+                      : customerCurrentPending;
 
                     const grandTotalWithOldDues = editTotalVal + oldBalanceDue;
                     const totalBalanceUnpaid = oldBalanceDue + editBalanceDueVal;

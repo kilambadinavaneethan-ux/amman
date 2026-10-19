@@ -36,7 +36,9 @@ import { CustomerShareBottomSheet } from "../../src/components/sharing/CustomerS
 import { adaptToTransactionData } from "../../src/utils/transactionAdapter";
 import { TransactionData, CustomerShareData } from "../../src/types/sharing";
 import { PRESET_MARKINGS, getMarkingConfig, normalizeMarkings, useCustomMarkings } from "../../src/utils/markingUtils";
-import { normalizeDateValue } from "../../src/config/firebase";
+import { collection, doc, updateDoc, addDoc, query, where, getDoc } from "firebase/firestore";
+import { db, normalizeDateValue } from "../../src/config/firebase";
+import { getDocsOfflineSafe } from "../../src/utils/offlineHelpers";
 
 const PAYMENT_METHODS = ["Cash", "UPI", "Bank Transfer", "Cheque", "Card", "Online", "Wallet", "Other"];
 
@@ -433,7 +435,7 @@ export default function CustomerProfile() {
       if (itemToShare.previousBalance === undefined && customer) {
         const customerCurrentPending = customer.totalPending !== undefined ? Number(customer.totalPending) : Number(customer.balance || 0);
         const thisOrderUnpaid = Number(itemToShare.balanceDue || 0);
-        itemToShare.previousBalance = Math.max(0, customerCurrentPending - thisOrderUnpaid);
+        itemToShare.previousBalance = customerCurrentPending - thisOrderUnpaid;
       }
     }
     const transaction = adaptToTransactionData(itemToShare, type, userProfile);
@@ -463,6 +465,78 @@ export default function CustomerProfile() {
     [customerOrders]
   );
 
+  // Helpers to resolve exact Date and Time for Orders and Payments
+  const isDateOnlyValue = (d?: Date | null): boolean => {
+    if (!d || isNaN(d.getTime())) return true;
+    return (
+      (d.getHours() === 0 && d.getMinutes() === 0 && d.getSeconds() === 0) ||
+      (d.getUTCHours() === 0 && d.getUTCMinutes() === 0 && d.getUTCSeconds() === 0) ||
+      (d.getHours() === 5 && d.getMinutes() === 30 && d.getSeconds() === 0 && d.getMilliseconds() === 0)
+    );
+  };
+
+  const resolveOrderDateTime = (order: any): Date => {
+    const rawOrdered = order.orderedDate ? normalizeDateValue(order.orderedDate) : null;
+    const rawCreated = order.createdAt ? normalizeDateValue(order.createdAt) : null;
+    const rawDate = order.date ? normalizeDateValue(order.date) : null;
+
+    if (rawOrdered && !isDateOnlyValue(rawOrdered)) {
+      return rawOrdered;
+    }
+
+    if (rawOrdered) {
+      const timeSource = (rawCreated && !isDateOnlyValue(rawCreated))
+        ? rawCreated
+        : (rawDate && !isDateOnlyValue(rawDate) ? rawDate : null);
+
+      if (timeSource) {
+        const merged = new Date(rawOrdered);
+        merged.setHours(
+          timeSource.getHours(),
+          timeSource.getMinutes(),
+          timeSource.getSeconds(),
+          timeSource.getMilliseconds()
+        );
+        return merged;
+      }
+      return rawOrdered;
+    }
+
+    if (rawCreated) return rawCreated;
+    if (rawDate) return rawDate;
+    return new Date();
+  };
+
+  const resolvePaymentDateTime = (payment: any): Date => {
+    const rawPayDate = payment.paymentDate ? normalizeDateValue(payment.paymentDate) : null;
+    const rawDate = payment.date ? normalizeDateValue(payment.date) : null;
+    const rawCreated = payment.createdAt ? normalizeDateValue(payment.createdAt) : null;
+
+    const targetDate = rawPayDate || rawDate;
+
+    if (targetDate && !isDateOnlyValue(targetDate)) {
+      return targetDate;
+    }
+
+    if (targetDate) {
+      const timeSource = (rawCreated && !isDateOnlyValue(rawCreated)) ? rawCreated : null;
+      if (timeSource) {
+        const merged = new Date(targetDate);
+        merged.setHours(
+          timeSource.getHours(),
+          timeSource.getMinutes(),
+          timeSource.getSeconds(),
+          timeSource.getMilliseconds()
+        );
+        return merged;
+      }
+      return targetDate;
+    }
+
+    if (rawCreated) return rawCreated;
+    return new Date();
+  };
+
   // Compute consolidated chronological ledger entries
   const ledgerEntries = React.useMemo(() => {
     const entries: any[] = [];
@@ -472,7 +546,7 @@ export default function CustomerProfile() {
 
     customerOrders.forEach((order: any) => {
       const isCancelled = order.status === "cancelled";
-      const orderDateObj = normalizeDateValue(order.orderedDate || order.createdAt);
+      const orderDateObj = resolveOrderDateTime(order);
       let deliveryDateObj = null;
       if (order.deliveryDate) {
         deliveryDateObj = normalizeDateValue(order.deliveryDate);
@@ -492,15 +566,15 @@ export default function CustomerProfile() {
       }
 
       // 1. Original Order entry
-      const isCompleted = order.status === "completed";
       const orderPaid = Number(order.paidAmount || 0);
       const orderTotal = Number(order.total || 0);
       const orderExcess = Math.max(0, orderPaid - orderTotal);
+      const orderUnpaid = order.balanceDue !== undefined
+        ? Number(order.balanceDue)
+        : Math.max(0, orderTotal - orderPaid);
       const balChange = isCancelled
         ? 0
-        : isCompleted
-        ? (orderExcess > 0 ? -orderExcess : Number(order.balanceDue || 0))
-        : (orderExcess > 0 ? -orderExcess : 0);
+        : (orderExcess > 0 ? -orderExcess : orderUnpaid);
 
       entries.push({
         id: order.id,
@@ -550,7 +624,7 @@ export default function CustomerProfile() {
       ));
       if (isOrderPayment) return;
 
-      const payDate = normalizeDateValue(payment.createdAt || payment.date);
+      const payDate = resolvePaymentDateTime(payment);
       const amtRec = Number(payment.amountReceived !== undefined ? payment.amountReceived : (payment.amount || 0));
       const discAmt = Number(payment.discountAmount || 0);
       const totalBalanceReduction = amtRec + discAmt;
@@ -599,19 +673,24 @@ export default function CustomerProfile() {
       });
     });
 
-    // Sort by date ascending to compute running balance and show chronological flow (Oldest -> Newest)
+    // Sort by exact date and time ascending to compute running balance and show chronological flow (Oldest -> Newest)
     entries.sort((a, b) => {
-      const diff = a.date.getTime() - b.date.getTime();
+      const timeA = a.date instanceof Date ? a.date.getTime() : new Date(a.date).getTime();
+      const timeB = b.date instanceof Date ? b.date.getTime() : new Date(b.date).getTime();
+      const diff = timeA - timeB;
       if (diff !== 0) return diff;
       if (a.type === "order" && b.type === "payment") return -1;
       if (a.type === "payment" && b.type === "order") return 1;
-      return 0;
+      const idA = String(a.id || "");
+      const idB = String(b.id || "");
+      return idA.localeCompare(idB);
     });
 
     // Calculate opening balance
     const sumChanges = entries.reduce((sum: number, entry: any) => sum + (entry.balanceChange || 0), 0);
     const customerPending = Number(customer.totalPending !== undefined ? customer.totalPending : (customer.balance || 0));
-    const openingBalance = Math.max(0, customerPending - sumChanges);
+    const hasStoredOpening = customer.openingBalance !== undefined && customer.openingBalance !== null;
+    const openingBalance = hasStoredOpening ? Number(customer.openingBalance) : (customerPending - sumChanges);
 
     let runningBalance = openingBalance;
     const ledger = entries.map((entry) => {
@@ -622,8 +701,8 @@ export default function CustomerProfile() {
       };
     });
 
-    // If opening balance exists, keep it at the top
-    if (openingBalance > 0) {
+    // If opening balance exists (positive or negative), show it at the top
+    if (Math.abs(openingBalance) > 0.001) {
       const openingDate = customer.createdAt
         ? normalizeDateValue(customer.createdAt)
         : new Date(Date.now() - 365 * 24 * 60 * 60 * 1000);
@@ -633,9 +712,10 @@ export default function CustomerProfile() {
         orderDate: openingDate,
         deliveryDate: null,
         type: "opening",
-        description: "Opening Balance",
-        orderAmount: openingBalance,
-        paymentReceived: 0,
+        description: openingBalance < 0 ? "Opening Advance Balance" : "Opening Balance",
+        orderAmount: openingBalance > 0 ? openingBalance : 0,
+        paymentReceived: openingBalance < 0 ? Math.abs(openingBalance) : 0,
+        balanceChange: openingBalance,
         runningBalance: openingBalance,
       });
     }
@@ -707,7 +787,8 @@ export default function CustomerProfile() {
   const customerShareData: CustomerShareData | null = useMemo(() => {
     if (!customer) return null;
     const currentPending = customer.totalPending !== undefined ? Number(customer.totalPending) : Number(customer.balance || 0);
-    const oldBalance = Number(customer.openingBalance || customer.previousBalance || 0);
+    const openingEntry = (ledgerEntries || []).find((l: any) => l.type === 'opening');
+    const oldBalance = openingEntry ? Number(openingEntry.runningBalance) : Number(customer.openingBalance || customer.previousBalance || 0);
     const totalPaid = (ledgerEntries || []).reduce((sum: number, l: any) => sum + (l.paymentReceived || 0), 0);
 
     return {
@@ -829,9 +910,7 @@ export default function CustomerProfile() {
 
   const filteredCustomerOrders = React.useMemo(() => {
     return customerOrders.filter((order: any) => {
-      const orderDateObj = order.orderedDate
-        ? (order.orderedDate instanceof Date ? order.orderedDate : new Date(order.orderedDate))
-        : (order.createdAt instanceof Date ? order.createdAt : new Date(order.createdAt));
+      const orderDateObj = resolveOrderDateTime(order);
       return checkDateFilter(orderDateObj);
     });
   }, [customerOrders, checkDateFilter]);
@@ -994,6 +1073,7 @@ export default function CustomerProfile() {
   const [editLedgerDate, setEditLedgerDate] = useState<Date>(new Date());
   const [isLedgerCalendarOpen, setIsLedgerCalendarOpen] = useState(false);
   const [savingEditLedger, setSavingEditLedger] = useState(false);
+  const [calendarTarget, setCalendarTarget] = useState<"transaction" | "delivery">("transaction");
 
   // Marking Profile states
   const [isMarkingModalOpen, setIsMarkingModalOpen] = useState(false);
@@ -1087,10 +1167,10 @@ export default function CustomerProfile() {
       : (customer.phone ? [customer.phone] : [""]);
     setEditProfilePhoneNumbers(existingNumbers);
 
-    const sumChanges = customerOrders.reduce((sum: number, o: any) => sum + (o.status === "completed" ? (o.balanceDue || 0) : 0), 0) - 
-                       customerPayments.reduce((sum: number, p: any) => sum + (p.amountReceived || p.amount || 0), 0);
+    const sumChanges = customerOrders.reduce((sum: number, o: any) => sum + (o.status !== "cancelled" ? (o.balanceDue !== undefined ? Number(o.balanceDue) : Math.max(0, (o.total || 0) - (o.paidAmount || 0))) : 0), 0) - 
+                       customerPayments.reduce((sum: number, p: any) => sum + (p.amountReceived !== undefined ? Number(p.amountReceived) : (p.amount || 0)), 0);
     const customerPending = Number(customer.totalPending !== undefined ? customer.totalPending : (customer.balance || 0));
-    const openingBalance = Math.max(0, customerPending - sumChanges);
+    const openingBalance = customerPending - sumChanges;
     setEditProfileOpeningBalance(String(openingBalance));
 
     setIsEditProfileOpen(true);
@@ -1102,14 +1182,14 @@ export default function CustomerProfile() {
       return;
     }
     const newOpeningBal = parseFloat(editProfileOpeningBalance) || 0;
-    if (isNaN(newOpeningBal) || newOpeningBal < 0) {
-      Alert.alert("Invalid Balance", "Opening balance must be zero or a positive number.");
+    if (isNaN(newOpeningBal)) {
+      Alert.alert("Invalid Balance", "Opening balance must be a valid number.");
       return;
     }
     setIsSavingProfile(true);
     try {
-      const sumChanges = customerOrders.reduce((sum: number, o: any) => sum + (o.status === "completed" ? (o.balanceDue || 0) : 0), 0) - 
-                         customerPayments.reduce((sum: number, p: any) => sum + (p.amountReceived || p.amount || 0), 0);
+      const sumChanges = customerOrders.reduce((sum: number, o: any) => sum + (o.status !== "cancelled" ? (o.balanceDue !== undefined ? Number(o.balanceDue) : Math.max(0, (o.total || 0) - (o.paidAmount || 0))) : 0), 0) - 
+                         customerPayments.reduce((sum: number, p: any) => sum + (p.amountReceived !== undefined ? Number(p.amountReceived) : (p.amount || 0)), 0);
       const newPendingBalance = newOpeningBal + sumChanges;
 
       const cleanedPhones = editProfilePhoneNumbers.map(p => p.trim()).filter(Boolean);
@@ -1121,6 +1201,7 @@ export default function CustomerProfile() {
         phoneNumbers: cleanedPhones,
         address: editProfileAddress.trim(),
         notes: editProfileNotes.trim(),
+        openingBalance: newOpeningBal,
         balance: newPendingBalance,
         totalPending: newPendingBalance,
         isSpecial: editProfileIsSpecial,
@@ -1472,25 +1553,43 @@ export default function CustomerProfile() {
   const [editOrderUnloadingWorkerId, setEditOrderUnloadingWorkerId] = useState("");
   const [editPaymentCollectorId, setEditPaymentCollectorId] = useState("");
 
+  // Full Edit Order States
+  const [editOrderStatus, setEditOrderStatus] = useState<"pending" | "in-transit" | "completed" | "cancelled">("pending");
+  const [editOrderDeliveryDate, setEditOrderDeliveryDate] = useState<Date | null>(null);
+  const [editOrderDeliveredQty, setEditOrderDeliveredQty] = useState("0");
+  const [editOrderTax, setEditOrderTax] = useState("0");
+  const [editOrderLoadingCharge, setEditOrderLoadingCharge] = useState("0");
+  const [editOrderUnloadingCharge, setEditOrderUnloadingCharge] = useState("0");
+  const [isLoadingCustomized, setIsLoadingCustomized] = useState(false);
+  const [isUnloadingCustomized, setIsUnloadingCustomized] = useState(false);
+  const [editLoadingByPartner, setEditLoadingByPartner] = useState(false);
+  const [editUnloadingByPartner, setEditUnloadingByPartner] = useState(false);
+  const [editCustomPartnerLoadingRate, setEditCustomPartnerLoadingRate] = useState("0");
+  const [editCustomPartnerLoadingRateType, setEditCustomPartnerLoadingRateType] = useState("per brick");
+  const [editCustomPartnerUnloadingRate, setEditCustomPartnerUnloadingRate] = useState("0");
+  const [editCustomPartnerUnloadingRateType, setEditCustomPartnerUnloadingRateType] = useState("per brick");
+  const [isShipmentCustomized, setIsShipmentCustomized] = useState(false);
+  const [editItemSearch, setEditItemSearch] = useState("");
+
   const handleUpdateEditItemQty = (index: number, newQtyStr: string) => {
     const updated = [...editOrderItems];
-    const qty = Math.max(1, Number(newQtyStr) || 1);
-    updated[index].quantity = qty;
-    updated[index].grossTotal = qty * Number(updated[index].rate || 0);
+    const cleaned = newQtyStr.replace(/[^0-9]/g, "");
+    updated[index].quantity = cleaned === "" ? "" : Number(cleaned);
+    updated[index].grossTotal = (Number(updated[index].quantity) || 0) * (Number(updated[index].rate) || 0);
     setEditOrderItems(updated);
   };
 
   const handleUpdateEditItemRate = (index: number, newRateStr: string) => {
     const updated = [...editOrderItems];
-    const rate = Math.max(0, Number(newRateStr) || 0);
-    updated[index].rate = rate;
-    updated[index].grossTotal = Number(updated[index].quantity || 1) * rate;
+    const cleaned = newRateStr.replace(/[^0-9.]/g, "");
+    updated[index].rate = cleaned;
+    updated[index].grossTotal = (Number(updated[index].quantity) || 0) * (parseFloat(cleaned) || 0);
     setEditOrderItems(updated);
   };
 
   const handleIncrementEditItemQty = (index: number, delta: number) => {
     const updated = [...editOrderItems];
-    const currentQty = Number(updated[index].quantity || 1);
+    const currentQty = Number(updated[index].quantity || 0);
     const newQty = Math.max(1, currentQty + delta);
     updated[index].quantity = newQty;
     updated[index].grossTotal = newQty * Number(updated[index].rate || 0);
@@ -1504,7 +1603,7 @@ export default function CustomerProfile() {
     }
     if (entry.type === "opening") return;
     setSelectedEntry(entry);
-    setEditLedgerDate(entry.date);
+    setEditLedgerDate(entry.date ? (entry.date instanceof Date ? entry.date : new Date(entry.date)) : new Date());
     
     if (entry.type === "payment") {
       setEditPaymentAmt(String(entry.original.amountReceived !== undefined ? entry.original.amountReceived : (entry.original.amount || 0)));
@@ -1513,32 +1612,62 @@ export default function CustomerProfile() {
       setEditPaymentNotes(entry.original.notes || "");
       setEditPaymentCollectorId(entry.original.collectorId || "");
     } else if (entry.type === "order") {
-      setEditOrderPaidAmt(String(entry.original.paidAmount || 0));
-      setEditOrderPaymentMethod(entry.original.paymentMethod || "Cash");
-      setEditOrderDiscount(String(entry.original.discount || 0));
-      setEditOrderDiscountType(entry.original.discountType || "amount");
-      setEditOrderNotes(entry.original.notes || "");
-      setEditOrderShipment(String(entry.original.shipmentCharge || 0));
-      setEditOrderShipmentDistance(String(entry.original.shipmentDistance || 0));
-      setEditOrderExtra(String(entry.original.extraAmount || 0));
-      setEditOrderExtraDesc(entry.original.extraAmountDescription || "");
-      setEditOrderDeliveryPartnerId(entry.original.deliveryPartnerId || "");
-      setEditOrderCollectorId(entry.original.collectorId || "");
-      setEditOrderLoadingWorkerId(entry.original.loadingWorkerId || "");
-      setEditOrderUnloadingWorkerId(entry.original.unloadingWorkerId || "");
-      const itemsList = entry.original.items || (entry.original.itemId ? [{
-        itemId: entry.original.itemId,
-        itemName: entry.original.itemName,
-        quantity: entry.original.quantity,
-        rate: entry.original.rate,
-        grossTotal: entry.original.grossTotal,
+      const orig = entry.original || {};
+      setEditOrderPaidAmt(String(orig.paidAmount !== undefined ? orig.paidAmount : (orig.amountPaid || 0)));
+      setEditOrderPaymentMethod(orig.paymentMethod || orig.paymentMode || "Cash");
+      setEditOrderDiscount(String(orig.discount !== undefined ? orig.discount : 0));
+      setEditOrderDiscountType(orig.discountType || "amount");
+      setEditOrderNotes(orig.notes || "");
+      setEditOrderShipment(String(orig.shipmentCharge !== undefined ? orig.shipmentCharge : 0));
+      setEditOrderShipmentDistance(String(orig.shipmentDistance !== undefined ? orig.shipmentDistance : 0));
+      setEditOrderExtra(String(orig.extraAmount !== undefined ? orig.extraAmount : 0));
+      setEditOrderExtraDesc(orig.extraAmountDescription || "");
+      setEditOrderDeliveryPartnerId(orig.deliveryPartnerId || "");
+      setEditOrderCollectorId(orig.collectorId || "");
+      setEditOrderLoadingWorkerId(orig.loadingWorkerId || "");
+      setEditOrderUnloadingWorkerId(orig.unloadingWorkerId || "");
+
+      // Full Edit Fields Population
+      setEditOrderStatus(orig.status || "pending");
+      const delDateRaw = orig.deliveryDate || null;
+      setEditOrderDeliveryDate(delDateRaw ? (delDateRaw.toDate ? delDateRaw.toDate() : new Date(delDateRaw)) : null);
+      setEditOrderDeliveredQty(String(orig.deliveredQuantity !== undefined ? orig.deliveredQuantity : (orig.status === "completed" ? (orig.quantity || 0) : 0)));
+      setEditOrderTax(String(orig.taxAmount !== undefined ? orig.taxAmount : (orig.gstAmount || orig.tax || 0)));
+
+      const initialLoading = Number(orig.loadingCharge !== undefined ? orig.loadingCharge : 0);
+      const initialUnloading = Number(orig.unloadingCharge !== undefined ? orig.unloadingCharge : 0);
+      setEditOrderLoadingCharge(String(initialLoading));
+      setEditOrderUnloadingCharge(String(initialUnloading));
+      setEditLoadingByPartner(!!orig.loadingByDeliveryPartner);
+      setEditUnloadingByPartner(!!orig.unloadingByDeliveryPartner);
+
+      const partner = partners.find((p: any) => p.id === orig.deliveryPartnerId);
+      setEditCustomPartnerLoadingRate(String(orig.deliveryPartnerLoadingRate !== undefined ? orig.deliveryPartnerLoadingRate : (partner?.loadingRate || 0)));
+      setEditCustomPartnerLoadingRateType(orig.deliveryPartnerLoadingRateType || partner?.loadingRateType || "per brick");
+      setEditCustomPartnerUnloadingRate(String(orig.deliveryPartnerUnloadingRate !== undefined ? orig.deliveryPartnerUnloadingRate : (partner?.unloadingRate || 0)));
+      setEditCustomPartnerUnloadingRateType(orig.deliveryPartnerUnloadingRateType || partner?.unloadingRateType || "per brick");
+
+      setIsLoadingCustomized(initialLoading > 0 && !orig.loadingWorkerId && !orig.loadingByDeliveryPartner);
+      setIsUnloadingCustomized(initialUnloading > 0 && !orig.unloadingWorkerId && !orig.unloadingByDeliveryPartner);
+      setIsShipmentCustomized(false);
+      setEditItemSearch("");
+
+      const itemsList = orig.items && orig.items.length > 0 ? orig.items : (orig.itemId ? [{
+        itemId: orig.itemId,
+        itemName: orig.itemName,
+        quantity: orig.quantity,
+        rate: orig.rate,
+        rateType: orig.rateType || "piece",
+        grossTotal: orig.grossTotal,
       }] : []);
+
       setEditOrderItems(itemsList.map((itm: any) => ({
         itemId: itm.itemId,
-        itemName: itm.itemName,
-        quantity: Number(itm.quantity || 1),
-        rate: Number(itm.rate || 0),
-        grossTotal: Number(itm.grossTotal || (Number(itm.quantity || 1) * Number(itm.rate || 0)))
+        itemName: itm.itemName || itm.name || "Item",
+        quantity: Number(itm.quantity !== undefined ? itm.quantity : 1),
+        rate: Number(itm.rate !== undefined ? itm.rate : (itm.unitPrice || 0)),
+        rateType: itm.rateType || itm.unit || "piece",
+        grossTotal: Number(itm.grossTotal !== undefined ? itm.grossTotal : (Number(itm.quantity || 1) * Number(itm.rate || itm.unitPrice || 0)))
       })));
     }
     
@@ -1548,6 +1677,7 @@ export default function CustomerProfile() {
   // Auto-calculate shipment charge when delivery partner or distance or items change inside edit order modal
   React.useEffect(() => {
     if (!isEditLedgerOpen || !selectedEntry || selectedEntry.type !== "order") return;
+    if (isShipmentCustomized) return;
 
     const orig = selectedEntry.original || {};
     const isUnchanged =
@@ -1588,14 +1718,14 @@ export default function CustomerProfile() {
       calculatedCharge = Math.max(rateVal, minRateVal);
     }
 
-    setEditOrderShipment(String(calculatedCharge));
+    setEditOrderShipment(String(Math.round(calculatedCharge)));
   }, [
     editOrderDeliveryPartnerId,
     editOrderShipmentDistance,
     editOrderItems,
     partners,
     isEditLedgerOpen,
-    selectedEntry,
+    isShipmentCustomized,
   ]);
 
   const handleSaveEditLedger = async () => {
@@ -1633,8 +1763,9 @@ export default function CustomerProfile() {
         const paidAmt = parseFloat(editOrderPaidAmt) || 0;
         const shipment = parseFloat(editOrderShipment) || 0;
         const extra = parseFloat(editOrderExtra) || 0;
+        const taxVal = parseFloat(editOrderTax) || 0;
         
-        if (paidAmt < 0 || shipment < 0 || extra < 0) {
+        if (paidAmt < 0 || shipment < 0 || extra < 0 || taxVal < 0) {
           Alert.alert("Invalid Amount", "Values must be greater than or equal to zero.");
           setSavingEditLedger(false);
           return;
@@ -1646,32 +1777,75 @@ export default function CustomerProfile() {
           return;
         }
 
-        const calculatedGrossTotal = editOrderItems.reduce((sum, item) => sum + Number(item.grossTotal || item.quantity * item.rate), 0);
-
-        const loadingWorker = workers.find((w: any) => w.id === editOrderLoadingWorkerId);
-        const loadingWorkerName = loadingWorker ? loadingWorker.name : null;
         const totalQty = editOrderItems.reduce((sum: number, itm: any) => sum + Number(itm.quantity || 0), 0);
-        const loadingCharge = loadingWorker ? totalQty * Number(loadingWorker.loadingCost || 0) : 0;
+        const parsedDeliveredQty = Math.max(0, Math.min(totalQty, Number(editOrderDeliveredQty) || 0));
 
-        const unloadingWorker = workers.find((w: any) => w.id === editOrderUnloadingWorkerId);
-        const unloadingWorkerName = unloadingWorker ? unloadingWorker.name : null;
-        const unloadingCharge = unloadingWorker ? totalQty * Number(unloadingWorker.unloadingCost || 0) : 0;
+        let finalStatus = editOrderStatus;
+        if (parsedDeliveredQty >= totalQty && totalQty > 0 && editOrderStatus !== "cancelled") {
+          finalStatus = "completed";
+        } else if (parsedDeliveredQty > 0 && parsedDeliveredQty < totalQty && (editOrderStatus === "pending" || editOrderStatus === "completed")) {
+          finalStatus = "in-transit";
+        }
+
+        const prevDeliveredQty = Number(selectedEntry.original?.deliveredQuantity || 0);
+        let newDeliveries = selectedEntry.original?.deliveries || [];
+        if (parsedDeliveredQty > prevDeliveredQty) {
+          newDeliveries = [
+            ...newDeliveries,
+            {
+              date: new Date(),
+              quantity: parsedDeliveredQty - prevDeliveredQty,
+              deliveryPartnerId: editOrderDeliveryPartnerId || null,
+            }
+          ];
+        }
 
         const partner = partners.find((p: any) => p.id === editOrderDeliveryPartnerId);
+        const deliveryPartnerName = partner ? partner.name : null;
+
+        const loadingWorker = workers.find((w: any) => w.id === editOrderLoadingWorkerId);
+        const loadingWorkerName = (editLoadingByPartner && partner?.hasLoading) ? null : (loadingWorker ? loadingWorker.name : null);
         
-        let discountVal = parseFloat(editOrderDiscount) || 0;
+        let autoCalcLoading = 0;
+        if (editLoadingByPartner && partner?.hasLoading) {
+          const rateType = editCustomPartnerLoadingRateType || partner.loadingRateType || "per brick";
+          const rate = parseFloat(editCustomPartnerLoadingRate) || parseFloat(partner.loadingRate) || 0;
+          autoCalcLoading = rateType === "per brick" ? rate * totalQty : rate;
+        } else if (loadingWorker) {
+          autoCalcLoading = totalQty * Number(loadingWorker.loadingCost || 0);
+        }
+        const finalLoadingCharge = isLoadingCustomized ? (parseFloat(editOrderLoadingCharge) || 0) : autoCalcLoading;
+
+        const unloadingWorker = workers.find((w: any) => w.id === editOrderUnloadingWorkerId);
+        const unloadingWorkerName = (editUnloadingByPartner && partner?.hasUnloading) ? null : (unloadingWorker ? unloadingWorker.name : null);
+        
+        let autoCalcUnloading = 0;
+        if (editUnloadingByPartner && partner?.hasUnloading) {
+          const rateType = editCustomPartnerUnloadingRateType || partner.unloadingRateType || "per brick";
+          const rate = parseFloat(editCustomPartnerUnloadingRate) || parseFloat(partner.unloadingRate) || 0;
+          autoCalcUnloading = rateType === "per brick" ? rate * totalQty : rate;
+        } else if (unloadingWorker) {
+          autoCalcUnloading = totalQty * Number(unloadingWorker.unloadingCost || 0);
+        }
+        const finalUnloadingCharge = isUnloadingCustomized ? (parseFloat(editOrderUnloadingCharge) || 0) : autoCalcUnloading;
+
+        const calculatedGrossTotal = editOrderItems.reduce((sum, item) => sum + (Number(item.quantity || 0) * Number(item.rate || 0)), 0);
+
+        const subtotalBeforeDiscount = calculatedGrossTotal + shipment + extra + taxVal + finalLoadingCharge + finalUnloadingCharge;
+        
+        const discountVal = parseFloat(editOrderDiscount) || 0;
         let calculatedDiscount = 0;
         if (editOrderDiscountType === "percent") {
-          calculatedDiscount = (calculatedGrossTotal * discountVal) / 100;
+          calculatedDiscount = (subtotalBeforeDiscount * discountVal) / 100;
         } else if (editOrderDiscountType === "per_brick") {
           calculatedDiscount = discountVal * totalQty;
         } else {
           calculatedDiscount = discountVal;
         }
 
-        const subtotalWithServices = calculatedGrossTotal + shipment + extra + loadingCharge + unloadingCharge;
-        const newTotal = Math.max(0, subtotalWithServices - calculatedDiscount);
+        const newTotal = Math.max(0, subtotalBeforeDiscount - calculatedDiscount);
         const newBalanceDue = Math.max(0, newTotal - paidAmt);
+        const excessAdv = Math.max(0, paidAmt - newTotal);
         
         const primaryItem = editOrderItems[0];
         
@@ -1689,6 +1863,8 @@ export default function CustomerProfile() {
           discountAmount: calculatedDiscount,
           notes: editOrderNotes.trim(),
           paymentMethod: editOrderPaymentMethod,
+          paymentMode: editOrderPaymentMethod,
+          paymentType: editOrderPaymentMethod,
           shipmentCharge: shipment,
           shipmentDistance: Number(editOrderShipmentDistance) || 0,
           deliveryRateType: partner?.deliveryRateType || "fixed amount",
@@ -1696,26 +1872,103 @@ export default function CustomerProfile() {
           deliveryMinRate: Number(partner?.minimumRate || 0),
           extraAmount: extra,
           extraAmountDescription: editOrderExtraDesc.trim(),
+          taxAmount: taxVal,
+          tax: taxVal,
+          gstAmount: taxVal,
           total: newTotal,
           paidAmount: paidAmt,
+          amountPaid: paidAmt,
+          advancePaid: paidAmt,
           balanceDue: newBalanceDue,
+          advanceAmount: excessAdv,
+          excessAdvance: excessAdv,
+          status: finalStatus,
+          deliveredQuantity: parsedDeliveredQty,
+          deliveries: newDeliveries,
+          deliveryDate: editOrderDeliveryDate || selectedEntry.original?.deliveryDate || null,
           createdAt: editLedgerDate,
           orderedDate: editLedgerDate,
           deliveryPartnerId: editOrderDeliveryPartnerId || null,
-          deliveryPartnerName: partner ? partner.name : null,
+          deliveryPartnerName: deliveryPartnerName,
           collectorId: editOrderCollectorId || null,
           collectorName: collectors.find((c: any) => c.id === editOrderCollectorId)?.name || null,
-          loadingWorkerId: editOrderLoadingWorkerId || null,
+          loadingByDeliveryPartner: !!(editLoadingByPartner && partner?.hasLoading),
+          deliveryPartnerLoadingRate: (editLoadingByPartner && partner?.hasLoading) ? (parseFloat(editCustomPartnerLoadingRate) || 0) : 0,
+          deliveryPartnerLoadingRateType: (editLoadingByPartner && partner?.hasLoading) ? editCustomPartnerLoadingRateType : "per brick",
+          loadingWorkerId: (editLoadingByPartner && partner?.hasLoading) ? null : (editOrderLoadingWorkerId || null),
           loadingWorkerName: loadingWorkerName,
-          loadingCharge: loadingCharge,
-          unloadingWorkerId: editOrderUnloadingWorkerId || null,
+          loadingCharge: finalLoadingCharge,
+          unloadingByDeliveryPartner: !!(editUnloadingByPartner && partner?.hasUnloading),
+          deliveryPartnerUnloadingRate: (editUnloadingByPartner && partner?.hasUnloading) ? (parseFloat(editCustomPartnerUnloadingRate) || 0) : 0,
+          deliveryPartnerUnloadingRateType: (editUnloadingByPartner && partner?.hasUnloading) ? editCustomPartnerUnloadingRateType : "per brick",
+          unloadingWorkerId: (editUnloadingByPartner && partner?.hasUnloading) ? null : (editOrderUnloadingWorkerId || null),
           unloadingWorkerName: unloadingWorkerName,
-          unloadingCharge: unloadingCharge,
+          unloadingCharge: finalUnloadingCharge,
         };
         
         const success = await editOrder(selectedEntry.id, newOrderPayload, selectedEntry.original);
         if (success) {
-          Alert.alert("Success", "Order updated successfully.");
+          // Sync Customer Advance if excess advance occurred
+          if (customer && customer.id && excessAdv > 0) {
+            try {
+              const customerRef = doc(db, "customers", customer.id);
+              const customerSnap = await getDoc(customerRef);
+              if (customerSnap.exists()) {
+                const cData = customerSnap.data();
+                const curBal = Number(cData.totalPending !== undefined ? cData.totalPending : (cData.balance || 0));
+                const newBal = curBal < 0 ? curBal - excessAdv : -excessAdv;
+                await updateDoc(customerRef, {
+                  balance: newBal,
+                  totalPending: newBal,
+                  advanceAmount: Math.abs(newBal),
+                  lastTransactionDate: new Date(),
+                });
+              }
+            } catch (advErr) {
+              console.error("Error updating customer advance on edit bill:", advErr);
+            }
+          }
+
+          // Sync payments collection record for this order
+          try {
+            const paymentsRef = collection(db, "payments");
+            const q = query(paymentsRef, where("orderId", "==", selectedEntry.id));
+            const pSnap = await getDocsOfflineSafe(q);
+            if (!pSnap.empty) {
+              for (const docObj of pSnap.docs) {
+                await updateDoc(docObj.ref, {
+                  amountReceived: paidAmt,
+                  advanceAmount: excessAdv,
+                  paymentMethod: editOrderPaymentMethod,
+                  paymentMode: editOrderPaymentMethod,
+                  paymentType: editOrderPaymentMethod,
+                  updatedAt: new Date(),
+                });
+              }
+            } else if (paidAmt > 0 && customer && customer.id) {
+              await addDoc(collection(db, "payments"), {
+                customerId: customer.id,
+                customerName: customer.name || "Customer",
+                amountReceived: paidAmt,
+                discountAmount: 0,
+                advanceAmount: excessAdv,
+                paymentMethod: editOrderPaymentMethod || "Cash",
+                paymentMode: editOrderPaymentMethod || "Cash",
+                paymentType: editOrderPaymentMethod || "Cash",
+                notes: excessAdv > 0
+                  ? `Bill payment (incl. ₹${excessAdv.toLocaleString("en-IN")} advance credited to profile)`
+                  : `Payment for Bill #${selectedEntry.id.slice(-6).toUpperCase()}`,
+                orderId: selectedEntry.id,
+                createdAt: editLedgerDate,
+                date: editLedgerDate,
+                paymentDate: editLedgerDate,
+              });
+            }
+          } catch (syncErr) {
+            console.error("Error synchronizing payment record:", syncErr);
+          }
+
+          Alert.alert("Success", "Bill / Invoice updated successfully.");
           setIsEditLedgerOpen(false);
         } else {
           Alert.alert("Error", "Failed to update order.");
@@ -1776,8 +2029,10 @@ export default function CustomerProfile() {
 
   // Custom Ledger Calendar Modal Component
   const renderLedgerCalendarPicker = () => {
-    const daysInMonth = new Date(editLedgerDate.getFullYear(), editLedgerDate.getMonth() + 1, 0).getDate();
-    const firstDayIndex = new Date(editLedgerDate.getFullYear(), editLedgerDate.getMonth(), 1).getDay();
+    const isDelivery = calendarTarget === "delivery";
+    const targetDate = isDelivery ? (editOrderDeliveryDate || new Date()) : editLedgerDate;
+    const daysInMonth = new Date(targetDate.getFullYear(), targetDate.getMonth() + 1, 0).getDate();
+    const firstDayIndex = new Date(targetDate.getFullYear(), targetDate.getMonth(), 1).getDay();
     const monthNames = [
       "January", "February", "March", "April", "May", "June",
       "July", "August", "September", "October", "November", "December"
@@ -1790,15 +2045,19 @@ export default function CustomerProfile() {
     }
 
     for (let d = 1; d <= daysInMonth; d++) {
-      const isSelected = editLedgerDate.getDate() === d;
+      const isSelected = targetDate.getDate() === d;
       days.push(
         <Pressable
           key={`day-${d}`}
           style={[styles.calendarDay, isSelected && styles.calendarSelectedDay]}
           onPress={() => {
-            const newD = new Date(editLedgerDate);
+            const newD = new Date(targetDate);
             newD.setDate(d);
-            setEditLedgerDate(newD);
+            if (isDelivery) {
+              setEditOrderDeliveryDate(newD);
+            } else {
+              setEditLedgerDate(newD);
+            }
             setIsLedgerCalendarOpen(false);
           }}
         >
@@ -1828,21 +2087,28 @@ export default function CustomerProfile() {
             <View style={styles.calendarHeader}>
               <Pressable
                 onPress={() => {
-                  const prev = new Date(editLedgerDate);
+                  const prev = new Date(targetDate);
                   prev.setMonth(prev.getMonth() - 1);
-                  setEditLedgerDate(prev);
+                  if (isDelivery) setEditOrderDeliveryDate(prev);
+                  else setEditLedgerDate(prev);
                 }}
               >
                 <MaterialIcons name="chevron-left" size={28} color={colors.accent.primary} />
               </Pressable>
-              <Text style={styles.calendarHeaderTitle}>
-                {monthNames[editLedgerDate.getMonth()]} {editLedgerDate.getFullYear()}
-              </Text>
+              <View style={{ alignItems: "center" }}>
+                <Text style={{ fontSize: 11, fontWeight: "600", color: colors.accent.primary }}>
+                  {isDelivery ? "Delivery Date" : "Transaction Date"}
+                </Text>
+                <Text style={styles.calendarHeaderTitle}>
+                  {monthNames[targetDate.getMonth()]} {targetDate.getFullYear()}
+                </Text>
+              </View>
               <Pressable
                 onPress={() => {
-                  const next = new Date(editLedgerDate);
+                  const next = new Date(targetDate);
                   next.setMonth(next.getMonth() + 1);
-                  setEditLedgerDate(next);
+                  if (isDelivery) setEditOrderDeliveryDate(next);
+                  else setEditLedgerDate(next);
                 }}
               >
                 <MaterialIcons name="chevron-right" size={28} color={colors.accent.primary} />
@@ -1891,7 +2157,7 @@ export default function CustomerProfile() {
             </View>
 
             <ScrollView showsVerticalScrollIndicator={false} style={{ flex: 1 }} contentContainerStyle={{ flexGrow: 1 }} keyboardShouldPersistTaps="handled">
-              <Text style={styles.label}>Transaction Date *</Text>
+              <Text style={styles.label}>Transaction Date & Time *</Text>
               <Pressable
                 style={styles.dateSelector}
                 onPress={() => setIsLedgerCalendarOpen(true)}
@@ -1903,6 +2169,8 @@ export default function CustomerProfile() {
                     month: "long",
                     year: "numeric",
                   })}
+                  {" • "}
+                  {editLedgerDate.toLocaleTimeString([], { hour: "numeric", minute: "2-digit", hour12: true })}
                 </Text>
                 <MaterialIcons name="edit" size={16} color={colors.text.muted} style={{ marginLeft: "auto" }} />
               </Pressable>
@@ -1995,34 +2263,162 @@ export default function CustomerProfile() {
                 </View>
               ) : (
                 <View>
+                  {/* Order Status Selector */}
+                  <Text style={styles.label}>Order Status</Text>
+                  <View style={{ flexDirection: "row", gap: 6, marginBottom: 14 }}>
+                    {(["pending", "in-transit", "completed", "cancelled"] as const).map((st) => {
+                      const active = editOrderStatus === st;
+                      const statusColor = 
+                        st === "completed" ? colors.accent.success :
+                        st === "in-transit" ? "#3B82F6" :
+                        st === "cancelled" ? colors.accent.danger : "#F59E0B";
+                      const statusIcon =
+                        st === "completed" ? "check-circle" :
+                        st === "in-transit" ? "local-shipping" :
+                        st === "cancelled" ? "cancel" : "hourglass-empty";
+
+                      return (
+                        <Pressable
+                          key={st}
+                          style={{
+                            flex: 1,
+                            paddingVertical: 8,
+                            paddingHorizontal: 4,
+                            borderRadius: 8,
+                            borderWidth: 1.5,
+                            borderColor: active ? statusColor : colors.border.medium,
+                            backgroundColor: active ? statusColor + "18" : colors.bg.card,
+                            alignItems: "center",
+                            justifyContent: "center",
+                          }}
+                          onPress={() => setEditOrderStatus(st)}
+                        >
+                          <MaterialIcons name={statusIcon} size={15} color={active ? statusColor : colors.text.muted} />
+                          <Text style={{
+                            fontSize: 10,
+                            fontWeight: active ? "800" : "600",
+                            color: active ? statusColor : colors.text.secondary,
+                            textTransform: "capitalize",
+                            marginTop: 2,
+                          }}>
+                            {st}
+                          </Text>
+                        </Pressable>
+                      );
+                    })}
+                  </View>
+
+                  {/* Delivery Date Picker */}
+                  <View style={{ flexDirection: "row", justifyContent: "space-between", alignItems: "center" }}>
+                    <Text style={styles.label}>Delivery Date</Text>
+                    {editOrderDeliveryDate && (
+                      <Pressable onPress={() => setEditOrderDeliveryDate(null)}>
+                        <Text style={{ fontSize: 11, color: colors.accent.danger, fontWeight: "600" }}>Clear Date</Text>
+                      </Pressable>
+                    )}
+                  </View>
+                  <Pressable
+                    style={styles.dateSelector}
+                    onPress={() => {
+                      setCalendarTarget("delivery");
+                      setIsLedgerCalendarOpen(true);
+                    }}
+                  >
+                    <MaterialIcons name="local-shipping" size={18} color={editOrderDeliveryDate ? colors.accent.primary : colors.text.muted} style={{ marginRight: 8 }} />
+                    <Text style={[styles.dateSelectorText, !editOrderDeliveryDate && { color: colors.text.muted }]}>
+                      {editOrderDeliveryDate ? editOrderDeliveryDate.toLocaleDateString("en-IN", {
+                        day: "numeric",
+                        month: "long",
+                        year: "numeric",
+                      }) : "Not Set (Tap to choose delivery date)"}
+                    </Text>
+                    <MaterialIcons name="calendar-today" size={16} color={colors.text.muted} style={{ marginLeft: "auto" }} />
+                  </Pressable>
+
+                  {/* Delivered Quantity Control */}
+                  {(() => {
+                    const totalOrderQty = editOrderItems.reduce((s: number, i: any) => s + (Number(i.quantity) || 0), 0);
+                    return (
+                      <View style={{ marginBottom: 12 }}>
+                        <View style={{ flexDirection: "row", justifyContent: "space-between", alignItems: "center" }}>
+                          <Text style={styles.label}>Delivered Quantity ({totalOrderQty} total units)</Text>
+                          <View style={{ flexDirection: "row", gap: 6 }}>
+                            <Pressable
+                              style={{ paddingHorizontal: 8, paddingVertical: 2, borderRadius: 4, backgroundColor: colors.bg.card, borderWidth: 1, borderColor: colors.border.subtle }}
+                              onPress={() => setEditOrderDeliveredQty("0")}
+                            >
+                              <Text style={{ fontSize: 10, fontWeight: "700", color: colors.text.muted }}>0 (Undelivered)</Text>
+                            </Pressable>
+                            <Pressable
+                              style={{ paddingHorizontal: 8, paddingVertical: 2, borderRadius: 4, backgroundColor: colors.accent.primary + "18", borderWidth: 1, borderColor: colors.accent.primary }}
+                              onPress={() => setEditOrderDeliveredQty(String(totalOrderQty))}
+                            >
+                              <Text style={{ fontSize: 10, fontWeight: "700", color: colors.accent.primary }}>All ({totalOrderQty})</Text>
+                            </Pressable>
+                          </View>
+                        </View>
+                        <TextInput
+                          value={editOrderDeliveredQty}
+                          onChangeText={(t) => setEditOrderDeliveredQty(t.replace(/[^0-9]/g, ""))}
+                          keyboardType="numeric"
+                          style={styles.input}
+                          placeholder="0"
+                          placeholderTextColor={colors.text.muted}
+                        />
+                      </View>
+                    );
+                  })()}
+
                   {/* Order Products / Items List */}
                   <Text style={[styles.label, { color: colors.accent.primary, fontSize: 12, marginTop: 8 }]}>Order Products / Items</Text>
                   
                   {/* Select Product to Add */}
-                  <Text style={styles.label}>Select Product to Add</Text>
+                  <View style={{ flexDirection: "row", justifyContent: "space-between", alignItems: "center", marginTop: 4 }}>
+                    <Text style={styles.label}>Select Product to Add</Text>
+                  </View>
+
+                  {/* Search Bar for Products */}
+                  <View style={{ flexDirection: "row", alignItems: "center", backgroundColor: colors.bg.card, borderWidth: 1, borderColor: colors.border.medium, borderRadius: 8, paddingHorizontal: 8, height: 38, marginBottom: 8 }}>
+                    <MaterialIcons name="search" size={16} color={colors.text.muted} style={{ marginRight: 6 }} />
+                    <TextInput
+                      value={editItemSearch}
+                      onChangeText={setEditItemSearch}
+                      placeholder="Search product name..."
+                      placeholderTextColor={colors.text.muted}
+                      style={{ flex: 1, fontSize: 13, color: colors.text.primary, padding: 0 }}
+                    />
+                    {editItemSearch.length > 0 && (
+                      <Pressable onPress={() => setEditItemSearch("")}>
+                        <MaterialIcons name="close" size={16} color={colors.text.muted} />
+                      </Pressable>
+                    )}
+                  </View>
+
                   <ScrollView horizontal showsHorizontalScrollIndicator={false} style={{ marginBottom: 10 }}>
                     <View style={{ flexDirection: "row", gap: 8 }}>
-                      {items.map((itm: any) => {
-                        const active = selectedItemId === itm.id;
-                        return (
-                          <Pressable
-                            key={itm.id}
-                            style={[
-                              styles.partnerCard,
-                              active && styles.partnerCardActive,
-                            ]}
-                            onPress={() => handleSelectItemForEdit(itm.id)}
-                          >
-                            <Text style={[
-                              styles.partnerName, 
-                              active && styles.partnerNameActive,
-                              itm.status === "Inactive" && { color: colors.text.muted }
-                            ]}>
-                              {itm.itemName} {itm.status === "Inactive" ? "(Inactive)" : ""}
-                            </Text>
-                          </Pressable>
-                        );
-                      })}
+                      {items
+                        .filter((itm: any) => !editItemSearch.trim() || (itm.itemName || "").toLowerCase().includes(editItemSearch.toLowerCase().trim()))
+                        .map((itm: any) => {
+                          const active = selectedItemId === itm.id;
+                          return (
+                            <Pressable
+                              key={itm.id}
+                              style={[
+                                styles.partnerCard,
+                                active && styles.partnerCardActive,
+                              ]}
+                              onPress={() => handleSelectItemForEdit(itm.id)}
+                            >
+                              <Text style={[
+                                styles.partnerName, 
+                                active && styles.partnerNameActive,
+                                itm.status === "Inactive" && { color: colors.text.muted }
+                              ]}>
+                                {itm.itemName} {itm.status === "Inactive" ? "(Inactive)" : ""}
+                              </Text>
+                            </Pressable>
+                          );
+                        })}
                     </View>
                   </ScrollView>
 
@@ -2146,6 +2542,410 @@ export default function CustomerProfile() {
 
                   <View style={{ height: 1, backgroundColor: colors.border.subtle, marginVertical: 10 }} />
 
+                  {/* Delivery Partner & Shipment */}
+                  <Text style={styles.label}>Assign Delivery Partner</Text>
+                  <ScrollView horizontal showsHorizontalScrollIndicator={false} style={{ marginBottom: 12 }}>
+                    <View style={{ flexDirection: "row", gap: 8 }}>
+                      <Pressable
+                        style={[styles.partnerCard, !editOrderDeliveryPartnerId && styles.partnerCardActive]}
+                        onPress={() => {
+                          setEditOrderDeliveryPartnerId("");
+                          setEditLoadingByPartner(false);
+                          setEditUnloadingByPartner(false);
+                        }}
+                      >
+                        <Text style={[styles.partnerName, !editOrderDeliveryPartnerId && styles.partnerNameActive]}>
+                          No Delivery (Self Pickup)
+                        </Text>
+                      </Pressable>
+                      {sortedDeliveryPartners.map((p: any) => {
+                        const active = editOrderDeliveryPartnerId === p.id;
+                        return (
+                          <Pressable
+                            key={`partner-${p.id}`}
+                            style={[
+                              styles.partnerCard,
+                              active && styles.partnerCardActive,
+                              p.isFavorite && !active && { backgroundColor: "#fef3c7", borderColor: "#fde047" },
+                            ]}
+                            onPress={() => setEditOrderDeliveryPartnerId(p.id)}
+                          >
+                            <Text style={[
+                              styles.partnerName,
+                              active && styles.partnerNameActive,
+                              p.isFavorite && !active && { color: "#d97706" },
+                            ]}>
+                              {p.isFavorite ? "⭐ " : ""}{p.name} ({p.vehicleType || "Driver"})
+                            </Text>
+                          </Pressable>
+                        );
+                      })}
+                    </View>
+                  </ScrollView>
+
+                  <View style={{ flexDirection: "row", gap: 10, marginBottom: 12 }}>
+                    <View style={{ flex: 1 }}>
+                      <Text style={styles.label}>Distance (km)</Text>
+                      <TextInput
+                        value={editOrderShipmentDistance}
+                        onChangeText={(t) => {
+                          setIsShipmentCustomized(false);
+                          setEditOrderShipmentDistance(t);
+                        }}
+                        keyboardType="numeric"
+                        style={[styles.input, { marginBottom: 0 }]}
+                        placeholder="0"
+                        placeholderTextColor={colors.text.muted}
+                      />
+                    </View>
+                    <View style={{ flex: 1.2 }}>
+                      <View style={{ flexDirection: "row", justifyContent: "space-between", alignItems: "center" }}>
+                        <Text style={styles.label}>Shipment (₹)</Text>
+                        {isShipmentCustomized && (
+                          <Pressable onPress={() => setIsShipmentCustomized(false)}>
+                            <Text style={{ fontSize: 9, color: colors.accent.primary, fontWeight: "700" }}>Reset Auto</Text>
+                          </Pressable>
+                        )}
+                      </View>
+                      <TextInput
+                        value={editOrderShipment}
+                        onChangeText={(t) => {
+                          setIsShipmentCustomized(true);
+                          setEditOrderShipment(t);
+                        }}
+                        keyboardType="numeric"
+                        style={[styles.input, { marginBottom: 0 }, isShipmentCustomized && { borderColor: colors.accent.primary }]}
+                        placeholder="0"
+                        placeholderTextColor={colors.text.muted}
+                      />
+                    </View>
+                  </View>
+
+                  {/* Loading Charges */}
+                  <View style={{ backgroundColor: colors.bg.primary, padding: 12, borderRadius: 10, borderWidth: 1, borderColor: colors.border.subtle, marginBottom: 12 }}>
+                    <Text style={{ fontSize: 12, fontWeight: "700", color: colors.text.primary, marginBottom: 8 }}>Loading Service</Text>
+                    
+                    {(() => {
+                      const selectedPartner = partners.find((p: any) => p.id === editOrderDeliveryPartnerId);
+                      const partnerCanLoad = !!selectedPartner?.hasLoading;
+
+                      return (
+                        <View style={{ flexDirection: "row", gap: 6, marginBottom: 8 }}>
+                          <Pressable
+                            style={{
+                              flex: 1,
+                              paddingVertical: 6,
+                              borderRadius: 6,
+                              borderWidth: 1,
+                              borderColor: (!editLoadingByPartner && !editOrderLoadingWorkerId && !isLoadingCustomized) ? colors.accent.primary : colors.border.medium,
+                              backgroundColor: (!editLoadingByPartner && !editOrderLoadingWorkerId && !isLoadingCustomized) ? colors.accent.primary + "18" : colors.bg.card,
+                              alignItems: "center",
+                            }}
+                            onPress={() => {
+                              setEditLoadingByPartner(false);
+                              setEditOrderLoadingWorkerId("");
+                              setIsLoadingCustomized(false);
+                              setEditOrderLoadingCharge("0");
+                            }}
+                          >
+                            <Text style={{ fontSize: 11, fontWeight: "700", color: (!editLoadingByPartner && !editOrderLoadingWorkerId && !isLoadingCustomized) ? colors.accent.primary : colors.text.secondary }}>None</Text>
+                          </Pressable>
+
+                          <Pressable
+                            style={{
+                              flex: 1,
+                              paddingVertical: 6,
+                              borderRadius: 6,
+                              borderWidth: 1,
+                              borderColor: (!editLoadingByPartner && !!editOrderLoadingWorkerId && !isLoadingCustomized) ? colors.accent.primary : colors.border.medium,
+                              backgroundColor: (!editLoadingByPartner && !!editOrderLoadingWorkerId && !isLoadingCustomized) ? colors.accent.primary + "18" : colors.bg.card,
+                              alignItems: "center",
+                            }}
+                            onPress={() => {
+                              setEditLoadingByPartner(false);
+                              setIsLoadingCustomized(false);
+                              if (!editOrderLoadingWorkerId && workers.length > 0) {
+                                setEditOrderLoadingWorkerId(workers[0].id);
+                              }
+                            }}
+                          >
+                            <Text style={{ fontSize: 11, fontWeight: "700", color: (!editLoadingByPartner && !!editOrderLoadingWorkerId && !isLoadingCustomized) ? colors.accent.primary : colors.text.secondary }}>Worker</Text>
+                          </Pressable>
+
+                          {partnerCanLoad && (
+                            <Pressable
+                              style={{
+                                flex: 1.2,
+                                paddingVertical: 6,
+                                borderRadius: 6,
+                                borderWidth: 1,
+                                borderColor: editLoadingByPartner ? colors.accent.primary : colors.border.medium,
+                                backgroundColor: editLoadingByPartner ? colors.accent.primary + "18" : colors.bg.card,
+                                alignItems: "center",
+                              }}
+                              onPress={() => {
+                                setEditLoadingByPartner(true);
+                                setEditOrderLoadingWorkerId("");
+                                setIsLoadingCustomized(false);
+                              }}
+                            >
+                              <Text style={{ fontSize: 11, fontWeight: "700", color: editLoadingByPartner ? colors.accent.primary : colors.text.secondary }}>Partner</Text>
+                            </Pressable>
+                          )}
+
+                          <Pressable
+                            style={{
+                              flex: 1,
+                              paddingVertical: 6,
+                              borderRadius: 6,
+                              borderWidth: 1,
+                              borderColor: isLoadingCustomized ? colors.accent.primary : colors.border.medium,
+                              backgroundColor: isLoadingCustomized ? colors.accent.primary + "18" : colors.bg.card,
+                              alignItems: "center",
+                            }}
+                            onPress={() => {
+                              setIsLoadingCustomized(true);
+                              setEditLoadingByPartner(false);
+                              setEditOrderLoadingWorkerId("");
+                            }}
+                          >
+                            <Text style={{ fontSize: 11, fontWeight: "700", color: isLoadingCustomized ? colors.accent.primary : colors.text.secondary }}>Custom ₹</Text>
+                          </Pressable>
+                        </View>
+                      );
+                    })()}
+
+                    {!editLoadingByPartner && !!editOrderLoadingWorkerId && !isLoadingCustomized && (
+                      <ScrollView horizontal showsHorizontalScrollIndicator={false}>
+                        <View style={{ flexDirection: "row", gap: 6, marginTop: 4 }}>
+                          {workers.filter((w: any) => w.status === "Active").map((w: any) => {
+                            const active = editOrderLoadingWorkerId === w.id;
+                            return (
+                              <Pressable
+                                key={`edit-load-${w.id}`}
+                                style={[styles.partnerCard, active && styles.partnerCardActive]}
+                                onPress={() => setEditOrderLoadingWorkerId(w.id)}
+                              >
+                                <Text style={[styles.partnerName, active && styles.partnerNameActive]}>
+                                  {w.name} (₹{w.loadingCost || 0}/pc)
+                                </Text>
+                              </Pressable>
+                            );
+                          })}
+                        </View>
+                      </ScrollView>
+                    )}
+
+                    {editLoadingByPartner && (
+                      <View style={{ flexDirection: "row", alignItems: "center", gap: 8, marginTop: 6 }}>
+                        <Text style={{ fontSize: 11, color: colors.text.secondary }}>Partner Loading Rate:</Text>
+                        <TextInput
+                          value={editCustomPartnerLoadingRate}
+                          onChangeText={setEditCustomPartnerLoadingRate}
+                          keyboardType="numeric"
+                          style={[styles.input, { width: 70, height: 34, marginBottom: 0 }]}
+                          placeholder="0"
+                        />
+                        <Text style={{ fontSize: 11, color: colors.text.muted }}>₹ / {editCustomPartnerLoadingRateType}</Text>
+                      </View>
+                    )}
+
+                    {isLoadingCustomized && (
+                      <View style={{ marginTop: 6 }}>
+                        <Text style={{ fontSize: 10, color: colors.text.muted, marginBottom: 2 }}>Custom Loading Charge Amount (₹)</Text>
+                        <TextInput
+                          value={editOrderLoadingCharge}
+                          onChangeText={setEditOrderLoadingCharge}
+                          keyboardType="numeric"
+                          style={[styles.input, { marginBottom: 0 }]}
+                          placeholder="0"
+                          placeholderTextColor={colors.text.muted}
+                        />
+                      </View>
+                    )}
+                  </View>
+
+                  {/* Unloading Charges */}
+                  <View style={{ backgroundColor: colors.bg.primary, padding: 12, borderRadius: 10, borderWidth: 1, borderColor: colors.border.subtle, marginBottom: 12 }}>
+                    <Text style={{ fontSize: 12, fontWeight: "700", color: colors.text.primary, marginBottom: 8 }}>Unloading Service</Text>
+                    
+                    {(() => {
+                      const selectedPartner = partners.find((p: any) => p.id === editOrderDeliveryPartnerId);
+                      const partnerCanUnload = !!selectedPartner?.hasUnloading;
+
+                      return (
+                        <View style={{ flexDirection: "row", gap: 6, marginBottom: 8 }}>
+                          <Pressable
+                            style={{
+                              flex: 1,
+                              paddingVertical: 6,
+                              borderRadius: 6,
+                              borderWidth: 1,
+                              borderColor: (!editUnloadingByPartner && !editOrderUnloadingWorkerId && !isUnloadingCustomized) ? colors.accent.primary : colors.border.medium,
+                              backgroundColor: (!editUnloadingByPartner && !editOrderUnloadingWorkerId && !isUnloadingCustomized) ? colors.accent.primary + "18" : colors.bg.card,
+                              alignItems: "center",
+                            }}
+                            onPress={() => {
+                              setEditUnloadingByPartner(false);
+                              setEditOrderUnloadingWorkerId("");
+                              setIsUnloadingCustomized(false);
+                              setEditOrderUnloadingCharge("0");
+                            }}
+                          >
+                            <Text style={{ fontSize: 11, fontWeight: "700", color: (!editUnloadingByPartner && !editOrderUnloadingWorkerId && !isUnloadingCustomized) ? colors.accent.primary : colors.text.secondary }}>None</Text>
+                          </Pressable>
+
+                          <Pressable
+                            style={{
+                              flex: 1,
+                              paddingVertical: 6,
+                              borderRadius: 6,
+                              borderWidth: 1,
+                              borderColor: (!editUnloadingByPartner && !!editOrderUnloadingWorkerId && !isUnloadingCustomized) ? colors.accent.primary : colors.border.medium,
+                              backgroundColor: (!editUnloadingByPartner && !!editOrderUnloadingWorkerId && !isUnloadingCustomized) ? colors.accent.primary + "18" : colors.bg.card,
+                              alignItems: "center",
+                            }}
+                            onPress={() => {
+                              setEditUnloadingByPartner(false);
+                              setIsUnloadingCustomized(false);
+                              if (!editOrderUnloadingWorkerId && workers.length > 0) {
+                                setEditOrderUnloadingWorkerId(workers[0].id);
+                              }
+                            }}
+                          >
+                            <Text style={{ fontSize: 11, fontWeight: "700", color: (!editUnloadingByPartner && !!editOrderUnloadingWorkerId && !isUnloadingCustomized) ? colors.accent.primary : colors.text.secondary }}>Worker</Text>
+                          </Pressable>
+
+                          {partnerCanUnload && (
+                            <Pressable
+                              style={{
+                                flex: 1.2,
+                                paddingVertical: 6,
+                                borderRadius: 6,
+                                borderWidth: 1,
+                                borderColor: editUnloadingByPartner ? colors.accent.primary : colors.border.medium,
+                                backgroundColor: editUnloadingByPartner ? colors.accent.primary + "18" : colors.bg.card,
+                                alignItems: "center",
+                              }}
+                              onPress={() => {
+                                setEditUnloadingByPartner(true);
+                                setEditOrderUnloadingWorkerId("");
+                                setIsUnloadingCustomized(false);
+                              }}
+                            >
+                              <Text style={{ fontSize: 11, fontWeight: "700", color: editUnloadingByPartner ? colors.accent.primary : colors.text.secondary }}>Partner</Text>
+                            </Pressable>
+                          )}
+
+                          <Pressable
+                            style={{
+                              flex: 1,
+                              paddingVertical: 6,
+                              borderRadius: 6,
+                              borderWidth: 1,
+                              borderColor: isUnloadingCustomized ? colors.accent.primary : colors.border.medium,
+                              backgroundColor: isUnloadingCustomized ? colors.accent.primary + "18" : colors.bg.card,
+                              alignItems: "center",
+                            }}
+                            onPress={() => {
+                              setIsUnloadingCustomized(true);
+                              setEditUnloadingByPartner(false);
+                              setEditOrderUnloadingWorkerId("");
+                            }}
+                          >
+                            <Text style={{ fontSize: 11, fontWeight: "700", color: isUnloadingCustomized ? colors.accent.primary : colors.text.secondary }}>Custom ₹</Text>
+                          </Pressable>
+                        </View>
+                      );
+                    })()}
+
+                    {!editUnloadingByPartner && !!editOrderUnloadingWorkerId && !isUnloadingCustomized && (
+                      <ScrollView horizontal showsHorizontalScrollIndicator={false}>
+                        <View style={{ flexDirection: "row", gap: 6, marginTop: 4 }}>
+                          {workers.filter((w: any) => w.status === "Active").map((w: any) => {
+                            const active = editOrderUnloadingWorkerId === w.id;
+                            return (
+                              <Pressable
+                                key={`edit-unload-${w.id}`}
+                                style={[styles.partnerCard, active && styles.partnerCardActive]}
+                                onPress={() => setEditOrderUnloadingWorkerId(w.id)}
+                              >
+                                <Text style={[styles.partnerName, active && styles.partnerNameActive]}>
+                                  {w.name} (₹{w.unloadingCost || 0}/pc)
+                                </Text>
+                              </Pressable>
+                            );
+                          })}
+                        </View>
+                      </ScrollView>
+                    )}
+
+                    {editUnloadingByPartner && (
+                      <View style={{ flexDirection: "row", alignItems: "center", gap: 8, marginTop: 6 }}>
+                        <Text style={{ fontSize: 11, color: colors.text.secondary }}>Partner Unloading Rate:</Text>
+                        <TextInput
+                          value={editCustomPartnerUnloadingRate}
+                          onChangeText={setEditCustomPartnerUnloadingRate}
+                          keyboardType="numeric"
+                          style={[styles.input, { width: 70, height: 34, marginBottom: 0 }]}
+                          placeholder="0"
+                        />
+                        <Text style={{ fontSize: 11, color: colors.text.muted }}>₹ / {editCustomPartnerUnloadingRateType}</Text>
+                      </View>
+                    )}
+
+                    {isUnloadingCustomized && (
+                      <View style={{ marginTop: 6 }}>
+                        <Text style={{ fontSize: 10, color: colors.text.muted, marginBottom: 2 }}>Custom Unloading Charge Amount (₹)</Text>
+                        <TextInput
+                          value={editOrderUnloadingCharge}
+                          onChangeText={setEditOrderUnloadingCharge}
+                          keyboardType="numeric"
+                          style={[styles.input, { marginBottom: 0 }]}
+                          placeholder="0"
+                          placeholderTextColor={colors.text.muted}
+                        />
+                      </View>
+                    )}
+                  </View>
+
+                  {/* Extra Charges & Tax / GST */}
+                  <View style={{ flexDirection: "row", gap: 10, marginBottom: 10 }}>
+                    <View style={{ flex: 1 }}>
+                      <Text style={styles.label}>Extra Amount (₹)</Text>
+                      <TextInput
+                        value={editOrderExtra}
+                        onChangeText={setEditOrderExtra}
+                        keyboardType="numeric"
+                        style={[styles.input, { marginBottom: 0 }]}
+                        placeholder="0"
+                        placeholderTextColor={colors.text.muted}
+                      />
+                    </View>
+                    <View style={{ flex: 1.2 }}>
+                      <Text style={styles.label}>Extra Description</Text>
+                      <TextInput
+                        value={editOrderExtraDesc}
+                        onChangeText={setEditOrderExtraDesc}
+                        style={[styles.input, { marginBottom: 0 }]}
+                        placeholder="e.g. Packaging, Toll"
+                        placeholderTextColor={colors.text.muted}
+                      />
+                    </View>
+                  </View>
+
+                  <View style={{ marginBottom: 12 }}>
+                    <Text style={styles.label}>Tax / GST Amount (₹)</Text>
+                    <TextInput
+                      value={editOrderTax}
+                      onChangeText={setEditOrderTax}
+                      keyboardType="numeric"
+                      style={styles.input}
+                      placeholder="0"
+                      placeholderTextColor={colors.text.muted}
+                    />
+                  </View>
+
                   {/* Discount Section */}
                   <Text style={styles.label}>Discount (Optional)</Text>
                   <View style={{ flexDirection: "row", gap: 8, marginBottom: 14 }}>
@@ -2174,24 +2974,80 @@ export default function CustomerProfile() {
                         style={{ paddingHorizontal: 10, paddingVertical: 10, backgroundColor: editOrderDiscountType === "per_brick" ? colors.accent.primary : colors.bg.card, justifyContent: "center" }}
                         onPress={() => setEditOrderDiscountType("per_brick")}
                       >
-                        <Text style={{ fontSize: 11, fontWeight: "700", color: editOrderDiscountType === "per_brick" ? "#FFF" : colors.text.primary }}>₹/Brick</Text>
+                        <Text style={{ fontSize: 11, fontWeight: "700", color: editOrderDiscountType === "per_brick" ? "#FFF" : colors.text.primary }}>₹/Unit</Text>
                       </Pressable>
                     </View>
                   </View>
 
-                  {/* Payment Details */}
-                  <Text style={styles.label}>Amount Paid (₹)</Text>
-                  <TextInput
-                    value={editOrderPaidAmt}
-                    onChangeText={setEditOrderPaidAmt}
-                    keyboardType="numeric"
-                    style={styles.input}
-                    placeholder="0"
-                    placeholderTextColor={colors.text.muted}
-                  />
+                  {/* Payment Details & Quick-Fill Helpers */}
+                  {(() => {
+                    const liveGross = editOrderItems.reduce((s, itm) => s + (Number(itm.quantity || 0) * Number(itm.rate || 0)), 0);
+                    const liveShipment = parseFloat(editOrderShipment) || 0;
+                    const liveExtra = parseFloat(editOrderExtra) || 0;
+                    const liveTax = parseFloat(editOrderTax) || 0;
+                    const liveTotalQty = editOrderItems.reduce((s, itm) => s + Number(itm.quantity || 0), 0);
+                    
+                    const partner = partners.find((p: any) => p.id === editOrderDeliveryPartnerId);
+                    const lWorker = workers.find((w: any) => w.id === editOrderLoadingWorkerId);
+                    let liveLoad = 0;
+                    if (editLoadingByPartner && partner?.hasLoading) {
+                      const rType = editCustomPartnerLoadingRateType || partner.loadingRateType || "per brick";
+                      const rVal = parseFloat(editCustomPartnerLoadingRate) || parseFloat(partner.loadingRate) || 0;
+                      liveLoad = rType === "per brick" ? rVal * liveTotalQty : rVal;
+                    } else if (lWorker) {
+                      liveLoad = liveTotalQty * Number(lWorker.loadingCost || 0);
+                    }
+                    const finalL = isLoadingCustomized ? (parseFloat(editOrderLoadingCharge) || 0) : liveLoad;
+
+                    const uWorker = workers.find((w: any) => w.id === editOrderUnloadingWorkerId);
+                    let liveUnload = 0;
+                    if (editUnloadingByPartner && partner?.hasUnloading) {
+                      const rType = editCustomPartnerUnloadingRateType || partner.unloadingRateType || "per brick";
+                      const rVal = parseFloat(editCustomPartnerUnloadingRate) || parseFloat(partner.unloadingRate) || 0;
+                      liveUnload = rType === "per brick" ? rVal * liveTotalQty : rVal;
+                    } else if (uWorker) {
+                      liveUnload = liveTotalQty * Number(uWorker.unloadingCost || 0);
+                    }
+                    const finalU = isUnloadingCustomized ? (parseFloat(editOrderUnloadingCharge) || 0) : liveUnload;
+
+                    const subtotalBeforeDisc = liveGross + liveShipment + liveExtra + liveTax + finalL + finalU;
+                    const dVal = parseFloat(editOrderDiscount) || 0;
+                    let calcD = editOrderDiscountType === "percent" ? (subtotalBeforeDisc * dVal) / 100 : editOrderDiscountType === "per_brick" ? dVal * liveTotalQty : dVal;
+                    const quickNet = Math.max(0, subtotalBeforeDisc - calcD);
+
+                    return (
+                      <View>
+                        <View style={{ flexDirection: "row", justifyContent: "space-between", alignItems: "center" }}>
+                          <Text style={styles.label}>Amount Paid (₹)</Text>
+                          <View style={{ flexDirection: "row", gap: 6 }}>
+                            <Pressable
+                              style={{ paddingHorizontal: 8, paddingVertical: 2, borderRadius: 4, backgroundColor: colors.bg.card, borderWidth: 1, borderColor: colors.border.subtle }}
+                              onPress={() => setEditOrderPaidAmt("0")}
+                            >
+                              <Text style={{ fontSize: 10, fontWeight: "700", color: colors.text.muted }}>₹0 (Unpaid)</Text>
+                            </Pressable>
+                            <Pressable
+                              style={{ paddingHorizontal: 8, paddingVertical: 2, borderRadius: 4, backgroundColor: colors.accent.success + "18", borderWidth: 1, borderColor: colors.accent.success }}
+                              onPress={() => setEditOrderPaidAmt(String(quickNet))}
+                            >
+                              <Text style={{ fontSize: 10, fontWeight: "700", color: colors.accent.success }}>Full Paid (₹{quickNet.toLocaleString("en-IN")})</Text>
+                            </Pressable>
+                          </View>
+                        </View>
+                        <TextInput
+                          value={editOrderPaidAmt}
+                          onChangeText={setEditOrderPaidAmt}
+                          keyboardType="numeric"
+                          style={styles.input}
+                          placeholder="0"
+                          placeholderTextColor={colors.text.muted}
+                        />
+                      </View>
+                    );
+                  })()}
 
                   <Text style={styles.label}>Payment Method for Amount Paid</Text>
-                  <View style={[styles.paymentMethodRow, { marginBottom: 14 }]}>
+                  <View style={[styles.paymentMethodRow, { marginBottom: 12 }]}>
                     {(editOrderPaymentMethod && !PAYMENT_METHODS.includes(editOrderPaymentMethod)
                       ? [...PAYMENT_METHODS, editOrderPaymentMethod]
                       : PAYMENT_METHODS
@@ -2211,84 +3067,11 @@ export default function CustomerProfile() {
                     })}
                   </View>
 
-                  <Text style={styles.label}>Bill Notes / Terms</Text>
-                  <TextInput
-                    value={editOrderNotes}
-                    onChangeText={setEditOrderNotes}
-                    style={styles.input}
-                    placeholder="Billing terms, delivery instructions..."
-                    placeholderTextColor={colors.text.muted}
-                  />
-
-                  <Text style={styles.label}>Shipment Distance (km)</Text>
-                  <TextInput
-                    value={editOrderShipmentDistance}
-                    onChangeText={setEditOrderShipmentDistance}
-                    keyboardType="numeric"
-                    style={styles.input}
-                    placeholder="0"
-                    placeholderTextColor={colors.text.muted}
-                  />
-
-                  <Text style={styles.label}>Shipment Charge (₹)</Text>
-                  <TextInput
-                    value={editOrderShipment}
-                    onChangeText={setEditOrderShipment}
-                    keyboardType="numeric"
-                    style={styles.input}
-                    placeholder="0"
-                    placeholderTextColor={colors.text.muted}
-                  />
-
-                  <Text style={styles.label}>Assign Delivery Partner</Text>
-                  <ScrollView horizontal showsHorizontalScrollIndicator={false} style={{ marginBottom: 14 }}>
-                    <View style={{ flexDirection: "row", gap: 8 }}>
-                      <Pressable
-                        style={[
-                          styles.partnerCard,
-                          !editOrderDeliveryPartnerId && styles.partnerCardActive,
-                        ]}
-                        onPress={() => setEditOrderDeliveryPartnerId("")}
-                      >
-                        <Text style={[styles.partnerName, !editOrderDeliveryPartnerId && styles.partnerNameActive]}>
-                          No Delivery (Self Pickup)
-                        </Text>
-                      </Pressable>
-                      {sortedDeliveryPartners.map((p: any) => {
-                        const active = editOrderDeliveryPartnerId === p.id;
-                        return (
-                          <Pressable
-                            key={p.id}
-                            style={[
-                              styles.partnerCard,
-                              active && styles.partnerCardActive,
-                              p.isFavorite && !active && { backgroundColor: "#fef3c7", borderColor: "#fde047" },
-                            ]}
-                            onPress={() => setEditOrderDeliveryPartnerId(p.id)}
-                          >
-                            <Text
-                              style={[
-                                styles.partnerName,
-                                active && styles.partnerNameActive,
-                                p.isFavorite && !active && { color: "#d97706" },
-                              ]}
-                            >
-                              {p.isFavorite ? "⭐ " : ""}{p.name} ({p.vehicleType || "Driver"})
-                            </Text>
-                          </Pressable>
-                        );
-                      })}
-                    </View>
-                  </ScrollView>
-
                   <Text style={styles.label}>Assign Money Collector</Text>
-                  <ScrollView horizontal showsHorizontalScrollIndicator={false} style={{ marginBottom: 14 }}>
+                  <ScrollView horizontal showsHorizontalScrollIndicator={false} style={{ marginBottom: 12 }}>
                     <View style={{ flexDirection: "row", gap: 8 }}>
                       <Pressable
-                        style={[
-                          styles.partnerCard,
-                          !editOrderCollectorId && styles.partnerCardActive,
-                        ]}
+                        style={[styles.partnerCard, !editOrderCollectorId && styles.partnerCardActive]}
                         onPress={() => setEditOrderCollectorId("")}
                       >
                         <Text style={[styles.partnerName, !editOrderCollectorId && styles.partnerNameActive]}>
@@ -2299,7 +3082,7 @@ export default function CustomerProfile() {
                         const active = editOrderCollectorId === c.id;
                         return (
                           <Pressable
-                            key={c.id}
+                            key={`edit-col-${c.id}`}
                             style={[styles.partnerCard, active && styles.partnerCardActive]}
                             onPress={() => setEditOrderCollectorId(c.id)}
                           >
@@ -2312,133 +3095,113 @@ export default function CustomerProfile() {
                     </View>
                   </ScrollView>
 
-                  <Text style={styles.label}>Assign Loading Worker</Text>
-                  <ScrollView horizontal showsHorizontalScrollIndicator={false} style={{ marginBottom: 14 }}>
-                    <View style={{ flexDirection: "row", gap: 8 }}>
-                      <Pressable
-                        style={[
-                          styles.partnerCard,
-                          !editOrderLoadingWorkerId && styles.partnerCardActive,
-                        ]}
-                        onPress={() => setEditOrderLoadingWorkerId("")}
-                      >
-                        <Text style={[styles.partnerName, !editOrderLoadingWorkerId && styles.partnerNameActive]}>
-                          No Loading Worker
-                        </Text>
-                      </Pressable>
-                      {workers.filter((w: any) => w.status === "Active").map((w: any) => {
-                        const active = editOrderLoadingWorkerId === w.id;
-                        return (
-                          <Pressable
-                            key={`edit-load-${w.id}`}
-                            style={[styles.partnerCard, active && styles.partnerCardActive]}
-                            onPress={() => setEditOrderLoadingWorkerId(w.id)}
-                          >
-                            <Text style={[styles.partnerName, active && styles.partnerNameActive]}>
-                              {w.name} (₹{w.loadingCost || 0}/pc)
-                            </Text>
-                          </Pressable>
-                        );
-                      })}
-                    </View>
-                  </ScrollView>
-
-                  <Text style={styles.label}>Assign Unloading Worker</Text>
-                  <ScrollView horizontal showsHorizontalScrollIndicator={false} style={{ marginBottom: 14 }}>
-                    <View style={{ flexDirection: "row", gap: 8 }}>
-                      <Pressable
-                        style={[
-                          styles.partnerCard,
-                          !editOrderUnloadingWorkerId && styles.partnerCardActive,
-                        ]}
-                        onPress={() => setEditOrderUnloadingWorkerId("")}
-                      >
-                        <Text style={[styles.partnerName, !editOrderUnloadingWorkerId && styles.partnerNameActive]}>
-                          No Unloading Worker
-                        </Text>
-                      </Pressable>
-                      {workers.filter((w: any) => w.status === "Active").map((w: any) => {
-                        const active = editOrderUnloadingWorkerId === w.id;
-                        return (
-                          <Pressable
-                            key={`edit-unload-${w.id}`}
-                            style={[styles.partnerCard, active && styles.partnerCardActive]}
-                            onPress={() => setEditOrderUnloadingWorkerId(w.id)}
-                          >
-                            <Text style={[styles.partnerName, active && styles.partnerNameActive]}>
-                              {w.name} (₹{w.unloadingCost || 0}/pc)
-                            </Text>
-                          </Pressable>
-                        );
-                      })}
-                    </View>
-                  </ScrollView>
-
-                  <Text style={styles.label}>Extra Amount / Charge (₹)</Text>
+                  <Text style={styles.label}>Bill Notes / Terms</Text>
                   <TextInput
-                    value={editOrderExtra}
-                    onChangeText={setEditOrderExtra}
-                    keyboardType="numeric"
+                    value={editOrderNotes}
+                    onChangeText={setEditOrderNotes}
                     style={styles.input}
-                    placeholder="0"
+                    placeholder="Billing terms, delivery instructions..."
                     placeholderTextColor={colors.text.muted}
                   />
 
-                  <Text style={styles.label}>Extra Charge Description</Text>
-                  <TextInput
-                    value={editOrderExtraDesc}
-                    onChangeText={setEditOrderExtraDesc}
-                    style={styles.input}
-                    placeholder="Loading charges, packaging fee..."
-                    placeholderTextColor={colors.text.muted}
-                  />
-
-                  {/* Live Order Billing Breakdown Card */}
+                  {/* Live Order Billing Breakdown & Customer Profile Impact */}
                   {(() => {
-                    const grossTotal = editOrderItems.reduce((sum, item) => sum + Number(item.grossTotal || item.quantity * item.rate), 0);
+                    const grossTotal = editOrderItems.reduce((sum, item) => sum + (Number(item.quantity || 0) * Number(item.rate || 0)), 0);
                     const shipment = parseFloat(editOrderShipment) || 0;
                     const extra = parseFloat(editOrderExtra) || 0;
+                    const taxVal = parseFloat(editOrderTax) || 0;
                     const paidAmt = parseFloat(editOrderPaidAmt) || 0;
-
-                    const loadingWorker = workers.find((w: any) => w.id === editOrderLoadingWorkerId);
                     const totalQty = editOrderItems.reduce((sum: number, itm: any) => sum + Number(itm.quantity || 0), 0);
-                    const loadingCharge = loadingWorker ? totalQty * Number(loadingWorker.loadingCost || 0) : 0;
 
+                    const partner = partners.find((p: any) => p.id === editOrderDeliveryPartnerId);
+                    
+                    // Loading calculation
+                    const loadingWorker = workers.find((w: any) => w.id === editOrderLoadingWorkerId);
+                    let autoCalcLoading = 0;
+                    let loadingLabel = "None";
+                    if (editLoadingByPartner && partner?.hasLoading) {
+                      const rateType = editCustomPartnerLoadingRateType || partner.loadingRateType || "per brick";
+                      const rate = parseFloat(editCustomPartnerLoadingRate) || parseFloat(partner.loadingRate) || 0;
+                      autoCalcLoading = rateType === "per brick" ? rate * totalQty : rate;
+                      loadingLabel = `Partner (${partner.name})`;
+                    } else if (loadingWorker) {
+                      autoCalcLoading = totalQty * Number(loadingWorker.loadingCost || 0);
+                      loadingLabel = `Worker (${loadingWorker.name})`;
+                    }
+                    const finalLoadingCharge = isLoadingCustomized ? (parseFloat(editOrderLoadingCharge) || 0) : autoCalcLoading;
+                    if (isLoadingCustomized && finalLoadingCharge > 0) loadingLabel = "Custom";
+
+                    // Unloading calculation
                     const unloadingWorker = workers.find((w: any) => w.id === editOrderUnloadingWorkerId);
-                    const unloadingCharge = unloadingWorker ? totalQty * Number(unloadingWorker.unloadingCost || 0) : 0;
+                    let autoCalcUnloading = 0;
+                    let unloadingLabel = "None";
+                    if (editUnloadingByPartner && partner?.hasUnloading) {
+                      const rateType = editCustomPartnerUnloadingRateType || partner.unloadingRateType || "per brick";
+                      const rate = parseFloat(editCustomPartnerUnloadingRate) || parseFloat(partner.unloadingRate) || 0;
+                      autoCalcUnloading = rateType === "per brick" ? rate * totalQty : rate;
+                      unloadingLabel = `Partner (${partner.name})`;
+                    } else if (unloadingWorker) {
+                      autoCalcUnloading = totalQty * Number(unloadingWorker.unloadingCost || 0);
+                      unloadingLabel = `Worker (${unloadingWorker.name})`;
+                    }
+                    const finalUnloadingCharge = isUnloadingCustomized ? (parseFloat(editOrderUnloadingCharge) || 0) : autoCalcUnloading;
+                    if (isUnloadingCustomized && finalUnloadingCharge > 0) unloadingLabel = "Custom";
 
-                    let discountVal = parseFloat(editOrderDiscount) || 0;
-                    let calculatedDiscount = editOrderDiscountType === "percent" ? (grossTotal * discountVal) / 100 : editOrderDiscountType === "per_brick" ? discountVal * totalQty : discountVal;
+                    // Subtotal before discount
+                    const subtotalBeforeDiscount = grossTotal + shipment + extra + taxVal + finalLoadingCharge + finalUnloadingCharge;
+                    
+                    // Discount calculation matching backend formula
+                    const discountVal = parseFloat(editOrderDiscount) || 0;
+                    let calculatedDiscount = 0;
+                    if (editOrderDiscountType === "percent") {
+                      calculatedDiscount = (subtotalBeforeDiscount * discountVal) / 100;
+                    } else if (editOrderDiscountType === "per_brick") {
+                      calculatedDiscount = discountVal * totalQty;
+                    } else {
+                      calculatedDiscount = discountVal;
+                    }
 
-                    const netTotal = Math.max(0, grossTotal + shipment + extra + loadingCharge + unloadingCharge - calculatedDiscount);
-                    const netBalance = Math.max(0, netTotal - paidAmt);
+                    const netTotal = Math.max(0, subtotalBeforeDiscount - calculatedDiscount);
+                    const netBalanceDue = Math.max(0, netTotal - paidAmt);
+                    const excessAdvance = Math.max(0, paidAmt - netTotal);
+
+                    // Financial balance impact preview on Customer Profile
+                    const currentCustomerPending = Number(customer?.totalPending !== undefined ? customer.totalPending : (customer?.balance || 0));
+                    const origTotal = Number(selectedEntry.original?.total || 0);
+                    const origPaid = Number(selectedEntry.original?.paidAmount !== undefined ? selectedEntry.original.paidAmount : (selectedEntry.original?.amountPaid || 0));
+                    const origWasCancelled = selectedEntry.original?.status === "cancelled";
+                    const origBalChange = origWasCancelled ? 0 : (origPaid > origTotal ? -(origPaid - origTotal) : (origTotal - origPaid));
+                    const newBalChange = editOrderStatus === "cancelled" ? 0 : (excessAdvance > 0 ? -excessAdvance : netBalanceDue);
+                    const estimatedCustomerPending = currentCustomerPending - origBalChange + newBalChange;
 
                     return (
                       <View style={{ backgroundColor: colors.bg.primary, padding: 14, borderRadius: 12, borderWidth: 1, borderColor: colors.border.subtle, marginVertical: 14 }}>
-                        <Text style={{ fontSize: 13, fontWeight: "800", color: colors.text.primary, marginBottom: 8 }}>Order Billing Breakdown</Text>
+                        <Text style={{ fontSize: 13, fontWeight: "800", color: colors.text.primary, marginBottom: 8 }}>
+                          Live Order Billing Breakdown
+                        </Text>
                         
                         <View style={{ flexDirection: "row", justifyContent: "space-between", marginBottom: 4 }}>
-                          <Text style={{ fontSize: 12, color: colors.text.muted }}>Items Gross Subtotal</Text>
+                          <Text style={{ fontSize: 12, color: colors.text.muted }}>Items Gross Subtotal ({totalQty} units)</Text>
                           <Text style={{ fontSize: 12, fontWeight: "600", color: colors.text.primary }}>₹{grossTotal.toLocaleString("en-IN")}</Text>
                         </View>
 
-                        {loadingCharge > 0 && (
+                        {finalLoadingCharge > 0 && (
                           <View style={{ flexDirection: "row", justifyContent: "space-between", marginBottom: 4 }}>
-                            <Text style={{ fontSize: 12, color: colors.text.muted }}>Loading Wages ({loadingWorker?.name})</Text>
-                            <Text style={{ fontSize: 12, fontWeight: "600", color: colors.text.primary }}>+ ₹{loadingCharge.toLocaleString("en-IN")}</Text>
+                            <Text style={{ fontSize: 12, color: colors.text.muted }}>Loading Service ({loadingLabel})</Text>
+                            <Text style={{ fontSize: 12, fontWeight: "600", color: colors.text.primary }}>+ ₹{finalLoadingCharge.toLocaleString("en-IN")}</Text>
                           </View>
                         )}
 
-                        {unloadingCharge > 0 && (
+                        {finalUnloadingCharge > 0 && (
                           <View style={{ flexDirection: "row", justifyContent: "space-between", marginBottom: 4 }}>
-                            <Text style={{ fontSize: 12, color: colors.text.muted }}>Unloading Wages ({unloadingWorker?.name})</Text>
-                            <Text style={{ fontSize: 12, fontWeight: "600", color: colors.text.primary }}>+ ₹{unloadingCharge.toLocaleString("en-IN")}</Text>
+                            <Text style={{ fontSize: 12, color: colors.text.muted }}>Unloading Service ({unloadingLabel})</Text>
+                            <Text style={{ fontSize: 12, fontWeight: "600", color: colors.text.primary }}>+ ₹{finalUnloadingCharge.toLocaleString("en-IN")}</Text>
                           </View>
                         )}
 
                         {shipment > 0 && (
                           <View style={{ flexDirection: "row", justifyContent: "space-between", marginBottom: 4 }}>
-                            <Text style={{ fontSize: 12, color: colors.text.muted }}>Shipment Charge</Text>
+                            <Text style={{ fontSize: 12, color: colors.text.muted }}>Shipment ({partner ? partner.name : "Custom"})</Text>
                             <Text style={{ fontSize: 12, fontWeight: "600", color: colors.text.primary }}>+ ₹{shipment.toLocaleString("en-IN")}</Text>
                           </View>
                         )}
@@ -2450,9 +3213,23 @@ export default function CustomerProfile() {
                           </View>
                         )}
 
+                        {taxVal > 0 && (
+                          <View style={{ flexDirection: "row", justifyContent: "space-between", marginBottom: 4 }}>
+                            <Text style={{ fontSize: 12, color: colors.text.muted }}>Tax / GST</Text>
+                            <Text style={{ fontSize: 12, fontWeight: "600", color: colors.text.primary }}>+ ₹{taxVal.toLocaleString("en-IN")}</Text>
+                          </View>
+                        )}
+
+                        <View style={{ flexDirection: "row", justifyContent: "space-between", marginBottom: 4, paddingTop: 3 }}>
+                          <Text style={{ fontSize: 12, color: colors.text.muted }}>Subtotal before Discount</Text>
+                          <Text style={{ fontSize: 12, fontWeight: "600", color: colors.text.primary }}>₹{subtotalBeforeDiscount.toLocaleString("en-IN")}</Text>
+                        </View>
+
                         {calculatedDiscount > 0 && (
                           <View style={{ flexDirection: "row", justifyContent: "space-between", marginBottom: 4 }}>
-                            <Text style={{ fontSize: 12, color: colors.accent.success }}>Discount ({editOrderDiscountType === "percent" ? `${editOrderDiscount}%` : editOrderDiscountType === "per_brick" ? `₹${editOrderDiscount}/brick × ${totalQty}` : "Flat"})</Text>
+                            <Text style={{ fontSize: 12, color: colors.accent.success }}>
+                              Discount ({editOrderDiscountType === "percent" ? `${editOrderDiscount}%` : editOrderDiscountType === "per_brick" ? `₹${editOrderDiscount}/unit` : "Flat"})
+                            </Text>
                             <Text style={{ fontSize: 12, fontWeight: "600", color: colors.accent.success }}>- ₹{calculatedDiscount.toLocaleString("en-IN")}</Text>
                           </View>
                         )}
@@ -2470,10 +3247,29 @@ export default function CustomerProfile() {
                         </View>
 
                         <View style={{ flexDirection: "row", justifyContent: "space-between", marginTop: 4, paddingTop: 4, borderTopWidth: 1, borderTopColor: colors.border.subtle }}>
-                          <Text style={{ fontSize: 13, fontWeight: "800", color: colors.text.primary }}>Net Pending Due</Text>
-                          <Text style={{ fontSize: 14, fontWeight: "800", color: netBalance > 0 ? "#EF4444" : colors.accent.success }}>
-                            ₹{netBalance.toLocaleString("en-IN")}
+                          <Text style={{ fontSize: 13, fontWeight: "800", color: colors.text.primary }}>
+                            {excessAdvance > 0 ? "Excess Advance Recorded" : "Net Pending Due on Bill"}
                           </Text>
+                          <Text style={{ fontSize: 14, fontWeight: "800", color: netBalanceDue > 0 ? colors.accent.danger : colors.accent.success }}>
+                            ₹{(excessAdvance > 0 ? excessAdvance : netBalanceDue).toLocaleString("en-IN")}
+                          </Text>
+                        </View>
+
+                        {/* Customer Overall Impact Card */}
+                        <View style={{ marginTop: 10, padding: 8, backgroundColor: colors.bg.card, borderRadius: 8, borderWidth: 1, borderColor: colors.border.subtle }}>
+                          <Text style={{ fontSize: 11, fontWeight: "700", color: colors.text.muted, textTransform: "uppercase" }}>
+                            Customer Profile Balance Impact
+                          </Text>
+                          <View style={{ flexDirection: "row", justifyContent: "space-between", alignItems: "center", marginTop: 4 }}>
+                            <Text style={{ fontSize: 12, color: colors.text.secondary }}>Estimated Customer Total Pending:</Text>
+                            <Text style={{
+                              fontSize: 13,
+                              fontWeight: "800",
+                              color: estimatedCustomerPending > 0 ? colors.accent.danger : estimatedCustomerPending < 0 ? colors.accent.success : colors.text.primary,
+                            }}>
+                              ₹{Math.abs(estimatedCustomerPending).toLocaleString("en-IN")} {estimatedCustomerPending < 0 ? "(Advance)" : ""}
+                            </Text>
+                          </View>
                         </View>
                       </View>
                     );
@@ -3937,7 +4733,7 @@ export default function CustomerProfile() {
             </View>
 
             {/* Advance Credit Badge */}
-            {(Number(customer.balance || 0) < 0 || Number(customer.advanceAmount || 0) > 0) && (
+            {Number(customer.totalPending !== undefined ? customer.totalPending : (customer.balance || 0)) < 0 && (
               <View
                 style={{
                   flexDirection: "row",
@@ -3955,7 +4751,7 @@ export default function CustomerProfile() {
               >
                 <MaterialIcons name="account-balance-wallet" size={15} color={colors.accent.success} />
                 <Text style={{ fontSize: 12.5, fontWeight: "800", color: colors.accent.success }}>
-                  Advance Credit: ₹{Math.abs(Number(customer.balance || 0)).toLocaleString("en-IN")}
+                  Advance Credit: ₹{Math.abs(Number(customer.totalPending !== undefined ? customer.totalPending : (customer.balance || 0))).toLocaleString("en-IN")}
                 </Text>
               </View>
             )}
@@ -4352,11 +5148,11 @@ export default function CustomerProfile() {
               </Pressable>
             </View>
           </View>
-          {(Number(customer.balance || 0) < 0 || Number(customer.advanceAmount || 0) > 0) && (
+          {Number(customer.totalPending !== undefined ? customer.totalPending : (customer.balance || 0)) < 0 && (
             <View style={[styles.infoBlock, { backgroundColor: colors.accent.success + "0C", paddingHorizontal: 10, borderRadius: 8, marginVertical: 2, borderBottomWidth: 1, borderBottomColor: colors.accent.success + "25" }]}>
               <Text style={[styles.infoLabel, { color: colors.accent.success, fontWeight: "700" }]}>Advance Credit Balance</Text>
               <Text style={[styles.infoVal, { color: colors.accent.success, fontWeight: "800", fontSize: 14 }]}>
-                ₹{Math.abs(Number(customer.balance || 0)).toLocaleString("en-IN")} (Available with business)
+                ₹{Math.abs(Number(customer.totalPending !== undefined ? customer.totalPending : (customer.balance || 0))).toLocaleString("en-IN")} (Available with business)
               </Text>
             </View>
           )}
@@ -4954,8 +5750,8 @@ export default function CustomerProfile() {
               <View style={styles.ledgerTable}>
                 {/* Header row */}
                 <View style={styles.ledgerHeaderRow}>
-                  <Text style={[styles.ledgerHeaderCell, { flex: 1.4 }]}>Date</Text>
-                  <Text style={[styles.ledgerHeaderCell, { flex: 2.2 }]}>Details</Text>
+                  <Text style={[styles.ledgerHeaderCell, { flex: 1.5 }]}>Date & Time</Text>
+                  <Text style={[styles.ledgerHeaderCell, { flex: 2.1 }]}>Details</Text>
                   <Text style={[styles.ledgerHeaderCell, { flex: 1.5, textAlign: "right" }]}>Order Amt</Text>
                   <Text style={[styles.ledgerHeaderCell, { flex: 1.5, textAlign: "right" }]}>Payment</Text>
                   <Text style={[styles.ledgerHeaderCell, { flex: 1.5, textAlign: "right" }]}>Balance</Text>

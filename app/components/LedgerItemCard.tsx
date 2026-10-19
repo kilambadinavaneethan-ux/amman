@@ -15,18 +15,33 @@ const LedgerItemCardComponent: React.FC<LedgerItemCardProps> = ({
   onOpenEditProfile,
 }) => {
   const isOpening = entry.type === "opening";
-  let dateDisplay = "";
+  const dateObj = entry.date
+    ? (entry.date instanceof Date ? entry.date : new Date(entry.date))
+    : null;
+  const orderDateObj = entry.orderDate
+    ? (entry.orderDate instanceof Date ? entry.orderDate : new Date(entry.orderDate))
+    : dateObj;
+
+  const dateStr = orderDateObj && !isNaN(orderDateObj.getTime())
+    ? orderDateObj.toLocaleDateString([], { day: "2-digit", month: "2-digit" })
+    : "";
+
+  const timeStr = dateObj && !isNaN(dateObj.getTime())
+    ? (() => {
+        const isMidnight =
+          (dateObj.getHours() === 0 && dateObj.getMinutes() === 0 && dateObj.getSeconds() === 0) ||
+          (dateObj.getUTCHours() === 0 && dateObj.getUTCMinutes() === 0 && dateObj.getUTCSeconds() === 0) ||
+          (dateObj.getHours() === 5 && dateObj.getMinutes() === 30 && dateObj.getSeconds() === 0);
+        if (isMidnight) return "";
+        return dateObj.toLocaleTimeString([], { hour: "numeric", minute: "2-digit", hour12: true });
+      })()
+    : "";
+
+  let delDateStr = "";
   if (entry.type === "order") {
-    const orderDateStr = entry.orderDate
-      ? (entry.orderDate instanceof Date ? entry.orderDate : new Date(entry.orderDate)).toLocaleDateString([], { day: "2-digit", month: "2-digit" })
-      : "";
-    const delDateStr = entry.deliveryDate
+    delDateStr = entry.deliveryDate
       ? (entry.deliveryDate instanceof Date ? entry.deliveryDate : new Date(entry.deliveryDate)).toLocaleDateString([], { day: "2-digit", month: "2-digit" })
       : (entry.original?.status === "cancelled" ? "Can" : "Pen");
-    dateDisplay = `O: ${orderDateStr}\nD: ${delDateStr}`;
-  } else if (entry.date) {
-    const d = entry.date instanceof Date ? entry.date : new Date(entry.date);
-    dateDisplay = d.toLocaleDateString([], { day: "2-digit", month: "2-digit" });
   }
 
   const handlePress = () => {
@@ -46,16 +61,42 @@ const LedgerItemCardComponent: React.FC<LedgerItemCardProps> = ({
       ]}
       onPress={handlePress}
     >
-      <Text
-        style={[
-          styles.cell,
-          { flex: 1.4, fontSize: 10, lineHeight: 14, color: colors.text.muted },
-        ]}
-        numberOfLines={2}
-      >
-        {dateDisplay}
-      </Text>
-      <View style={{ flex: 2.2 }}>
+      <View style={{ flex: 1.5, paddingRight: 4, justifyContent: "center" }}>
+        {isOpening ? (
+          <Text style={{ fontSize: 10, fontWeight: "700", color: colors.text.muted }}>
+            Opening
+          </Text>
+        ) : (
+          <>
+            <Text
+              style={[
+                styles.cell,
+                { fontSize: 11, fontWeight: "700", color: colors.text.primary, lineHeight: 14 },
+              ]}
+              numberOfLines={1}
+            >
+              {dateStr}
+            </Text>
+            {timeStr ? (
+              <Text
+                style={{ fontSize: 9, color: colors.text.muted, marginTop: 1, fontWeight: "500" }}
+                numberOfLines={1}
+              >
+                🕒 {timeStr}
+              </Text>
+            ) : null}
+            {entry.type === "order" && delDateStr ? (
+              <Text
+                style={{ fontSize: 8.5, color: colors.accent.primary, marginTop: 1, fontWeight: "600" }}
+                numberOfLines={1}
+              >
+                🚚 {delDateStr}
+              </Text>
+            ) : null}
+          </>
+        )}
+      </View>
+      <View style={{ flex: 2.1 }}>
         <Text
           style={{ fontSize: 12, fontWeight: "600", color: colors.text.primary }}
           numberOfLines={3}

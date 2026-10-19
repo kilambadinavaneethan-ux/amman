@@ -33,12 +33,84 @@ export function buildCustomerShareData(
     p.customerId === `partner_${id}`
   );
 
+  // Helpers to resolve exact Date and Time for Orders and Payments
+  const isDateOnlyValue = (d?: Date | null): boolean => {
+    if (!d || isNaN(d.getTime())) return true;
+    return (
+      (d.getHours() === 0 && d.getMinutes() === 0 && d.getSeconds() === 0) ||
+      (d.getUTCHours() === 0 && d.getUTCMinutes() === 0 && d.getUTCSeconds() === 0) ||
+      (d.getHours() === 5 && d.getMinutes() === 30 && d.getSeconds() === 0 && d.getMilliseconds() === 0)
+    );
+  };
+
+  const resolveOrderDateTime = (order: any): Date => {
+    const rawOrdered = order.orderedDate ? normalizeDateValue(order.orderedDate) : null;
+    const rawCreated = order.createdAt ? normalizeDateValue(order.createdAt) : null;
+    const rawDate = order.date ? normalizeDateValue(order.date) : null;
+
+    if (rawOrdered && !isDateOnlyValue(rawOrdered)) {
+      return rawOrdered;
+    }
+
+    if (rawOrdered) {
+      const timeSource = (rawCreated && !isDateOnlyValue(rawCreated))
+        ? rawCreated
+        : (rawDate && !isDateOnlyValue(rawDate) ? rawDate : null);
+
+      if (timeSource) {
+        const merged = new Date(rawOrdered);
+        merged.setHours(
+          timeSource.getHours(),
+          timeSource.getMinutes(),
+          timeSource.getSeconds(),
+          timeSource.getMilliseconds()
+        );
+        return merged;
+      }
+      return rawOrdered;
+    }
+
+    if (rawCreated) return rawCreated;
+    if (rawDate) return rawDate;
+    return new Date();
+  };
+
+  const resolvePaymentDateTime = (payment: any): Date => {
+    const rawPayDate = payment.paymentDate ? normalizeDateValue(payment.paymentDate) : null;
+    const rawDate = payment.date ? normalizeDateValue(payment.date) : null;
+    const rawCreated = payment.createdAt ? normalizeDateValue(payment.createdAt) : null;
+
+    const targetDate = rawPayDate || rawDate;
+
+    if (targetDate && !isDateOnlyValue(targetDate)) {
+      return targetDate;
+    }
+
+    if (targetDate) {
+      const timeSource = (rawCreated && !isDateOnlyValue(rawCreated)) ? rawCreated : null;
+      if (timeSource) {
+        const merged = new Date(targetDate);
+        merged.setHours(
+          timeSource.getHours(),
+          timeSource.getMinutes(),
+          timeSource.getSeconds(),
+          timeSource.getMilliseconds()
+        );
+        return merged;
+      }
+      return targetDate;
+    }
+
+    if (rawCreated) return rawCreated;
+    return new Date();
+  };
+
   // 2. Build entries
   const entries: any[] = [];
 
   customerOrders.forEach((order: any) => {
     const isCancelled = order.status === 'cancelled';
-    const orderDateObj = normalizeDateValue(order.orderedDate || order.createdAt);
+    const orderDateObj = resolveOrderDateTime(order);
     let deliveryDateObj = null;
     if (order.deliveryDate) {
       deliveryDateObj = normalizeDateValue(order.deliveryDate);
@@ -59,13 +131,15 @@ export function buildCustomerShareData(
       itemDescription = order.itemName ? `${order.itemName} (${order.quantity || 1} qty)` : 'Invoice Created';
     }
 
-    const isCompleted = order.status === 'completed';
     const orderPaid = Number(order.paidAmount || 0);
     const orderTotal = Number(order.total || 0);
     const orderExcess = Math.max(0, orderPaid - orderTotal);
-    const balChange = isCompleted
-      ? (orderExcess > 0 ? -orderExcess : Number(order.balanceDue || 0))
-      : (orderExcess > 0 ? -orderExcess : 0);
+    const orderUnpaid = order.balanceDue !== undefined
+      ? Number(order.balanceDue)
+      : Math.max(0, orderTotal - orderPaid);
+    const balChange = isCancelled
+      ? 0
+      : (orderExcess > 0 ? -orderExcess : orderUnpaid);
 
     entries.push({
       id: order.id,
@@ -113,7 +187,7 @@ export function buildCustomerShareData(
     ));
     if (isOrderPayment) return;
 
-    const payDate = normalizeDateValue(payment.createdAt || payment.date);
+    const payDate = resolvePaymentDateTime(payment);
     const amtRec = Number(payment.amountReceived !== undefined ? payment.amountReceived : (payment.amount || 0));
     const discAmt = Number(payment.discountAmount || 0);
     const totalBalanceReduction = amtRec + discAmt;
@@ -142,20 +216,24 @@ export function buildCustomerShareData(
     });
   });
 
-  // Sort by date ascending (oldest first)
+  // Sort by exact date and time ascending (oldest first)
   entries.sort((a, b) => {
-    const diff = a.date.getTime() - b.date.getTime();
+    const timeA = a.date instanceof Date ? a.date.getTime() : new Date(a.date).getTime();
+    const timeB = b.date instanceof Date ? b.date.getTime() : new Date(b.date).getTime();
+    const diff = timeA - timeB;
     if (diff !== 0) return diff;
     if (a.type === 'order' && b.type === 'payment') return -1;
     if (a.type === 'payment' && b.type === 'order') return 1;
-    return 0;
+    const idA = String(a.id || '');
+    const idB = String(b.id || '');
+    return idA.localeCompare(idB);
   });
 
   const sumChanges = entries.reduce((sum: number, entry: any) => sum + (entry.balanceChange || 0), 0);
   const customerPending = Number(
     customer.totalPending !== undefined ? customer.totalPending : (customer.balance || 0)
   );
-  const openingBalance = Math.max(0, customerPending - sumChanges);
+  const openingBalance = customerPending - sumChanges;
 
   let runningBalance = openingBalance;
   const ledgerEntries = entries.map((entry) => {
@@ -166,7 +244,7 @@ export function buildCustomerShareData(
     };
   });
 
-  if (openingBalance > 0) {
+  if (Math.abs(openingBalance) > 0.001) {
     const openingDate = customer.createdAt
       ? normalizeDateValue(customer.createdAt)
       : new Date(Date.now() - 365 * 24 * 60 * 60 * 1000);
@@ -176,9 +254,9 @@ export function buildCustomerShareData(
       orderDate: openingDate,
       deliveryDate: null,
       type: 'opening',
-      description: 'Opening Balance',
-      orderAmount: openingBalance,
-      paymentReceived: 0,
+      description: openingBalance < 0 ? 'Opening Advance Balance' : 'Opening Balance',
+      orderAmount: openingBalance > 0 ? openingBalance : 0,
+      paymentReceived: openingBalance < 0 ? Math.abs(openingBalance) : 0,
       runningBalance: openingBalance,
     });
   }
