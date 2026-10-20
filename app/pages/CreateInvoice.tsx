@@ -119,6 +119,9 @@ export default function CreateInvoice() {
   const [discount, setDiscount] = useState("0");
   const [discountType, setDiscountType] = useState<"amount" | "percent" | "per_brick">("amount");
 
+  // Bill notes / description state (Section 7)
+  const [billDescription, setBillDescription] = useState("");
+
   // List of items added to the current bill/invoice
   const [addedItems, setAddedItems] = useState<any[]>([]);
   const [editingItemIndex, setEditingItemIndex] = useState<number | null>(null);
@@ -739,6 +742,8 @@ export default function CreateInvoice() {
         shipmentCharge: shipmentCharge,
         extraAmount: extraAmountVal,
         extraAmountDescription: extraAmountDescription.trim(),
+        description: billDescription.trim(),
+        notes: billDescription.trim(),
         discount: discountVal,
         discountType: discountType,
         discountAmount: calculatedDiscountAmount,
@@ -2098,6 +2103,71 @@ export default function CreateInvoice() {
           })()}
         </View>
 
+        {/* Section 7: Description (Optional) */}
+        <View style={styles.section}>
+          <View style={styles.sectionHeader}>
+            <MaterialIcons name="description" size={20} color={colors.accent.primary} />
+            <Text style={styles.sectionTitle}>7. Description (Optional)</Text>
+          </View>
+
+          <View style={{ flexDirection: "row", justifyContent: "space-between", alignItems: "center", marginBottom: 6 }}>
+            <Text style={styles.label}>Bill Notes / Description</Text>
+            {billDescription.length > 0 && (
+              <Pressable
+                onPress={() => setBillDescription("")}
+                hitSlop={8}
+                style={{ flexDirection: "row", alignItems: "center", gap: 3, marginBottom: 6 }}
+              >
+                <MaterialIcons name="close" size={14} color={colors.text.muted} />
+                <Text style={{ fontSize: 11, color: colors.text.muted, fontWeight: "600" }}>Clear</Text>
+              </Pressable>
+            )}
+          </View>
+
+          <TextInput
+            value={billDescription}
+            onChangeText={setBillDescription}
+            placeholder="Add notes, site delivery instructions, purchase order ref, or terms..."
+            placeholderTextColor={colors.text.muted}
+            style={[styles.input, styles.textArea]}
+            multiline
+            numberOfLines={3}
+            textAlignVertical="top"
+          />
+
+          {/* Quick Suggestion Chips */}
+          <Text style={[styles.label, { fontSize: 11, marginTop: -4, marginBottom: 8 }]}>Quick Suggestions:</Text>
+          <View style={styles.presetChipsRow}>
+            {[
+              "Site Delivery",
+              "Balance on Unloading",
+              "Urgent Delivery",
+              "Cash on Delivery",
+              "Self Pickup",
+              "PO Confirmed",
+            ].map((tag) => (
+              <Pressable
+                key={tag}
+                style={({ pressed }) => [
+                  styles.presetChip,
+                  pressed && { opacity: 0.7 },
+                ]}
+                onPress={() => {
+                  setBillDescription((prev) => {
+                    const trimmed = prev.trim();
+                    if (!trimmed) return tag;
+                    if (trimmed.includes(tag)) return prev;
+                    return `${trimmed}, ${tag}`;
+                  });
+                }}
+              >
+                <MaterialIcons name="add" size={12} color={colors.accent.primary} />
+                <Text style={styles.presetChipText}>{tag}</Text>
+              </Pressable>
+            ))}
+          </View>
+        </View>
+
         {/* Save Actions */}
         <View style={{ flexDirection: "row", gap: 10, marginTop: 10 }}>
           <Pressable
@@ -2698,6 +2768,33 @@ const getStyles = (theme: any) => {
     color: colors.accent.danger,
     fontWeight: "700",
     fontSize: 14,
+  },
+  textArea: {
+    height: 76,
+    paddingTop: 10,
+    paddingBottom: 10,
+    textAlignVertical: "top",
+  },
+  presetChipsRow: {
+    flexDirection: "row",
+    flexWrap: "wrap",
+    gap: 6,
+  },
+  presetChip: {
+    flexDirection: "row",
+    alignItems: "center",
+    gap: 3,
+    paddingHorizontal: 9,
+    paddingVertical: 5,
+    borderRadius: 6,
+    backgroundColor: colors.accent.primary + "12",
+    borderWidth: 1,
+    borderColor: colors.accent.primary + "30",
+  },
+  presetChipText: {
+    fontSize: 11,
+    fontWeight: "600",
+    color: colors.accent.primary,
   },
 })
 };

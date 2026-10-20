@@ -327,7 +327,7 @@ export function buildCustomerShareData(
         type: l.type === 'payment' ? 'payment' : l.type === 'opening' ? 'opening' : 'order',
         description:
           l.description || (l.type === 'payment' ? 'Payment Received' : `Order #${l.id?.slice(0, 8)}`),
-        notes: l.notes || orig.notes || orig.note || orig.remarks || orig.paymentNotes || orig.paymentNote || '',
+        notes: l.notes || orig.notes || orig.description || orig.note || orig.remarks || orig.paymentNotes || orig.paymentNote || '',
         amount: rawAmount,
         paid: rawPaid,
         balance: Number(l.runningBalance || 0),

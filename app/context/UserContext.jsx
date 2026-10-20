@@ -53,7 +53,25 @@ export function UserProvider({ children }) {
         if (!isMounted) return;
 
         if (docSnap.exists()) {
-          const profileData = { id: docSnap.id, ...docSnap.data() };
+          const raw = docSnap.data();
+          const primaryCompName = raw.businessName || raw.companyName || raw.name || raw.company?.name || "My Business";
+          const profileData = {
+            id: docSnap.id,
+            ...raw,
+            businessName: primaryCompName,
+            companyName: primaryCompName,
+            name: primaryCompName,
+            company: {
+              ...(raw.company || {}),
+              name: primaryCompName,
+              businessName: primaryCompName,
+              phone: raw.mobile || raw.phone || raw.company?.phone || "",
+              email: raw.email || raw.company?.email || "",
+              address: raw.address || raw.company?.address || "",
+              gstin: raw.gstin || raw.gstNo || raw.taxId || raw.company?.gstin || "",
+              logoUrl: raw.photoURL || raw.logoUrl || raw.company?.logoUrl || "",
+            },
+          };
           setProfile(profileData);
           setLoading(false);
 
@@ -77,10 +95,19 @@ export function UserProvider({ children }) {
           const providerId = user.providerData?.[0]?.providerId || "email";
           const isGoogle = providerId.includes("google") || isMockGoogle;
 
+          const initialCompName = "My Business";
           const newProfile = {
             uid: user.uid,
             fullName: isMockGoogle ? mockName : (user.displayName || "Business Owner"),
-            businessName: "My Business",
+            businessName: initialCompName,
+            companyName: initialCompName,
+            name: initialCompName,
+            company: {
+              name: initialCompName,
+              businessName: initialCompName,
+              phone: user.phoneNumber || "",
+              email: isMockGoogle ? mockEmail : (user.email || ""),
+            },
             email: isMockGoogle ? mockEmail : (user.email || ""),
             mobile: user.phoneNumber || "",
             phone: user.phoneNumber || "",
@@ -127,6 +154,21 @@ export function UserProvider({ children }) {
       const userDocRef = doc(db, "users", user.uid);
       const cleanUpdates = { ...updates };
 
+      // Ensure single source of truth for company name: any user only has ONE company name
+      const resolvedCompanyName = (
+        cleanUpdates.businessName ||
+        cleanUpdates.companyName ||
+        cleanUpdates.name ||
+        cleanUpdates.company?.name ||
+        cleanUpdates.company?.businessName
+      );
+      if (resolvedCompanyName && typeof resolvedCompanyName === "string" && resolvedCompanyName.trim()) {
+        const trimmedCompName = resolvedCompanyName.trim();
+        cleanUpdates.businessName = trimmedCompName;
+        cleanUpdates.companyName = trimmedCompName;
+        cleanUpdates.name = trimmedCompName;
+      }
+
       // Ensure alias fields are synchronized across the entire app
       if (cleanUpdates.mobile && !cleanUpdates.phone) {
         cleanUpdates.phone = cleanUpdates.mobile;
@@ -141,6 +183,20 @@ export function UserProvider({ children }) {
       if (cleanUpdates.photoURL) {
         cleanUpdates.logoUrl = cleanUpdates.photoURL;
       }
+
+      const effectiveCompName = cleanUpdates.businessName || profile?.businessName || profile?.companyName || profile?.name || "My Business";
+      cleanUpdates.company = {
+        ...(profile?.company || {}),
+        ...(cleanUpdates.company || {}),
+        name: effectiveCompName,
+        businessName: effectiveCompName,
+        companyName: effectiveCompName,
+        phone: cleanUpdates.mobile || cleanUpdates.phone || cleanUpdates.company?.phone || profile?.mobile || profile?.phone || "",
+        email: cleanUpdates.email || cleanUpdates.company?.email || profile?.email || "",
+        address: cleanUpdates.address || cleanUpdates.company?.address || profile?.address || "",
+        gstin: cleanUpdates.gstin || cleanUpdates.gstNo || cleanUpdates.taxId || cleanUpdates.company?.gstin || profile?.gstin || "",
+        logoUrl: cleanUpdates.photoURL || cleanUpdates.logoUrl || cleanUpdates.company?.logoUrl || profile?.photoURL || "",
+      };
 
       // Optimistically update local profile and async cache
       const updatedProfile = {

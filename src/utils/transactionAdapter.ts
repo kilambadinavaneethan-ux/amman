@@ -201,7 +201,7 @@ export function adaptToTransactionData(
     ),
     paymentStatus,
     paymentMethod: rawItem.paymentMethod || 'Cash',
-    notes: rawItem.notes || rawItem.remarks || '',
+    notes: rawItem.notes || rawItem.description || rawItem.remarks || '',
     company: companyDetails,
   };
 }

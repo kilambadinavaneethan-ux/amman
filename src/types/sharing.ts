@@ -19,10 +19,16 @@ export interface BankAccount {
 
 export interface CompanyDetails {
   name?: string;
+  businessName?: string;
+  companyName?: string;
   phone?: string;
+  mobile?: string;
+  alternatePhone?: string;
   email?: string;
   address?: string;
   gstNo?: string;
+  gstin?: string;
+  taxId?: string;
   logoUrl?: string;
   signatureUrl?: string;
   bankName?: string;
@@ -349,7 +355,7 @@ export const DEFAULT_APPA_ESTIMATE_BILL_SETTINGS: AppaEstimateBillSettings = {
   companyAddressColor: '#475569',
   companyAddressFontSize: 12,
   customPhones: '',
-  phoneNumbers: ['99430 51509', '99430 51209'],
+  phoneNumbers: [],
   defaultTheme: 'classic',
   showQrCode: true,
   showBankDetails: true,

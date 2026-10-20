@@ -254,6 +254,16 @@ const OrderItemCardComponent: React.FC<OrderItemCardProps> = ({
               </Text>
             </View>
           )}
+
+          {(order.description || order.notes) ? (
+            <View style={{ marginTop: 6, paddingVertical: 6, paddingHorizontal: 8, backgroundColor: colors.bg.primary, borderRadius: 6, borderWidth: 1, borderColor: colors.border.subtle, flexDirection: "row", alignItems: "flex-start", gap: 5 }}>
+              <MaterialIcons name="notes" size={14} color={colors.accent.primary} style={{ marginTop: 1 }} />
+              <Text style={{ fontSize: 11, color: colors.text.secondary, flex: 1, lineHeight: 16 }}>
+                <Text style={{ fontWeight: "700", color: colors.text.primary }}>Note: </Text>
+                {order.description || order.notes}
+              </Text>
+            </View>
+          ) : null}
         </View>
       </View>
 

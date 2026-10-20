@@ -350,6 +350,7 @@ export default function Orders() {
   const [editExtraAmountDescription, setEditExtraAmountDescription] =
     useState("");
   const [showEditExtraDesc, setShowEditExtraDesc] = useState(false);
+  const [editOrderDescription, setEditOrderDescription] = useState("");
   const [editDiscount, setEditDiscount] = useState("0");
   const [editDiscountType, setEditDiscountType] = useState<"amount" | "percent" | "per_brick">("amount");
   const [editPaidAmount, setEditPaidAmount] = useState("0");
@@ -1272,6 +1273,7 @@ export default function Orders() {
     setEditExtraAmount(String(order.extraAmount !== undefined ? order.extraAmount : 0));
     setEditExtraAmountDescription(order.extraAmountDescription || "");
     setShowEditExtraDesc(!!order.extraAmountDescription);
+    setEditOrderDescription(order.description || order.notes || "");
     setEditDiscount(String(order.discount !== undefined ? order.discount : 0));
     setEditDiscountType(order.discountType || "amount");
     setEditPaidAmount(String(order.paidAmount !== undefined ? order.paidAmount : (order.amountPaid !== undefined ? order.amountPaid : 0)));
@@ -1439,6 +1441,8 @@ export default function Orders() {
         deliveryMinRate: Number(editDeliveryMinRate) || 0,
         extraAmount: editExtraVal,
         extraAmountDescription: editExtraAmountDescription.trim(),
+        description: editOrderDescription.trim(),
+        notes: editOrderDescription.trim(),
         discount: discountVal,
         discountType: editDiscountType,
         discountAmount: editDiscountAmount,
@@ -2922,6 +2926,16 @@ export default function Orders() {
                                   </Text>
                                 </View>
                               )}
+
+                              {(order.description || order.notes) ? (
+                                <View style={{ marginTop: 6, paddingVertical: 6, paddingHorizontal: 8, backgroundColor: colors.bg.primary, borderRadius: 6, borderWidth: 1, borderColor: colors.border.subtle, flexDirection: "row", alignItems: "flex-start", gap: 5 }}>
+                                  <MaterialIcons name="notes" size={14} color={colors.accent.primary} style={{ marginTop: 1 }} />
+                                  <Text style={{ fontSize: 11, color: colors.text.secondary, flex: 1, lineHeight: 16 }}>
+                                    <Text style={{ fontWeight: "700", color: colors.text.primary }}>Note: </Text>
+                                    {order.description || order.notes}
+                                  </Text>
+                                </View>
+                              ) : null}
                             </View>
                           );
                         })()}
@@ -4937,8 +4951,21 @@ export default function Orders() {
                     </View>
                   </View>
 
+                  {/* Order Description / Notes */}
+                  <View style={{ marginTop: 6, marginBottom: 8 }}>
+                    <Text style={styles.label}>Order Description / Notes (Optional)</Text>
+                    <TextInput
+                      value={editOrderDescription}
+                      onChangeText={setEditOrderDescription}
+                      placeholder="e.g. Site instructions, terms, PO ref..."
+                      placeholderTextColor={colors.text.muted}
+                      style={[styles.input, { height: 60, textAlignVertical: "top", paddingTop: 8 }]}
+                      multiline
+                    />
+                  </View>
+
                   {/* Status & Delivery Progress Section */}
-                  <View style={{ marginTop: 12, marginBottom: 8, padding: 12, backgroundColor: colors.bg.primary, borderRadius: 10, borderWidth: 1, borderColor: colors.border.subtle }}>
+                  <View style={{ marginTop: 8, marginBottom: 8, padding: 12, backgroundColor: colors.bg.primary, borderRadius: 10, borderWidth: 1, borderColor: colors.border.subtle }}>
                     <Text style={[styles.label, { marginBottom: 8, color: colors.accent.primary, fontWeight: "700" }]}>
                       Order Status & Delivery Progress
                     </Text>

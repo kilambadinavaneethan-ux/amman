@@ -46,11 +46,11 @@ export const customerShareService = {
         ...DEFAULT_APPA_ESTIMATE_BILL_SETTINGS,
         ...(template?.appaBillSettings || {}),
       };
-      const rawCompanyPhone = cfg.customPhones?.trim() || company.phone || '99430 51509';
-      const altPhone = cfg.customPhones?.trim() ? '' : (company.alternatePhone || '99430 51209');
+      const rawCompanyPhone = company.phone || company.mobile || cfg.customPhones?.trim() || '';
+      const altPhone = company.alternatePhone || '';
       const phones = [rawCompanyPhone, altPhone].filter(Boolean).join(', ');
-      const compName = cfg.customCompanyName?.trim() || company.name || 'அம்மன் ஹாலோ பிரிக்ஸ்';
-      const compAddress = cfg.customAddress?.trim() || company.address;
+      const compName = company.businessName || company.companyName || company.name || cfg.customCompanyName?.trim() || 'My Business';
+      const compAddress = company.address || cfg.customAddress?.trim() || '';
       const custName = data.customer.name.endsWith('அவர்கள்') ? data.customer.name : `${data.customer.name} அவர்கள்`;
       const netDue = data.summary.netBalanceDue;
       const invocation = cfg.invocationText || '|| ஸ்ரீ சொக்கநாச்சி அம்மன் துணை ||';
@@ -79,14 +79,28 @@ export const customerShareService = {
               msg += `   • ${it.name} - ${it.quantity}X${r} = ${Math.round(it.total).toLocaleString('en-IN')}\n`;
             });
           }
+          if (l.notes) {
+            msg += `   📝 notes: ${l.notes}\n`;
+          }
           msg += `   🔴 பற்று: +${formatCurrency(l.amount)} | பாக்கி: ${formatCurrency(l.balance)}\n\n`;
         } else if (l.type === 'payment') {
-          msg += `${idx + 1}. [${dmy}] 💳 ${l.description || 'ரொக்கம் வரவு'}${l.notes ? ' (' + l.notes + ')' : ''}\n`;
+          msg += `${idx + 1}. [${dmy}] 💳 ${l.description || 'ரொக்கம் வரவு'}\n`;
+          if (l.notes) {
+            msg += `   📝 notes: ${l.notes}\n`;
+          }
           msg += `   🟢 வரவு: -${formatCurrency(l.paid)} | பாக்கி: ${formatCurrency(l.balance)}\n\n`;
         } else if (l.type === 'opening') {
-          msg += `${idx + 1}. 📌 *${l.description || 'முந்தைய பாக்கி (Old Balance Due)'}:* +${formatCurrency(l.amount)}\n\n`;
+          msg += `${idx + 1}. 📌 *${l.description || 'முந்தைய பாக்கி (Old Balance Due)'}:* +${formatCurrency(l.amount)}\n`;
+          if (l.notes) {
+            msg += `   📝 notes: ${l.notes}\n`;
+          }
+          msg += `\n`;
         } else {
-          msg += `${idx + 1}. [${dmy}] 📌 ${l.description}: +${formatCurrency(l.amount)}\n\n`;
+          msg += `${idx + 1}. [${dmy}] 📌 ${l.description}: +${formatCurrency(l.amount)}\n`;
+          if (l.notes) {
+            msg += `   📝 notes: ${l.notes}\n`;
+          }
+          msg += `\n`;
         }
       });
 
@@ -171,15 +185,15 @@ export const customerShareService = {
 
     const ledgerLines = recentLedger.map((l) => {
       const icon = l.type === 'order' ? '🛒' : l.type === 'payment' ? '💳' : '📌';
-      const noteStr = l.notes ? ` (Note: ${l.notes})` : '';
+      const noteStr = l.notes ? `\n   📝 notes: ${l.notes}` : '';
       const tStr = formatTime(l.date) ? ` ${formatTime(l.date)}` : '';
-      return `${icon} ${formatDate(l.date)}${tStr} - ${l.description}${noteStr}: ${l.type === 'payment' ? '-' : '+'}${formatCurrency(l.amount || l.paid || 0)}`;
+      return `${icon} ${formatDate(l.date)}${tStr} - ${l.description}: ${l.type === 'payment' ? '-' : '+'}${formatCurrency(l.amount || l.paid || 0)}${noteStr}`;
     }).join('\n');
 
     // Format scheduled due dates
     const dueDatesLines = (data.dueDates || []).map((d) => {
       const icon = d.status === 'Completed' ? '✅' : d.status === 'Cancelled' ? '🚫' : '⏰';
-      return `${icon} Due Date: ${d.date} | Status: ${d.status}${d.notes ? ' (' + d.notes + ')' : ''}`;
+      return `${icon} Due Date: ${d.date} | Status: ${d.status}${d.notes ? ' (notes: ' + d.notes + ')' : ''}`;
     }).join('\n');
 
     const oldBal = data.summary.oldBalanceDue || 0;
@@ -327,7 +341,7 @@ export const customerShareService = {
           </td>
           <td style="padding: 10px; border-bottom: 1px solid #E2E8F0; font-size: 12px; font-weight: 600; color: #0F172A; vertical-align: top;">
             <div>${l.description}</div>
-            ${l.notes ? `<div style="font-size: 10px; color: #64748B; font-weight: 400; font-style: italic; margin-top: 2px;">📝 Note: ${l.notes}</div>` : ''}
+            ${l.notes ? `<div style="font-size: 10px; color: #64748B; font-weight: 400; font-style: italic; margin-top: 2px;">📝 notes: ${l.notes}</div>` : ''}
           </td>
           <td style="padding: 10px; border-bottom: 1px solid #E2E8F0; font-size: 12px; text-align: center; vertical-align: top;">
             <span style="padding: 3px 8px; border-radius: 12px; font-size: 10px; font-weight: 700; background: ${l.type === 'order' ? '#EFF6FF' : l.type === 'payment' ? '#ECFDF5' : '#FFFBEB'}; color: ${l.type === 'order' ? '#2563EB' : l.type === 'payment' ? '#059669' : '#D97706'};">
@@ -535,19 +549,19 @@ export const customerShareService = {
     };
 
     let companyPhonesList: string[] = [];
-    if (cfg.phoneNumbers && Array.isArray(cfg.phoneNumbers) && cfg.phoneNumbers.some((p) => p.trim())) {
+    if (company.phone || company.mobile) {
+      companyPhonesList = [company.phone || company.mobile, company.alternatePhone].filter(Boolean) as string[];
+    } else if (cfg.phoneNumbers && Array.isArray(cfg.phoneNumbers) && cfg.phoneNumbers.some((p) => p.trim())) {
       companyPhonesList = cfg.phoneNumbers.map((p) => p.trim()).filter(Boolean);
     } else if (cfg.customPhones?.trim()) {
       companyPhonesList = cfg.customPhones.split(/[•,]/).map((p) => p.trim()).filter(Boolean);
     } else {
-      const rawCompanyPhone = company.phone || '99430 51509';
-      const altPhone = company.alternatePhone || '99430 51209';
-      companyPhonesList = [rawCompanyPhone, altPhone].filter(Boolean);
+      companyPhonesList = [];
     }
     const companyPhones = companyPhonesList.join(' • ');
 
-    const companyName = cfg.customCompanyName?.trim() || company.name || 'அம்மன் ஹாலோ பிரிக்ஸ்';
-    const companyAddress = cfg.customAddress?.trim() || company.address || '11, கரூர் மெயின் ரோடு, வெங்கமேடு, தளவாபாளையம், Po. புகழூர் D.T - 638153';
+    const companyName = company.businessName || company.companyName || company.name || cfg.customCompanyName?.trim() || 'My Business';
+    const companyAddress = company.address || cfg.customAddress?.trim() || '';
 
     const customerName = data.customer.name || 'வாடிக்கையாளர்';
     const customerAddress = data.customer.address || '';
@@ -590,7 +604,7 @@ export const customerShareService = {
     // QR code setup
     const showQr = (cfg.showQrCode !== false) && settings?.includeQrCode !== false && !isPaid;
     const targetUpi = (settings?.upiId || company?.upiId || '').trim();
-    const payeeName = encodeURIComponent((company?.name || 'Business').trim());
+    const payeeName = encodeURIComponent((company?.businessName || company?.companyName || company?.name || 'Business').trim());
     const txNote = encodeURIComponent(`Bill for ${customerName}`.trim());
     const upiPayload = targetUpi
       ? `upi://pay?pa=${targetUpi}&pn=${payeeName}&cu=INR&tn=${txNote}`
@@ -630,7 +644,7 @@ export const customerShareService = {
       if (isOpening) {
         particulars = `<span style="color: ${t.highlightColor}; font-weight: 800;">முந்தைய பாக்கி (Old Balance)</span>`;
       } else if (isPayment) {
-        particulars = `<span style="color: #047857; font-weight: 800;">💳 ${item.description || 'ரொக்கம் வரவு'}</span>${item.notes ? ` <span style="font-size: 11px; color: ${t.subTextColor}; font-style: italic;">(${item.notes})</span>` : ''}`;
+        particulars = `<span style="color: #047857; font-weight: 800;">💳 ${item.description || 'ரொக்கம் வரவு'}</span>${item.notes ? ` <span style="font-size: 11px; color: ${t.subTextColor}; font-style: italic;">(notes: ${item.notes})</span>` : ''}`;
       } else {
         if (item.items && item.items.length > 0) {
           particulars = item.items.map(it => {
@@ -645,7 +659,7 @@ export const customerShareService = {
         if (item.loadingCharge) extras.push(`ஏற்று கூலி: ₹${Number(item.loadingCharge).toLocaleString('en-IN')}`);
         if (item.unloadingCharge) extras.push(`இறக்கு கூலி: ₹${Number(item.unloadingCharge).toLocaleString('en-IN')}`);
         if (item.extraAmount) extras.push(`கூடுதல்: ₹${Number(item.extraAmount).toLocaleString('en-IN')}`);
-        if (item.notes) extras.push(item.notes);
+        if (item.notes) extras.push(`notes: ${item.notes}`);
         if (extras.length > 0) {
           particulars += extras.map(e => `<div style="font-size: 10px; color: ${t.subTextColor}; margin-top: 2px;">• ${e}</div>`).join('');
         }

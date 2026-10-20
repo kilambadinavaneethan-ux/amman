@@ -1016,15 +1016,18 @@ function InvoiceManagementScreen() {
     if (appaSettings.customPhones?.trim()) {
       return appaSettings.customPhones.split(/[•,]/).map((p) => p.trim()).filter(Boolean);
     }
-    return ['99430 51509', '99430 51209'];
-  }, [appaSettings.phoneNumbers, appaSettings.customPhones]);
+    const defaultPhones = [userProfile?.mobile || userProfile?.phone, userProfile?.whatsapp].filter(Boolean);
+    return defaultPhones.length > 0 ? defaultPhones : [''];
+  }, [appaSettings.phoneNumbers, appaSettings.customPhones, userProfile]);
 
   const handleUpdatePhone = useCallback((index: number, val: string) => {
+    const defaultPhones = [userProfile?.mobile || userProfile?.phone, userProfile?.whatsapp].filter(Boolean);
+    const fallbackList = defaultPhones.length > 0 ? defaultPhones : [''];
     const current = (appaSettings.phoneNumbers && appaSettings.phoneNumbers.length > 0)
       ? [...appaSettings.phoneNumbers]
       : (appaSettings.customPhones?.trim()
           ? appaSettings.customPhones.split(/[•,]/).map((p) => p.trim()).filter(Boolean)
-          : ['99430 51509', '99430 51209']);
+          : [...fallbackList]);
     current[index] = val;
     setTemplate((prev) => ({
       ...prev,
@@ -1036,14 +1039,16 @@ function InvoiceManagementScreen() {
       },
     }));
     setHasChanges(true);
-  }, [appaSettings.phoneNumbers, appaSettings.customPhones]);
+  }, [appaSettings.phoneNumbers, appaSettings.customPhones, userProfile]);
 
   const handleAddPhone = useCallback(() => {
+    const defaultPhones = [userProfile?.mobile || userProfile?.phone, userProfile?.whatsapp].filter(Boolean);
+    const fallbackList = defaultPhones.length > 0 ? defaultPhones : [''];
     const current = (appaSettings.phoneNumbers && appaSettings.phoneNumbers.length > 0)
       ? [...appaSettings.phoneNumbers]
       : (appaSettings.customPhones?.trim()
           ? appaSettings.customPhones.split(/[•,]/).map((p) => p.trim()).filter(Boolean)
-          : ['99430 51509', '99430 51209']);
+          : [...fallbackList]);
     current.push('');
     setTemplate((prev) => ({
       ...prev,
@@ -1055,14 +1060,16 @@ function InvoiceManagementScreen() {
       },
     }));
     setHasChanges(true);
-  }, [appaSettings.phoneNumbers, appaSettings.customPhones]);
+  }, [appaSettings.phoneNumbers, appaSettings.customPhones, userProfile]);
 
   const handleRemovePhone = useCallback((index: number) => {
+    const defaultPhones = [userProfile?.mobile || userProfile?.phone, userProfile?.whatsapp].filter(Boolean);
+    const fallbackList = defaultPhones.length > 0 ? defaultPhones : [''];
     const current = (appaSettings.phoneNumbers && appaSettings.phoneNumbers.length > 0)
       ? [...appaSettings.phoneNumbers]
       : (appaSettings.customPhones?.trim()
           ? appaSettings.customPhones.split(/[•,]/).map((p) => p.trim()).filter(Boolean)
-          : ['99430 51509', '99430 51209']);
+          : [...fallbackList]);
     if (current.length <= 1) {
       current[0] = '';
     } else {
@@ -2981,16 +2988,40 @@ function InvoiceManagementScreen() {
               </View>
             )}
 
-            <Text style={[styles.inputLabel, { color: subTextColor }]}>
-              Company Name Override (நிறுவனப் பெயர்)
-            </Text>
-            <TextInput
-              style={[styles.input, { backgroundColor: colors.bg.primary, borderColor, color: textColor }]}
-              value={appaSettings.customCompanyName || ''}
-              onChangeText={(val) => updateAppaField('customCompanyName', val)}
-              placeholder="Default: அம்மன் ஹாலோ பிரிக்ஸ்"
-              placeholderTextColor={subTextColor}
-            />
+            {/* Unified Company Profile Card */}
+            <View
+              style={{
+                flexDirection: 'row',
+                alignItems: 'center',
+                justifyContent: 'space-between',
+                backgroundColor: isDark ? '#1E293B' : '#F1F5F9',
+                padding: 12,
+                borderRadius: 8,
+                marginBottom: 12,
+                borderWidth: 1,
+                borderColor,
+              }}
+            >
+              <View style={{ flex: 1, marginRight: 8 }}>
+                <Text style={{ fontSize: 13, fontWeight: '700', color: textColor }}>
+                  🏢 {userProfile?.businessName || userProfile?.companyName || 'My Business'}
+                </Text>
+                <Text style={{ fontSize: 11, color: subTextColor, marginTop: 2 }}>
+                  {userProfile?.address || 'No address set'} • Managed centrally in Profile Details
+                </Text>
+              </View>
+              <Pressable
+                onPress={() => router.push('/settings/profile')}
+                style={{
+                  paddingHorizontal: 10,
+                  paddingVertical: 6,
+                  borderRadius: 6,
+                  backgroundColor: colors.accent.primary,
+                }}
+              >
+                <Text style={{ fontSize: 11, fontWeight: '700', color: '#FFF' }}>Edit Profile</Text>
+              </Pressable>
+            </View>
 
             <Text style={[styles.inputLabel, { color: subTextColor, marginTop: 10 }]}>
               Company Name Color (பெயர் எழுத்து வண்ணம்)
@@ -3011,16 +3042,7 @@ function InvoiceManagementScreen() {
               accentColor={appaSettings.companyNameColor || '#0F172A'}
             />
 
-            <Text style={[styles.inputLabel, { color: subTextColor, marginTop: 14 }]}>
-              Company Address Override (நிறுவன முகவரி)
-            </Text>
-            <TextInput
-              style={[styles.input, { backgroundColor: colors.bg.primary, borderColor, color: textColor }]}
-              value={appaSettings.customAddress || ''}
-              onChangeText={(val) => updateAppaField('customAddress', val)}
-              placeholder="Default: 11, கரூர் மெயின் ரோடு, தளவாபாளையம்"
-              placeholderTextColor={subTextColor}
-            />
+
 
             <Text style={[styles.inputLabel, { color: subTextColor, marginTop: 10 }]}>
               Company Address Color (முகவரி எழுத்து வண்ணம்)
@@ -3106,7 +3128,7 @@ function InvoiceManagementScreen() {
                       ]}
                       value={phone}
                       onChangeText={(val) => handleUpdatePhone(idx, val)}
-                      placeholder={`Phone ${idx + 1} (e.g. 99430 51509)`}
+                      placeholder={`Phone ${idx + 1} (e.g. 98765 43210)`}
                       placeholderTextColor={subTextColor}
                       keyboardType="phone-pad"
                     />
@@ -3562,11 +3584,11 @@ function InvoiceManagementScreen() {
               <AppaEstimateBillView
                 data={SAMPLE_CUSTOMER_STATEMENT_DATA}
                 company={{
-                  name: appaSettings.customCompanyName || 'அம்மன் ஹாலோ பிரிக்ஸ்',
-                  phone: appaSettings.customPhones || '99430 51509',
-                  alternatePhone: '99430 51209',
-                  address: appaSettings.customAddress || '11, கரூர் மெயின் ரோடு, வெங்கமேடு, தளவாபாளையம்',
-                  upiId: shareSettings.upiId || 'ammanbricks@upi',
+                  name: userProfile?.businessName || userProfile?.companyName || userProfile?.name || 'My Business',
+                  phone: (phoneList && phoneList.length > 0 && phoneList[0]) || userProfile?.mobile || userProfile?.phone || '',
+                  alternatePhone: (phoneList && phoneList.length > 1 && phoneList[1]) || '',
+                  address: userProfile?.address || '',
+                  upiId: shareSettings.upiId || userProfile?.upiId || '',
                   logoUrl: effectiveAppaLogoUri,
                 }}
                 settings={shareSettings}

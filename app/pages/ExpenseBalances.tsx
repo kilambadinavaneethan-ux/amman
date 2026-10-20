@@ -155,20 +155,25 @@ export default function ExpenseBalances() {
   const { profile: userProfile } = useContext(UserContext) as any;
   const loading = expensesLoading || suppliersLoading || workersLoading || partnersLoading || ordersLoading;
 
-  const companyInfo = useMemo(() => ({
-    name: userProfile?.company?.name || userProfile?.businessName || userProfile?.fullName || 'Company Name',
-    phone: userProfile?.company?.phone || userProfile?.mobile || '',
-    email: userProfile?.company?.email || userProfile?.email || '',
-    address: userProfile?.company?.address || userProfile?.address || '',
-    gstin: userProfile?.company?.gstin || userProfile?.taxId || userProfile?.gstNo || '',
-    logoUrl: userProfile?.company?.logoUrl || userProfile?.photoURL || userProfile?.logoUrl || '',
-    signatureUrl: userProfile?.company?.signatureUrl || userProfile?.signatureUrl || '',
-    bankName: userProfile?.company?.bankName || userProfile?.bankName || '',
-    accountNo: userProfile?.company?.accountNo || userProfile?.accountNo || '',
-    ifscCode: userProfile?.company?.ifscCode || userProfile?.ifscCode || '',
-    upiId: userProfile?.company?.upiId || userProfile?.upiId || '',
-    ...userProfile?.company,
-  }), [userProfile]);
+  const companyInfo = useMemo(() => {
+    const compName = userProfile?.businessName || userProfile?.companyName || userProfile?.company?.name || userProfile?.name || userProfile?.fullName || 'My Business';
+    return {
+      ...(userProfile?.company || {}),
+      name: compName,
+      businessName: compName,
+      companyName: compName,
+      phone: userProfile?.mobile || userProfile?.phone || userProfile?.company?.phone || '',
+      email: userProfile?.email || userProfile?.company?.email || '',
+      address: userProfile?.address || userProfile?.company?.address || '',
+      gstin: userProfile?.gstin || userProfile?.taxId || userProfile?.gstNo || userProfile?.company?.gstin || '',
+      logoUrl: userProfile?.photoURL || userProfile?.logoUrl || userProfile?.company?.logoUrl || '',
+      signatureUrl: userProfile?.signatureUrl || userProfile?.company?.signatureUrl || '',
+      bankName: userProfile?.bankName || userProfile?.company?.bankName || '',
+      accountNo: userProfile?.accountNo || userProfile?.company?.accountNo || '',
+      ifscCode: userProfile?.ifscCode || userProfile?.company?.ifscCode || '',
+      upiId: userProfile?.upiId || userProfile?.company?.upiId || '',
+    };
+  }, [userProfile]);
 
   const [refreshing, setRefreshing] = useState(false);
   const [searchQuery, setSearchQuery] = useState("");

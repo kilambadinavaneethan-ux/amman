@@ -80,7 +80,7 @@ function SettingsHome() {
       icon: "settings",
       color: theme.colors.accent.warning,
       items: [
-        { label: "Business Settings", icon: "business", route: "/settings/business" },
+        { label: "Business Profile & Details", icon: "business", route: "/settings/profile" },
         { label: "Share Transaction Management", icon: "share", route: "/settings/share-transaction" },
         { label: "Invoice Management", icon: "receipt", route: "/settings/invoice-management" },
         { label: "Font Size & Style", icon: "text-format", route: "/settings/font-settings" },

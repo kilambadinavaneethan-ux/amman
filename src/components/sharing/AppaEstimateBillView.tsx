@@ -204,18 +204,18 @@ export const AppaEstimateBillView = React.forwardRef<View, AppaEstimateBillViewP
     const theme = APPA_BILL_THEMES[activeThemeKey] || APPA_BILL_THEMES.classic;
 
     let companyPhones: string[] = [];
-    if (cfg.phoneNumbers && Array.isArray(cfg.phoneNumbers) && cfg.phoneNumbers.some((p) => p.trim())) {
+    if (company.phone || company.mobile) {
+      companyPhones = [company.phone || company.mobile, company.alternatePhone].filter(Boolean) as string[];
+    } else if (cfg.phoneNumbers && Array.isArray(cfg.phoneNumbers) && cfg.phoneNumbers.some((p) => p.trim())) {
       companyPhones = cfg.phoneNumbers.map((p) => p.trim()).filter(Boolean);
     } else if (cfg.customPhones?.trim()) {
       companyPhones = cfg.customPhones.split(/[•,]/).map((p) => p.trim()).filter(Boolean);
     } else {
-      const rawCompanyPhone = company.phone || '99430 51509';
-      const altPhone = company.alternatePhone || '99430 51209';
-      companyPhones = [rawCompanyPhone, altPhone].filter(Boolean);
+      companyPhones = [];
     }
 
-    const companyName = cfg.customCompanyName?.trim() || company.name || 'அம்மன் ஹாலோ பிரிக்ஸ்';
-    const companyAddress = cfg.customAddress?.trim() || company.address || '11, கரூர் மெயின் ரோடு, வெங்கமேடு, தளவாபாளையம், Po. புகழூர் D.T - 638153';
+    const companyName = company.businessName || company.companyName || company.name || cfg.customCompanyName?.trim() || 'My Business';
+    const companyAddress = company.address || cfg.customAddress?.trim() || '';
 
     const effectiveInvocation = invocationText || cfg.invocationText || '|| ஸ்ரீ சொக்கநாச்சி அம்மன் துணை ||';
     const titleEnglish = cfg.titleEnglish || 'ESTEEMATE';
@@ -237,7 +237,7 @@ export const AppaEstimateBillView = React.forwardRef<View, AppaEstimateBillViewP
     // Optional UPI QR code integration
     const showQr = (cfg.showQrCode !== false) && settings?.includeQrCode !== false && !isPaid;
     const targetUpi = (settings?.upiId || company?.upiId || '').trim();
-    const payeeName = encodeURIComponent((company?.name || 'Business').trim());
+    const payeeName = encodeURIComponent((company?.businessName || company?.companyName || company?.name || 'Business').trim());
     const txNote = encodeURIComponent(`Bill for ${customerName}`.trim());
     const upiPayload = targetUpi
       ? `upi://pay?pa=${targetUpi}&pn=${payeeName}&cu=INR&tn=${txNote}`
@@ -496,7 +496,7 @@ export const AppaEstimateBillView = React.forwardRef<View, AppaEstimateBillViewP
                             </View>
                             {item.notes ? (
                               <Text style={{ fontSize: 10, color: theme.subTextColor, fontStyle: 'italic', marginTop: 1 }}>
-                                ({item.notes})
+                                notes: {item.notes}
                               </Text>
                             ) : null}
                           </View>
@@ -533,7 +533,7 @@ export const AppaEstimateBillView = React.forwardRef<View, AppaEstimateBillViewP
                               if (item.loadingCharge) extras.push(`ஏற்று கூலி: ₹${Number(item.loadingCharge).toLocaleString('en-IN')}`);
                               if (item.unloadingCharge) extras.push(`இறக்கு கூலி: ₹${Number(item.unloadingCharge).toLocaleString('en-IN')}`);
                               if (item.extraAmount) extras.push(`கூடுதல்: ₹${Number(item.extraAmount).toLocaleString('en-IN')}`);
-                              if (item.notes) extras.push(item.notes);
+                              if (item.notes) extras.push(`notes: ${item.notes}`);
                               if (extras.length === 0) return null;
                               return (
                                 <View style={{ marginTop: 2 }}>

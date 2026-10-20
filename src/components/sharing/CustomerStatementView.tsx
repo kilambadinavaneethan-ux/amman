@@ -214,7 +214,7 @@ const CustomerStatementViewComponent: React.ForwardRefRenderFunction<View, Custo
               {data.dueDates.map((due) => (
                 <View key={due.id} style={{ flexDirection: 'row', justifyContent: 'space-between', alignItems: 'center', paddingVertical: 3 }}>
                   <Text style={{ fontSize: 11, fontWeight: '700', color: textColor }}>
-                    📅 {due.date} {due.notes ? `(${due.notes})` : ''}
+                    📅 {due.date} {due.notes ? `(notes: ${due.notes})` : ''}
                   </Text>
                   <Text style={{ fontSize: 10, fontWeight: '800', color: due.status === 'Completed' ? '#10B981' : '#D97706' }}>
                     {due.status.toUpperCase()}
@@ -402,7 +402,7 @@ const CustomerStatementViewComponent: React.ForwardRefRenderFunction<View, Custo
                       {/* Transaction Notes */}
                       {item.notes ? (
                         <Text style={{ fontSize: 8.5, color: subTextColor, fontStyle: 'italic', marginTop: 1 }}>
-                          📝 Note: {item.notes}
+                          📝 notes: {item.notes}
                         </Text>
                       ) : null}
 

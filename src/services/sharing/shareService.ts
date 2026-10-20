@@ -22,7 +22,7 @@ export function formatTransactionAsText(transaction: TransactionData, customTemp
   const company = transaction.company || {};
   const customer = transaction.customer || { name: 'Valued Customer' };
   const items = transaction.items || [];
-  const companyName = company.name || 'Our Business';
+  const companyName = company.businessName || company.companyName || company.name || 'Our Business';
   const customerPhones = formatCustomerPhonesDisplay(customer.phone, customer.phoneNumbers);
 
   const oldBal = transaction.previousBalance ? Number(transaction.previousBalance) : 0;
@@ -375,7 +375,7 @@ export const shareService = {
   },
 
   async shareViaSms(transaction: TransactionData): Promise<void> {
-    const companyName = transaction.company?.name || 'Our Company';
+    const companyName = transaction.company?.businessName || transaction.company?.companyName || transaction.company?.name || 'Our Business';
     const oldBal = transaction.previousBalance ? Number(transaction.previousBalance) : 0;
     const gTotal = (transaction.totalAmount || 0) + oldBal;
     const netDue = Math.max(0, gTotal - (transaction.paidAmount || 0));
@@ -436,7 +436,7 @@ export const shareService = {
 };
 
 export function formatPaymentReceiptAsText(payment: any, company: any, customer?: any): string {
-  const companyName = company?.name || company?.businessName || company?.fullName || 'Amman Hollow Bricks';
+  const companyName = company?.businessName || company?.companyName || company?.name || company?.fullName || 'My Business';
   const companyPhone = company?.phone || company?.mobile || '';
   const customerName = payment?.customerName || customer?.name || 'Valued Customer';
   const customerPhone = customer?.phone || payment?.customerPhone || '';

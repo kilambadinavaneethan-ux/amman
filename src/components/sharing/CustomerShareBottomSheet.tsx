@@ -1171,11 +1171,12 @@ export function CustomerShareBottomSheet({
                   <Text style={[styles.inputLabel, { color: subTextColor, marginBottom: 0 }]}>Company Phones (தொடர்பு எண்கள்)</Text>
                   <Pressable
                     onPress={() => {
+                      const defaultCompanyPhones = [company.phone || company.mobile, company.alternatePhone].filter(Boolean) as string[];
                       const current = (customAppaSettings.phoneNumbers && customAppaSettings.phoneNumbers.length > 0)
                         ? [...customAppaSettings.phoneNumbers]
                         : (customAppaSettings.customPhones?.trim()
                             ? customAppaSettings.customPhones.split(/[•,]/).map(p => p.trim()).filter(Boolean)
-                            : ['99430 51509', '99430 51209']);
+                            : (defaultCompanyPhones.length > 0 ? [...defaultCompanyPhones] : ['']));
                       current.push('');
                       setCustomAppaSettings((prev) => ({
                         ...prev,
@@ -1198,11 +1199,12 @@ export function CustomerShareBottomSheet({
                   </Pressable>
                 </View>
                 {(() => {
+                  const defaultCompanyPhones = [company.phone || company.mobile, company.alternatePhone].filter(Boolean) as string[];
                   const currentList = (customAppaSettings.phoneNumbers && customAppaSettings.phoneNumbers.length > 0)
                     ? customAppaSettings.phoneNumbers
                     : (customAppaSettings.customPhones?.trim()
                         ? customAppaSettings.customPhones.split(/[•,]/).map(p => p.trim()).filter(Boolean)
-                        : ['99430 51509', '99430 51209']);
+                        : (defaultCompanyPhones.length > 0 ? defaultCompanyPhones : ['']));
                   return (
                     <View style={{ gap: 6 }}>
                       {currentList.map((ph, idx) => (

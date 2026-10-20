@@ -7360,15 +7360,52 @@ export default function Home() {
                   else if (rawOrder.advancePaid !== undefined) paidAmt = Number(rawOrder.advancePaid || 0);
 
                   const orderDue = Math.max(0, orderTotal - paidAmt);
-                  const paymentMode = rawOrder.paymentMethod || rawOrder.paymentMode || rawOrder.paymentType || actItem.paymentMethod || "Cash";
-                  const deliveryCharge = Number(rawOrder.deliveryCharge || rawOrder.shipmentCharge || actItem.deliveryCharge || 0);
-                  const discount = Number(rawOrder.discount || actItem.discount || 0);
-                  const subtotal = Number(rawOrder.subtotal || (orderTotal - deliveryCharge + discount));
+                  const previousBalance = Number(rawOrder.previousBalance !== undefined ? rawOrder.previousBalance : (rawOrder.oldBalance || 0));
+                  const grandTotal = orderTotal + previousBalance;
+                  const totalUnpaidDue = Math.max(0, grandTotal - paidAmt);
+                  const excessAdvance = Number(rawOrder.excessAdvance !== undefined ? rawOrder.excessAdvance : (rawOrder.advanceAmount !== undefined ? rawOrder.advanceAmount : Math.max(0, paidAmt - grandTotal)));
 
-                  const isPaid = orderDue <= 0;
+                  const paymentMode = rawOrder.paymentMethod || rawOrder.paymentMode || rawOrder.paymentType || actItem.paymentMethod || "Cash";
+                  const deliveryCharge = Number(rawOrder.deliveryCharge !== undefined ? rawOrder.deliveryCharge : (rawOrder.shipmentCharge !== undefined ? rawOrder.shipmentCharge : (actItem.deliveryCharge || 0)));
+                  const shipmentDistance = rawOrder.shipmentDistance || actItem.shipmentDistance || "";
+
+                  const loadingCharge = Number(rawOrder.loadingCharge !== undefined ? rawOrder.loadingCharge : (actItem.loadingCharge || 0));
+                  const loadingWorkerName = rawOrder.loadingWorkerName || actItem.loadingWorkerName || (rawOrder.loadingByDeliveryPartner ? "Delivery Partner" : "");
+
+                  const unloadingCharge = Number(rawOrder.unloadingCharge !== undefined ? rawOrder.unloadingCharge : (actItem.unloadingCharge || 0));
+                  const unloadingWorkerName = rawOrder.unloadingWorkerName || actItem.unloadingWorkerName || (rawOrder.unloadingByDeliveryPartner ? "Delivery Partner" : "");
+
+                  const extraAmount = Number(rawOrder.extraAmount !== undefined ? rawOrder.extraAmount : (actItem.extraAmount || 0));
+                  const extraAmountDescription = (rawOrder.extraAmountDescription || actItem.extraAmountDescription || "").trim();
+
+                  const taxAmount = Number(rawOrder.taxAmount !== undefined ? rawOrder.taxAmount : (rawOrder.tax !== undefined ? rawOrder.tax : (rawOrder.gstAmount || actItem.taxAmount || 0)));
+                  const discount = Number(rawOrder.discountAmount !== undefined ? rawOrder.discountAmount : (rawOrder.discount || actItem.discount || 0));
+                  const discountType = rawOrder.discountType || "%";
+
+                  const subtotal = Number(rawOrder.grossTotal !== undefined ? rawOrder.grossTotal : (rawOrder.subtotal !== undefined ? rawOrder.subtotal : (orderTotal - deliveryCharge - loadingCharge - unloadingCharge - extraAmount - taxAmount + discount)));
+
+                  const orderNotes = (rawOrder.description || rawOrder.notes || actItem.description || actItem.notes || "").trim();
+
+                  // Logistics / Partner Info
+                  const partner = (deliveryPartners || []).find((p: any) => p.id === rawOrder.deliveryPartnerId);
+                  const partnerName = rawOrder.deliveryPartnerName || partner?.name || "";
+                  const partnerPhone = rawOrder.deliveryPartnerPhone || partner?.phone || "";
+                  const vehicleNumber = rawOrder.vehicleNumber || partner?.vehicleNumber || "";
+                  const collectorName = rawOrder.collectorName || actItem.collectorName || "";
+                  const deliveryAddress = rawOrder.deliveryAddress || rawOrder.customerAddress || "";
+
+                  const isPaid = orderDue <= 0 && totalUnpaidDue <= 0;
                   const isPartial = !isPaid && paidAmt > 0;
                   const paymentStatusLabel = isPaid ? "Fully Paid" : (isPartial ? "Partially Paid" : "Payment Due");
                   const statusColor = isPaid ? (colors.accent.success || "#10B981") : (isPartial ? (colors.accent.warning || "#F59E0B") : (colors.accent.danger || "#EF4444"));
+
+                  const orderDateObj = rawOrder.createdAt ? (rawOrder.createdAt instanceof Date ? rawOrder.createdAt : (rawOrder.createdAt.toDate ? rawOrder.createdAt.toDate() : new Date(rawOrder.createdAt))) : (actItem.time || new Date());
+                  const formattedOrderDate = orderDateObj.toLocaleDateString("en-IN", { day: "2-digit", month: "short", year: "numeric" });
+                  const formattedOrderTime = orderDateObj.toLocaleTimeString("en-IN", { hour: "2-digit", minute: "2-digit" });
+
+                  const orderStatus = rawOrder.status || (actItem.isFullyCompleted ? "completed" : "pending");
+                  const orderStatusLabel = orderStatus === "completed" ? "Completed" : (orderStatus === "in_transit" ? "In Transit" : (orderStatus === "cancelled" ? "Cancelled" : "Pending Delivery"));
+                  const orderStatusColor = orderStatus === "completed" ? (colors.accent.success || "#10B981") : (orderStatus === "cancelled" ? (colors.accent.danger || "#EF4444") : (colors.accent.warning || "#F59E0B"));
 
                   // Find chronological payment logs linked specifically to this order
                   const linkedOrderPayments = (payments || []).filter((p: any) => {
@@ -7382,6 +7419,8 @@ export default function Home() {
                   });
 
                   const orderItemsList = Array.isArray(rawOrder.items) && rawOrder.items.length > 0 ? rawOrder.items : [];
+                  const totalItemsQuantity = orderItemsList.reduce((sum: number, itm: any) => sum + Number(itm.quantity || itm.qty || 0), 0);
+                  const effectiveCollectAmount = previousBalance > 0 ? totalUnpaidDue : orderDue;
 
                   return (
                     <View style={{
@@ -7395,11 +7434,11 @@ export default function Home() {
                       borderLeftColor: colors.accent.primary,
                     }}>
                       {/* Selected Order Header */}
-                      <View style={{ flexDirection: "row", justifyContent: "space-between", alignItems: "flex-start", marginBottom: 10, paddingBottom: 8, borderBottomWidth: 1, borderBottomColor: colors.border.subtle }}>
-                        <View style={{ flex: 1, marginRight: 8 }}>
-                          <View style={{ flexDirection: "row", alignItems: "center", gap: 6 }}>
-                            <MaterialIcons name="receipt-long" size={16} color={colors.accent.primary} />
-                            <Text style={{ fontSize: 12, fontWeight: "800", color: colors.text.primary, letterSpacing: 0.5, textTransform: "uppercase" }}>
+                      <View style={{ marginBottom: 12, paddingBottom: 10, borderBottomWidth: 1, borderBottomColor: colors.border.subtle }}>
+                        <View style={{ flexDirection: "row", justifyContent: "space-between", alignItems: "center" }}>
+                          <View style={{ flexDirection: "row", alignItems: "center", gap: 6, flex: 1, flexWrap: "wrap" }}>
+                            <MaterialIcons name="receipt-long" size={17} color={colors.accent.primary} />
+                            <Text style={{ fontSize: 13, fontWeight: "800", color: colors.text.primary, letterSpacing: 0.5, textTransform: "uppercase" }}>
                               Selected Order Log
                             </Text>
                             {orderId ? (
@@ -7410,33 +7449,43 @@ export default function Home() {
                               </View>
                             ) : null}
                           </View>
-                          <Text style={{ fontSize: 11, color: colors.text.muted, marginTop: 3 }}>
-                            {actItem.subtitle}
-                          </Text>
+
+                          {/* Order Delivery Status Badge */}
+                          <View style={{
+                            flexDirection: "row",
+                            alignItems: "center",
+                            gap: 3,
+                            backgroundColor: `${orderStatusColor}18`,
+                            paddingHorizontal: 7,
+                            paddingVertical: 2.5,
+                            borderRadius: 6,
+                            borderWidth: 1,
+                            borderColor: `${orderStatusColor}35`,
+                          }}>
+                            <MaterialIcons
+                              name={orderStatus === "completed" ? "done-all" : (orderStatus === "in_transit" ? "local-shipping" : "schedule")}
+                              size={11}
+                              color={orderStatusColor}
+                            />
+                            <Text style={{ fontSize: 10.5, fontWeight: "700", color: orderStatusColor }}>
+                              {orderStatusLabel}
+                            </Text>
+                          </View>
                         </View>
 
-                        {/* Order Payment Status Pill */}
-                        <View style={{
-                          flexDirection: "row",
-                          alignItems: "center",
-                          gap: 4,
-                          backgroundColor: `${statusColor}18`,
-                          paddingHorizontal: 8,
-                          paddingVertical: 3,
-                          borderRadius: 8,
-                          borderWidth: 1,
-                          borderColor: `${statusColor}35`,
-                        }}>
-                          <MaterialIcons name={isPaid ? "check-circle" : (isPartial ? "hourglass-top" : "pending")} size={12} color={statusColor} />
-                          <Text style={{ fontSize: 11, fontWeight: "800", color: statusColor }}>
-                            {paymentStatusLabel}
+                        {/* Order Subtitle & Date Row */}
+                        <View style={{ flexDirection: "row", justifyContent: "space-between", alignItems: "center", marginTop: 4 }}>
+                          <Text style={{ fontSize: 11, color: colors.text.muted, flex: 1, marginRight: 8 }} numberOfLines={1}>
+                            {actItem.subtitle || "Order details"}
+                          </Text>
+                          <Text style={{ fontSize: 10.5, color: colors.text.secondary, fontWeight: "600" }}>
+                            📅 {formattedOrderDate} • {formattedOrderTime}
                           </Text>
                         </View>
                       </View>
 
                       {/* 3-Column Order Payment Financial Matrix */}
                       <View style={{
-                        flexDirection: "row",
                         backgroundColor: colors.bg.card,
                         borderRadius: 12,
                         padding: 10,
@@ -7444,40 +7493,152 @@ export default function Home() {
                         borderWidth: 1,
                         borderColor: colors.border.subtle,
                       }}>
-                        {/* Total Invoiced */}
-                        <View style={{ flex: 1, alignItems: "center" }}>
-                          <Text style={{ fontSize: 10, fontWeight: "700", color: colors.text.muted, textTransform: "uppercase" }}>
-                            Total Invoiced
-                          </Text>
-                          <Text style={{ fontSize: 15, fontWeight: "800", color: colors.text.primary, marginTop: 2 }}>
-                            ₹{orderTotal.toLocaleString("en-IN")}
-                          </Text>
+                        <View style={{ flexDirection: "row" }}>
+                          {/* Total Invoiced */}
+                          <View style={{ flex: 1, alignItems: "center" }}>
+                            <Text style={{ fontSize: 9.5, fontWeight: "700", color: colors.text.muted, textTransform: "uppercase" }}>
+                              Total Invoiced
+                            </Text>
+                            <Text style={{ fontSize: 15, fontWeight: "800", color: colors.text.primary, marginTop: 2 }}>
+                              ₹{orderTotal.toLocaleString("en-IN")}
+                            </Text>
+                          </View>
+
+                          <View style={{ width: 1, height: "75%", alignSelf: "center", backgroundColor: colors.border.subtle }} />
+
+                          {/* Paid Amount */}
+                          <View style={{ flex: 1, alignItems: "center" }}>
+                            <Text style={{ fontSize: 9.5, fontWeight: "700", color: colors.accent.success, textTransform: "uppercase" }}>
+                              Amount Paid
+                            </Text>
+                            <Text style={{ fontSize: 15, fontWeight: "800", color: colors.accent.success || "#10B981", marginTop: 2 }}>
+                              ₹{paidAmt.toLocaleString("en-IN")}
+                            </Text>
+                          </View>
+
+                          <View style={{ width: 1, height: "75%", alignSelf: "center", backgroundColor: colors.border.subtle }} />
+
+                          {/* Balance Due */}
+                          <View style={{ flex: 1, alignItems: "center" }}>
+                            <Text style={{ fontSize: 9.5, fontWeight: "700", color: effectiveCollectAmount > 0 ? (colors.accent.danger || "#EF4444") : colors.text.muted, textTransform: "uppercase" }}>
+                              Balance Due
+                            </Text>
+                            <Text style={{ fontSize: 15, fontWeight: "800", color: effectiveCollectAmount > 0 ? (colors.accent.danger || "#EF4444") : (colors.accent.success || "#10B981"), marginTop: 2 }}>
+                              ₹{effectiveCollectAmount.toLocaleString("en-IN")}
+                            </Text>
+                          </View>
                         </View>
 
-                        <View style={{ width: 1, height: "75%", alignSelf: "center", backgroundColor: colors.border.subtle }} />
+                        {/* Old Balance / Grand Total Sub-strip (if previous dues existed) */}
+                        {previousBalance > 0 && (
+                          <View style={{
+                            marginTop: 8,
+                            paddingTop: 8,
+                            borderTopWidth: 1,
+                            borderTopColor: colors.border.subtle,
+                            flexDirection: "row",
+                            justifyContent: "space-between",
+                            alignItems: "center",
+                          }}>
+                            <View style={{ flexDirection: "row", alignItems: "center", gap: 4 }}>
+                              <MaterialIcons name="history-toggle-off" size={13} color={colors.accent.danger || "#EF4444"} />
+                              <Text style={{ fontSize: 11, color: colors.accent.danger || "#EF4444", fontWeight: "600" }}>
+                                Old Balance: +₹{previousBalance.toLocaleString("en-IN")}
+                              </Text>
+                            </View>
+                            <Text style={{ fontSize: 11, fontWeight: "800", color: colors.text.primary }}>
+                              Grand Total: ₹{grandTotal.toLocaleString("en-IN")}
+                            </Text>
+                          </View>
+                        )}
 
-                        {/* Paid Amount */}
-                        <View style={{ flex: 1, alignItems: "center" }}>
-                          <Text style={{ fontSize: 10, fontWeight: "700", color: colors.accent.success, textTransform: "uppercase" }}>
-                            Amount Paid
-                          </Text>
-                          <Text style={{ fontSize: 15, fontWeight: "800", color: colors.accent.success || "#10B981", marginTop: 2 }}>
-                            ₹{paidAmt.toLocaleString("en-IN")}
-                          </Text>
-                        </View>
-
-                        <View style={{ width: 1, height: "75%", alignSelf: "center", backgroundColor: colors.border.subtle }} />
-
-                        {/* Balance Due */}
-                        <View style={{ flex: 1, alignItems: "center" }}>
-                          <Text style={{ fontSize: 10, fontWeight: "700", color: orderDue > 0 ? (colors.accent.danger || "#EF4444") : colors.text.muted, textTransform: "uppercase" }}>
-                            Balance Due
-                          </Text>
-                          <Text style={{ fontSize: 15, fontWeight: "800", color: orderDue > 0 ? (colors.accent.danger || "#EF4444") : (colors.accent.success || "#10B981"), marginTop: 2 }}>
-                            ₹{orderDue.toLocaleString("en-IN")}
-                          </Text>
-                        </View>
+                        {/* Excess Advance Strip (if customer overpaid) */}
+                        {excessAdvance > 0 && (
+                          <View style={{
+                            marginTop: 8,
+                            paddingTop: 8,
+                            borderTopWidth: 1,
+                            borderTopColor: colors.border.subtle,
+                            flexDirection: "row",
+                            justifyContent: "space-between",
+                            alignItems: "center",
+                          }}>
+                            <View style={{ flexDirection: "row", alignItems: "center", gap: 4 }}>
+                              <MaterialIcons name="stars" size={13} color={colors.accent.success || "#10B981"} />
+                              <Text style={{ fontSize: 11, color: colors.accent.success || "#10B981", fontWeight: "700" }}>
+                                Advance Credit (To Account):
+                              </Text>
+                            </View>
+                            <Text style={{ fontSize: 12, fontWeight: "800", color: colors.accent.success || "#10B981" }}>
+                              +₹{excessAdvance.toLocaleString("en-IN")}
+                            </Text>
+                          </View>
+                        )}
                       </View>
+
+                      {/* Ordered Items Breakdown */}
+                      {orderItemsList.length > 0 && (
+                        <View style={{
+                          backgroundColor: colors.bg.card,
+                          borderRadius: 12,
+                          padding: 10,
+                          marginBottom: 12,
+                          borderWidth: 1,
+                          borderColor: colors.border.subtle,
+                        }}>
+                          <View style={{ flexDirection: "row", justifyContent: "space-between", alignItems: "center", marginBottom: 8, paddingBottom: 6, borderBottomWidth: 1, borderBottomColor: colors.border.subtle }}>
+                            <View style={{ flexDirection: "row", alignItems: "center", gap: 5 }}>
+                              <MaterialIcons name="inventory-2" size={14} color={colors.accent.primary} />
+                              <Text style={{ fontSize: 11, fontWeight: "800", color: colors.text.primary, textTransform: "uppercase" }}>
+                                Ordered Items ({orderItemsList.length})
+                              </Text>
+                            </View>
+                            {totalItemsQuantity > 0 && (
+                              <View style={{ backgroundColor: `${colors.accent.primary}12`, paddingHorizontal: 6, paddingVertical: 1.5, borderRadius: 5 }}>
+                                <Text style={{ fontSize: 10, fontWeight: "700", color: colors.accent.primary }}>
+                                  Total: {totalItemsQuantity.toLocaleString("en-IN")} units
+                                </Text>
+                              </View>
+                            )}
+                          </View>
+
+                          {orderItemsList.map((itm: any, idx: number) => {
+                            const itmName = itm.itemName || itm.name || "Item";
+                            const itmQty = Number(itm.quantity !== undefined ? itm.quantity : (itm.qty || 0));
+                            const itmRate = Number(itm.rate !== undefined ? itm.rate : (itm.price || 0));
+                            const itmTotal = itm.grossTotal !== undefined ? Number(itm.grossTotal) : (itm.amount !== undefined ? Number(itm.amount) : (itmQty * itmRate));
+                            const itmUnit = itm.unit ? String(itm.unit).trim() : "pcs";
+                            const itmDesc = itm.description ? String(itm.description).trim() : "";
+
+                            return (
+                              <View key={idx} style={{
+                                paddingVertical: 5,
+                                borderTopWidth: idx > 0 ? 1 : 0,
+                                borderTopColor: colors.border.subtle,
+                              }}>
+                                <View style={{ flexDirection: "row", justifyContent: "space-between", alignItems: "flex-start" }}>
+                                  <View style={{ flex: 1, marginRight: 8 }}>
+                                    <Text style={{ fontSize: 12, color: colors.text.primary, fontWeight: "700" }} numberOfLines={1}>
+                                      {idx + 1}. {itmName}
+                                    </Text>
+                                    <Text style={{ fontSize: 11, color: colors.text.muted, marginTop: 1 }}>
+                                      {itmQty.toLocaleString("en-IN")} {itmUnit} × ₹{itmRate.toLocaleString("en-IN")}
+                                    </Text>
+                                    {itmDesc ? (
+                                      <Text style={{ fontSize: 10.5, color: colors.text.secondary, fontStyle: "italic", marginTop: 2 }}>
+                                        ↳ {itmDesc}
+                                      </Text>
+                                    ) : null}
+                                  </View>
+                                  <Text style={{ fontSize: 12.5, fontWeight: "800", color: colors.text.primary }}>
+                                    ₹{itmTotal.toLocaleString("en-IN")}
+                                  </Text>
+                                </View>
+                              </View>
+                            );
+                          })}
+                        </View>
+                      )}
 
                       {/* Detailed Billing & Charges Breakdown */}
                       <View style={{
@@ -7489,52 +7650,250 @@ export default function Home() {
                         borderColor: colors.border.subtle,
                         gap: 6,
                       }}>
-                        <Text style={{ fontSize: 10.5, fontWeight: "800", color: colors.text.secondary, textTransform: "uppercase", marginBottom: 2 }}>
-                          Billing Breakdown & Payment Mode
-                        </Text>
+                        <View style={{ flexDirection: "row", justifyContent: "space-between", alignItems: "center", marginBottom: 4, paddingBottom: 6, borderBottomWidth: 1, borderBottomColor: colors.border.subtle }}>
+                          <View style={{ flexDirection: "row", alignItems: "center", gap: 5 }}>
+                            <MaterialIcons name="calculate" size={14} color={colors.accent.primary} />
+                            <Text style={{ fontSize: 11, fontWeight: "800", color: colors.text.primary, textTransform: "uppercase" }}>
+                              Bill Breakdown & Charges
+                            </Text>
+                          </View>
+                          <View style={{ backgroundColor: `${statusColor}15`, paddingHorizontal: 6, paddingVertical: 2, borderRadius: 5 }}>
+                            <Text style={{ fontSize: 10, fontWeight: "800", color: statusColor }}>
+                              {paymentStatusLabel}
+                            </Text>
+                          </View>
+                        </View>
 
+                        {/* 1. Base Products Subtotal */}
                         <View style={{ flexDirection: "row", justifyContent: "space-between", alignItems: "center" }}>
-                          <Text style={{ fontSize: 12, color: colors.text.secondary }}>Base Products / Subtotal</Text>
+                          <View style={{ flexDirection: "row", alignItems: "center", gap: 4 }}>
+                            <MaterialIcons name="shopping-bag" size={13} color={colors.text.secondary} />
+                            <Text style={{ fontSize: 12, color: colors.text.secondary }}>Base Products Subtotal</Text>
+                          </View>
                           <Text style={{ fontSize: 12, fontWeight: "700", color: colors.text.primary }}>
                             ₹{subtotal.toLocaleString("en-IN")}
                           </Text>
                         </View>
 
+                        {/* 2. Transport / Delivery Charge */}
                         {deliveryCharge > 0 && (
                           <View style={{ flexDirection: "row", justifyContent: "space-between", alignItems: "center" }}>
-                            <Text style={{ fontSize: 12, color: colors.text.secondary }}>Transport / Delivery Charge</Text>
+                            <View style={{ flex: 1, marginRight: 8 }}>
+                              <View style={{ flexDirection: "row", alignItems: "center", gap: 4 }}>
+                                <MaterialIcons name="local-shipping" size={13} color={colors.accent.primary} />
+                                <Text style={{ fontSize: 12, color: colors.text.secondary }}>
+                                  Delivery / Transport Charge
+                                </Text>
+                              </View>
+                              {(shipmentDistance || partnerName || vehicleNumber) ? (
+                                <Text style={{ fontSize: 10, color: colors.text.muted, marginLeft: 17, marginTop: 1 }}>
+                                  {shipmentDistance ? `${shipmentDistance} km` : ""}{partnerName ? ` • ${partnerName}` : ""}{vehicleNumber ? ` (${vehicleNumber})` : ""}
+                                </Text>
+                              ) : null}
+                            </View>
                             <Text style={{ fontSize: 12, fontWeight: "700", color: colors.accent.primary }}>
                               + ₹{deliveryCharge.toLocaleString("en-IN")}
                             </Text>
                           </View>
                         )}
 
+                        {/* 3. Loading Charge */}
+                        {loadingCharge > 0 && (
+                          <View style={{ flexDirection: "row", justifyContent: "space-between", alignItems: "center" }}>
+                            <View style={{ flex: 1, marginRight: 8 }}>
+                              <View style={{ flexDirection: "row", alignItems: "center", gap: 4 }}>
+                                <MaterialIcons name="unarchive" size={13} color="#0284C7" />
+                                <Text style={{ fontSize: 12, color: colors.text.secondary }}>Loading Charge</Text>
+                              </View>
+                              {loadingWorkerName ? (
+                                <Text style={{ fontSize: 10, color: colors.text.muted, marginLeft: 17, marginTop: 1 }}>
+                                  Handler: {loadingWorkerName}
+                                </Text>
+                              ) : null}
+                            </View>
+                            <Text style={{ fontSize: 12, fontWeight: "700", color: "#0284C7" }}>
+                              + ₹{loadingCharge.toLocaleString("en-IN")}
+                            </Text>
+                          </View>
+                        )}
+
+                        {/* 4. Unloading Charge */}
+                        {unloadingCharge > 0 && (
+                          <View style={{ flexDirection: "row", justifyContent: "space-between", alignItems: "center" }}>
+                            <View style={{ flex: 1, marginRight: 8 }}>
+                              <View style={{ flexDirection: "row", alignItems: "center", gap: 4 }}>
+                                <MaterialIcons name="archive" size={13} color="#0D9488" />
+                                <Text style={{ fontSize: 12, color: colors.text.secondary }}>Unloading Charge</Text>
+                              </View>
+                              {unloadingWorkerName ? (
+                                <Text style={{ fontSize: 10, color: colors.text.muted, marginLeft: 17, marginTop: 1 }}>
+                                  Handler: {unloadingWorkerName}
+                                </Text>
+                              ) : null}
+                            </View>
+                            <Text style={{ fontSize: 12, fontWeight: "700", color: "#0D9488" }}>
+                              + ₹{unloadingCharge.toLocaleString("en-IN")}
+                            </Text>
+                          </View>
+                        )}
+
+                        {/* 5. Extra Amount */}
+                        {extraAmount > 0 && (
+                          <View style={{ flexDirection: "row", justifyContent: "space-between", alignItems: "center" }}>
+                            <View style={{ flex: 1, marginRight: 8 }}>
+                              <View style={{ flexDirection: "row", alignItems: "center", gap: 4 }}>
+                                <MaterialIcons name="add-circle-outline" size={13} color="#D97706" />
+                                <Text style={{ fontSize: 12, color: colors.text.secondary }}>Extra Surcharge</Text>
+                              </View>
+                              {extraAmountDescription ? (
+                                <Text style={{ fontSize: 10, color: colors.text.muted, marginLeft: 17, marginTop: 1 }}>
+                                  {extraAmountDescription}
+                                </Text>
+                              ) : null}
+                            </View>
+                            <Text style={{ fontSize: 12, fontWeight: "700", color: "#D97706" }}>
+                              + ₹{extraAmount.toLocaleString("en-IN")}
+                            </Text>
+                          </View>
+                        )}
+
+                        {/* 6. GST / Tax Amount */}
+                        {taxAmount > 0 && (
+                          <View style={{ flexDirection: "row", justifyContent: "space-between", alignItems: "center" }}>
+                            <View style={{ flexDirection: "row", alignItems: "center", gap: 4 }}>
+                              <MaterialIcons name="receipt" size={13} color="#6366F1" />
+                              <Text style={{ fontSize: 12, color: colors.text.secondary }}>GST / Tax Amount</Text>
+                            </View>
+                            <Text style={{ fontSize: 12, fontWeight: "700", color: "#6366F1" }}>
+                              + ₹{taxAmount.toLocaleString("en-IN")}
+                            </Text>
+                          </View>
+                        )}
+
+                        {/* 7. Discount Applied */}
                         {discount > 0 && (
                           <View style={{ flexDirection: "row", justifyContent: "space-between", alignItems: "center" }}>
-                            <Text style={{ fontSize: 12, color: colors.accent.danger }}>Discount Applied</Text>
-                            <Text style={{ fontSize: 12, fontWeight: "700", color: colors.accent.danger }}>
+                            <View style={{ flexDirection: "row", alignItems: "center", gap: 4 }}>
+                              <MaterialIcons name="local-offer" size={13} color={colors.accent.danger || "#EF4444"} />
+                              <Text style={{ fontSize: 12, color: colors.accent.danger || "#EF4444" }}>Discount Applied</Text>
+                            </View>
+                            <Text style={{ fontSize: 12, fontWeight: "700", color: colors.accent.danger || "#EF4444" }}>
                               - ₹{discount.toLocaleString("en-IN")}
                             </Text>
                           </View>
                         )}
 
-                        <View style={{ height: 1, backgroundColor: colors.border.subtle, marginVertical: 2 }} />
+                        <View style={{ height: 1, backgroundColor: colors.border.subtle, marginVertical: 3 }} />
 
+                        {/* 8. Current Bill Total */}
                         <View style={{ flexDirection: "row", justifyContent: "space-between", alignItems: "center" }}>
-                          <View style={{ flexDirection: "row", alignItems: "center", gap: 5 }}>
-                            <MaterialIcons name="payment" size={14} color={colors.accent.primary} />
-                            <Text style={{ fontSize: 12, color: colors.text.secondary }}>Payment Method</Text>
+                          <Text style={{ fontSize: 12.5, fontWeight: "800", color: colors.text.primary }}>Current Bill Amount</Text>
+                          <Text style={{ fontSize: 13, fontWeight: "800", color: colors.text.primary }}>
+                            ₹{orderTotal.toLocaleString("en-IN")}
+                          </Text>
+                        </View>
+
+                        {/* 9. Old Dues (if any) */}
+                        {previousBalance > 0 && (
+                          <View style={{ flexDirection: "row", justifyContent: "space-between", alignItems: "center" }}>
+                            <View style={{ flexDirection: "row", alignItems: "center", gap: 4 }}>
+                              <MaterialIcons name="history" size={13} color={colors.accent.danger || "#EF4444"} />
+                              <Text style={{ fontSize: 12, color: colors.accent.danger || "#EF4444", fontWeight: "600" }}>Old Pending Dues</Text>
+                            </View>
+                            <Text style={{ fontSize: 12, fontWeight: "700", color: colors.accent.danger || "#EF4444" }}>
+                              + ₹{previousBalance.toLocaleString("en-IN")}
+                            </Text>
                           </View>
-                          <View style={{ backgroundColor: `${colors.accent.primary}15`, paddingHorizontal: 7, paddingVertical: 2, borderRadius: 6 }}>
-                            <Text style={{ fontSize: 11, fontWeight: "800", color: colors.accent.primary }}>
+                        )}
+
+                        {/* 10. Grand Total Payable */}
+                        {previousBalance > 0 && (
+                          <View style={{ flexDirection: "row", justifyContent: "space-between", alignItems: "center", backgroundColor: `${colors.accent.primary}0D`, paddingHorizontal: 6, paddingVertical: 3, borderRadius: 6 }}>
+                            <Text style={{ fontSize: 12, fontWeight: "800", color: colors.accent.primary }}>Grand Total (Bill + Old Dues)</Text>
+                            <Text style={{ fontSize: 13, fontWeight: "800", color: colors.accent.primary }}>
+                              ₹{grandTotal.toLocaleString("en-IN")}
+                            </Text>
+                          </View>
+                        )}
+
+                        {/* 11. Amount Paid */}
+                        <View style={{ flexDirection: "row", justifyContent: "space-between", alignItems: "center" }}>
+                          <View style={{ flexDirection: "row", alignItems: "center", gap: 4 }}>
+                            <MaterialIcons name="check-circle" size={13} color={colors.accent.success || "#10B981"} />
+                            <Text style={{ fontSize: 12, color: colors.accent.success || "#10B981", fontWeight: "600" }}>
+                              Amount Paid ({paymentMode})
+                            </Text>
+                          </View>
+                          <Text style={{ fontSize: 12, fontWeight: "700", color: colors.accent.success || "#10B981" }}>
+                            - ₹{paidAmt.toLocaleString("en-IN")}
+                          </Text>
+                        </View>
+
+                        <View style={{ height: 1, backgroundColor: colors.border.subtle, marginVertical: 3 }} />
+
+                        {/* 12. Net Balance Due Remaining */}
+                        <View style={{ flexDirection: "row", justifyContent: "space-between", alignItems: "center" }}>
+                          <View style={{ flexDirection: "row", alignItems: "center", gap: 4 }}>
+                            <MaterialIcons
+                              name={effectiveCollectAmount > 0 ? "error-outline" : "verified"}
+                              size={14}
+                              color={effectiveCollectAmount > 0 ? (colors.accent.danger || "#EF4444") : (colors.accent.success || "#10B981")}
+                            />
+                            <Text style={{
+                              fontSize: 12.5,
+                              fontWeight: "800",
+                              color: effectiveCollectAmount > 0 ? (colors.accent.danger || "#EF4444") : (colors.accent.success || "#10B981"),
+                            }}>
+                              {effectiveCollectAmount > 0 ? "Net Unpaid Balance Due" : "Bill Fully Settled"}
+                            </Text>
+                          </View>
+                          <Text style={{
+                            fontSize: 14,
+                            fontWeight: "800",
+                            color: effectiveCollectAmount > 0 ? (colors.accent.danger || "#EF4444") : (colors.accent.success || "#10B981"),
+                          }}>
+                            ₹{effectiveCollectAmount.toLocaleString("en-IN")}
+                          </Text>
+                        </View>
+
+                        {/* Payment Mode Footer Pill */}
+                        <View style={{ flexDirection: "row", justifyContent: "space-between", alignItems: "center", marginTop: 4, paddingTop: 6, borderTopWidth: 1, borderTopColor: colors.border.subtle }}>
+                          <View style={{ flexDirection: "row", alignItems: "center", gap: 5 }}>
+                            <MaterialIcons name="payment" size={13} color={colors.text.secondary} />
+                            <Text style={{ fontSize: 11, color: colors.text.secondary }}>Recorded Payment Method</Text>
+                          </View>
+                          <View style={{ backgroundColor: `${colors.accent.primary}15`, paddingHorizontal: 7, paddingVertical: 2, borderRadius: 5 }}>
+                            <Text style={{ fontSize: 10.5, fontWeight: "800", color: colors.accent.primary }}>
                               {paymentMode}
                             </Text>
                           </View>
                         </View>
                       </View>
 
-                      {/* Order Items Summary */}
-                      {orderItemsList.length > 0 && (
+                      {/* Bill Description / Notes Box (if provided) */}
+                      {orderNotes ? (
+                        <View style={{
+                          backgroundColor: `${colors.accent.primary}0C`,
+                          borderRadius: 12,
+                          padding: 10,
+                          marginBottom: 12,
+                          borderWidth: 1,
+                          borderColor: `${colors.accent.primary}25`,
+                        }}>
+                          <View style={{ flexDirection: "row", alignItems: "center", gap: 5, marginBottom: 4 }}>
+                            <MaterialIcons name="notes" size={14} color={colors.accent.primary} />
+                            <Text style={{ fontSize: 11, fontWeight: "800", color: colors.accent.primary, textTransform: "uppercase" }}>
+                              Bill Description / Notes
+                            </Text>
+                          </View>
+                          <Text selectable={true} style={{ fontSize: 12, color: colors.text.primary, lineHeight: 17 }}>
+                            {orderNotes}
+                          </Text>
+                        </View>
+                      ) : null}
+
+                      {/* Logistics & Delivery Partner Info (if assigned) */}
+                      {(partnerName || vehicleNumber || collectorName || deliveryAddress) ? (
                         <View style={{
                           backgroundColor: colors.bg.card,
                           borderRadius: 12,
@@ -7542,29 +7901,66 @@ export default function Home() {
                           marginBottom: 12,
                           borderWidth: 1,
                           borderColor: colors.border.subtle,
+                          gap: 6,
                         }}>
-                          <Text style={{ fontSize: 10.5, fontWeight: "800", color: colors.text.secondary, textTransform: "uppercase", marginBottom: 6 }}>
-                            Ordered Items ({orderItemsList.length})
-                          </Text>
-                          {orderItemsList.map((itm: any, idx: number) => {
-                            const itmName = itm.itemName || itm.name || "Item";
-                            const itmQty = Number(itm.quantity !== undefined ? itm.quantity : (itm.qty || 0));
-                            const itmRate = Number(itm.rate !== undefined ? itm.rate : (itm.price || 0));
-                            const itmTotal = itm.amount !== undefined ? Number(itm.amount) : (itmQty * itmRate);
+                          <View style={{ flexDirection: "row", alignItems: "center", gap: 5, marginBottom: 2 }}>
+                            <MaterialIcons name="local-shipping" size={14} color={colors.accent.info || "#3B82F6"} />
+                            <Text style={{ fontSize: 11, fontWeight: "800", color: colors.text.primary, textTransform: "uppercase" }}>
+                              Logistics & Delivery Information
+                            </Text>
+                          </View>
 
-                            return (
-                              <View key={idx} style={{ flexDirection: "row", justifyContent: "space-between", alignItems: "center", paddingVertical: 3 }}>
-                                <Text style={{ fontSize: 11.5, color: colors.text.primary, fontWeight: "600", flex: 1 }} numberOfLines={1}>
-                                  {itmName} <Text style={{ color: colors.text.muted, fontWeight: "500" }}>({itmQty.toLocaleString("en-IN")} pcs @ ₹{itmRate})</Text>
+                          {partnerName ? (
+                            <View style={{ flexDirection: "row", justifyContent: "space-between", alignItems: "center" }}>
+                              <Text style={{ fontSize: 11.5, color: colors.text.secondary }}>Delivery Partner</Text>
+                              <View style={{ flexDirection: "row", alignItems: "center", gap: 6 }}>
+                                <Text style={{ fontSize: 12, fontWeight: "700", color: colors.text.primary }}>
+                                  {partnerName}
                                 </Text>
-                                <Text style={{ fontSize: 11.5, fontWeight: "700", color: colors.text.primary }}>
-                                  ₹{itmTotal.toLocaleString("en-IN")}
+                                {partnerPhone ? (
+                                  <Pressable
+                                    onPress={() => handleCallCustomer(partnerPhone)}
+                                    style={{ paddingHorizontal: 6, paddingVertical: 2, borderRadius: 4, backgroundColor: `${colors.accent.success || "#10B981"}18` }}
+                                  >
+                                    <Text style={{ fontSize: 10, fontWeight: "700", color: colors.accent.success || "#10B981" }}>📞 Call</Text>
+                                  </Pressable>
+                                ) : null}
+                              </View>
+                            </View>
+                          ) : null}
+
+                          {vehicleNumber ? (
+                            <View style={{ flexDirection: "row", justifyContent: "space-between", alignItems: "center" }}>
+                              <Text style={{ fontSize: 11.5, color: colors.text.secondary }}>Vehicle Number</Text>
+                              <View style={{ backgroundColor: `${colors.accent.primary}12`, paddingHorizontal: 6, paddingVertical: 1.5, borderRadius: 4 }}>
+                                <Text style={{ fontSize: 11, fontWeight: "700", color: colors.accent.primary }}>
+                                  {vehicleNumber}
                                 </Text>
                               </View>
-                            );
-                          })}
+                            </View>
+                          ) : null}
+
+                          {collectorName ? (
+                            <View style={{ flexDirection: "row", justifyContent: "space-between", alignItems: "center" }}>
+                              <Text style={{ fontSize: 11.5, color: colors.text.secondary }}>Balance Collector</Text>
+                              <Text style={{ fontSize: 12, fontWeight: "700", color: colors.text.primary }}>
+                                {collectorName}
+                              </Text>
+                            </View>
+                          ) : null}
+
+                          {deliveryAddress ? (
+                            <View style={{ marginTop: 2, paddingTop: 4, borderTopWidth: 1, borderTopColor: colors.border.subtle }}>
+                              <Text style={{ fontSize: 10.5, color: colors.text.muted, textTransform: "uppercase", fontWeight: "700" }}>
+                                Delivery Destination
+                              </Text>
+                              <Text selectable={true} style={{ fontSize: 11.5, color: colors.text.primary, marginTop: 1 }}>
+                                {deliveryAddress}
+                              </Text>
+                            </View>
+                          ) : null}
                         </View>
-                      )}
+                      ) : null}
 
                       {/* Installment Receipts / Linked Payments History */}
                       <View style={{
@@ -7641,7 +8037,7 @@ export default function Home() {
 
                       {/* Action Buttons for this Order */}
                       <View style={{ flexDirection: "row", gap: 8 }}>
-                        {orderDue > 0 && (
+                        {effectiveCollectAmount > 0 && (
                           <Pressable
                             style={({ pressed }) => [{
                               flex: 1,
@@ -7663,7 +8059,7 @@ export default function Home() {
                                 phone: selectedActivityProfile.phone,
                               };
                               setSelectedCustomer(cust);
-                              setPaymentAmount(String(orderDue));
+                              setPaymentAmount(String(effectiveCollectAmount));
                               setPaymentDiscount("");
                               setPaymentNotes(orderId ? `Payment for Order #${orderId.slice(-6).toUpperCase()}` : "");
                               setPaymentStep(2);
@@ -7672,7 +8068,7 @@ export default function Home() {
                           >
                             <MaterialIcons name="payments" size={15} color={colors.accent.success || "#10B981"} />
                             <Text style={{ fontSize: 12, fontWeight: "800", color: colors.accent.success || "#10B981" }}>
-                              + Collect ₹{orderDue.toLocaleString("en-IN")}
+                              + Collect ₹{effectiveCollectAmount.toLocaleString("en-IN")}
                             </Text>
                           </Pressable>
                         )}

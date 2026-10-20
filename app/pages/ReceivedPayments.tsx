@@ -61,10 +61,13 @@ export default function ReceivedPayments() {
   const loading = loadingPayments || loadingOrders;
 
   const companyInfo = useMemo(() => {
+    const compName = userProfile?.businessName || userProfile?.companyName || userProfile?.company?.name || userProfile?.fullName || "My Business";
     return {
-      name: userProfile?.company?.name || userProfile?.businessName || userProfile?.fullName || "Amman Hollow Bricks",
-      phone: userProfile?.company?.phone || userProfile?.mobile || "",
-      address: userProfile?.company?.address || userProfile?.address || "",
+      name: compName,
+      businessName: compName,
+      companyName: compName,
+      phone: userProfile?.mobile || userProfile?.phone || userProfile?.company?.phone || "",
+      address: userProfile?.address || userProfile?.company?.address || "",
     };
   }, [userProfile]);
 
