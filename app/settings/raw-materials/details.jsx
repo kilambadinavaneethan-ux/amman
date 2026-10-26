@@ -52,40 +52,34 @@ function RawMaterialDetailsScreen() {
   // Find material details
   const material = items.find((itm) => itm.id === id);
 
-  if (!material) {
-    return (
-      <View style={styles.errorContainer}>
-        <MaterialIcons name="error-outline" size={48} color={colors.accent.danger} />
-        <Text style={styles.errorTitle}>Material Not Found</Text>
-        <Text style={styles.errorDesc}>The raw material you are trying to view does not exist or has been deleted.</Text>
-        <Pressable style={styles.backLink} onPress={() => router.push("/settings/raw-materials")}>
-          <Text style={styles.backLinkText}>Return to Hub</Text>
-        </Pressable>
-      </View>
-    );
-  }
-
   // Filter logs for this specific material
-  const materialLogs = logs.filter((log) => log.materialId === material.id);
+  const materialLogs = useMemo(() => {
+    if (!material?.id) return [];
+    return logs.filter((log) => log.materialId === material.id);
+  }, [logs, material?.id]);
 
-  const currentStock = Number(material.openingStock !== undefined ? material.openingStock : (material.stock || 0));
-  const reorderThreshold = Number(material.reorderLevel !== undefined ? material.reorderLevel : 5);
-  const unitSuffix = material.rateType || "unit";
+  const currentStock = Number(material?.openingStock !== undefined ? material.openingStock : (material?.stock || 0));
+  const reorderThreshold = Number(material?.reorderLevel !== undefined ? material.reorderLevel : 5);
+  const unitSuffix = material?.rateType || "unit";
 
   // Calculate total stock purchased/bought
-  const totalStockBought = materialLogs
-    .filter((log) => log.type === "purchase")
-    .reduce((sum, log) => sum + Number(log.quantity || 0), 0);
+  const totalStockBought = useMemo(() => {
+    return materialLogs
+      .filter((log) => log.type === "purchase")
+      .reduce((sum, log) => sum + Number(log.quantity || 0), 0);
+  }, [materialLogs]);
 
   // Calculate total stock purchased/bought valuation
-  const totalStockBoughtValuation = materialLogs
-    .filter((log) => log.type === "purchase")
-    .reduce((sum, log) => {
-      const cost = log.totalCost !== undefined 
-        ? Number(log.totalCost) 
-        : (Number(log.quantity || 0) * Number(log.costPerUnit || material.costPrice || 0));
-      return sum + cost;
-    }, 0);
+  const totalStockBoughtValuation = useMemo(() => {
+    return materialLogs
+      .filter((log) => log.type === "purchase")
+      .reduce((sum, log) => {
+        const cost = log.totalCost !== undefined 
+          ? Number(log.totalCost) 
+          : (Number(log.quantity || 0) * Number(log.costPerUnit || material?.costPrice || 0));
+        return sum + cost;
+      }, 0);
+  }, [materialLogs, material?.costPrice]);
 
   // Calculate average purchase days (interval in days between consecutive purchases)
   const averagePurchaseDays = useMemo(() => {
@@ -159,6 +153,46 @@ function RawMaterialDetailsScreen() {
     };
   }, [materialLogs]);
 
+  const handleDeleteMaterial = async () => {
+    if (!material?.id) return;
+    const targetMaterialId = material.id;
+    setDeletingMaterial(true);
+    try {
+      const ok = await deleteItem(targetMaterialId);
+      setDeleteMaterialModal(false);
+      if (ok) {
+        router.replace("/settings/raw-materials");
+      } else {
+        alert("Failed to delete raw material from database.");
+      }
+    } catch (e) {
+      alert("An error occurred while deleting.");
+    } finally {
+      setDeletingMaterial(false);
+    }
+  };
+
+  if (!material) {
+    if (deletingMaterial) {
+      return (
+        <View style={styles.loadingContainer}>
+          <ActivityIndicator size="large" color={colors.accent.primary} />
+          <Text style={styles.loadingText}>Deleting material...</Text>
+        </View>
+      );
+    }
+    return (
+      <View style={styles.errorContainer}>
+        <MaterialIcons name="error-outline" size={48} color={colors.accent.danger} />
+        <Text style={styles.errorTitle}>Material Not Found</Text>
+        <Text style={styles.errorDesc}>The raw material you are trying to view does not exist or has been deleted.</Text>
+        <Pressable style={styles.backLink} onPress={() => router.replace("/settings/raw-materials")}>
+          <Text style={styles.backLinkText}>Return to Hub</Text>
+        </Pressable>
+      </View>
+    );
+  }
+
   let status = "Healthy";
   let statusColor = "#10b981";
   let statusBg = "#ecfdf5";
@@ -172,23 +206,6 @@ function RawMaterialDetailsScreen() {
     statusColor = "#f59e0b";
     statusBg = "#fffbeb";
   }
-
-  const handleDeleteMaterial = async () => {
-    setDeletingMaterial(true);
-    try {
-      const ok = await deleteItem(material.id);
-      setDeleteMaterialModal(false);
-      if (ok) {
-        router.push("/settings/raw-materials");
-      } else {
-        alert("Failed to delete raw material from database.");
-      }
-    } catch (e) {
-      alert("An error occurred while deleting.");
-    } finally {
-      setDeletingMaterial(false);
-    }
-  };
 
   const handleOpenPurchase = () => {
     setEditingLog(null);

@@ -1,4 +1,4 @@
-import React, { useEffect, useState } from "react";
+import React, { useEffect } from "react";
 import { StyleSheet, View, useWindowDimensions } from "react-native";
 import Animated, {
   useSharedValue,
@@ -70,30 +70,26 @@ const Particle: React.FC<ParticleProps> = ({ delay, duration, startX, size }) =>
   );
 };
 
+// Pre-computed particle data (deterministic) to avoid useState+useEffect on mount.
+// 10 particles instead of 20 for faster splash render.
+const STATIC_PARTICLES: ParticleProps[] = [
+  { delay: 0, duration: 5800, startX: -80, size: 4.2 },
+  { delay: 450, duration: 6200, startX: 60, size: 5.5 },
+  { delay: 900, duration: 7100, startX: -30, size: 3.8 },
+  { delay: 1300, duration: 5400, startX: 100, size: 6.0 },
+  { delay: 1800, duration: 8000, startX: -110, size: 4.5 },
+  { delay: 2200, duration: 6800, startX: 40, size: 3.2 },
+  { delay: 600, duration: 7500, startX: -60, size: 5.0 },
+  { delay: 2500, duration: 5900, startX: 90, size: 4.8 },
+  { delay: 1100, duration: 6500, startX: -20, size: 7.0 },
+  { delay: 2800, duration: 7800, startX: 70, size: 3.5 },
+];
+
 export const SplashParticles: React.FC = () => {
-  const [particles, setParticles] = useState<ParticleProps[]>([]);
-  const { width: windowWidth } = useWindowDimensions();
-
-  useEffect(() => {
-    const list: ParticleProps[] = [];
-    const count = 20;
-    const effectiveWidth = Math.max(windowWidth - 40, 260);
-    for (let i = 0; i < count; i++) {
-      list.push({
-        delay: Math.random() * 3000,
-        duration: 5000 + Math.random() * 4000,
-        // Centered horizontally with random offset
-        startX: Math.random() * effectiveWidth - effectiveWidth / 2,
-        size: 3 + Math.random() * 5,
-      });
-    }
-    setParticles(list);
-  }, [windowWidth]);
-
   return (
     <View style={StyleSheet.absoluteFill} pointerEvents="none">
       <View style={styles.container}>
-        {particles.map((p, index) => (
+        {STATIC_PARTICLES.map((p, index) => (
           <Particle key={index} {...p} />
         ))}
       </View>

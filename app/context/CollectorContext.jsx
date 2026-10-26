@@ -7,6 +7,7 @@ import {
     updateDoc,
 } from "firebase/firestore";
 import { createContext, useEffect, useState, useMemo } from "react";
+import { useDeferredInit } from "../../hooks/useDeferredInit";
 import { db, normalizeDateValue } from "../../src/config/firebase";
 
 export const CollectorContext = createContext(null);
@@ -15,7 +16,11 @@ export function CollectorProvider({ children }) {
   const [collectors, setCollectors] = useState([]);
   const [loading, setLoading] = useState(true);
 
+  // Defer Firestore listener to reduce startup load
+  const _deferReady = useDeferredInit();
+
   useEffect(() => {
+    if (!_deferReady) { setLoading(false); return; }
     setLoading(true);
     const collectorsCollection = collection(db, "moneyCollectors");
 
@@ -46,7 +51,7 @@ export function CollectorProvider({ children }) {
     );
 
     return () => unsubscribe();
-  }, []);
+  }, [_deferReady]);
 
   const addCollector = async (collectorData) => {
     try {

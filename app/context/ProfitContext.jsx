@@ -8,6 +8,7 @@ import {
   Timestamp,
 } from "firebase/firestore";
 import { createContext, useContext, useEffect, useState, useMemo, useCallback } from "react";
+import { useDeferredInit } from "../../hooks/useDeferredInit";
 import { db } from "../../src/config/firebase";
 import { OrderContext } from "./OrderContext";
 import { ExpenseContext } from "./ExpenseContext";
@@ -29,8 +30,12 @@ export function ProfitProvider({ children }) {
   const [loadingSummaries, setLoadingSummaries] = useState(true);
   const [syncing, setSyncing] = useState(false);
 
+  // Defer Firestore listeners to reduce startup load
+  const _deferReady = useDeferredInit();
+
   // 1. Listen to profitTransactions from Firestore
   useEffect(() => {
+    if (!_deferReady) { setLoadingTxs(false); return; }
     setLoadingTxs(true);
     const txRef = collection(db, "profitTransactions");
     const q = query(txRef, orderBy("createdAt", "desc"));
@@ -50,10 +55,11 @@ export function ProfitProvider({ children }) {
       }
     );
     return () => unsubscribe();
-  }, []);
+  }, [_deferReady]);
 
   // 2. Listen to profitSummary from Firestore
   useEffect(() => {
+    if (!_deferReady) { setLoadingSummaries(false); return; }
     setLoadingSummaries(true);
     const summaryRef = collection(db, "profitSummary");
     const q = query(summaryRef, orderBy("date", "desc"));
@@ -73,7 +79,7 @@ export function ProfitProvider({ children }) {
       }
     );
     return () => unsubscribe();
-  }, []);
+  }, [_deferReady]);
 
   // Helper to convert date object to YYYY-MM-DD string locally
   const formatDateKey = (date) => {

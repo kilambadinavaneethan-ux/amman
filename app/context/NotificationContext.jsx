@@ -9,6 +9,7 @@ import {
   writeBatch,
 } from "firebase/firestore";
 import { createContext, useContext, useEffect, useState, useMemo, useCallback, useRef } from "react";
+import { useDeferredInit } from "../../hooks/useDeferredInit";
 import { db } from "../../src/config/firebase";
 import { ItemContext } from "./ItemContext";
 import { ExpenseContext } from "./ExpenseContext";
@@ -115,8 +116,12 @@ export function NotificationProvider({ children }) {
   const notificationListener = useRef();
   const responseListener = useRef();
 
-  // Register push notifications on mount
+  // Defer Firestore listeners and push registration to reduce startup load
+  const _deferReady = useDeferredInit();
+
+  // Register push notifications on mount (deferred)
   useEffect(() => {
+    if (!_deferReady) return;
     if (!Notifications) {
       return;
     }
@@ -143,7 +148,7 @@ export function NotificationProvider({ children }) {
         Notifications.removeNotificationSubscription(responseListener.current);
       }
     };
-  }, []);
+  }, [_deferReady]);
 
   // Access existing contexts for smart alerts
   const { items } = useContext(ItemContext) || { items: [] };
@@ -152,8 +157,9 @@ export function NotificationProvider({ children }) {
   const { suppliers } = useContext(RawMaterialSupplierContext) || { suppliers: [] };
   const { customers } = useContext(CustomerContext) || { customers: [] };
 
-  // ─── Notifications Listener ───
+  // ─── Notifications Listener (deferred) ───
   useEffect(() => {
+    if (!_deferReady) { setLoading(false); return; }
     setLoading(true);
     const notifCollection = collection(db, "notifications");
     const unsubscribe = onSnapshot(
@@ -180,10 +186,11 @@ export function NotificationProvider({ children }) {
       }
     );
     return () => unsubscribe();
-  }, []);
+  }, [_deferReady]);
 
-  // ─── Preferences Listener ───
+  // ─── Preferences Listener (deferred) ───
   useEffect(() => {
+    if (!_deferReady) { setPrefsLoading(false); return; }
     setPrefsLoading(true);
     const prefsDocRef = doc(db, "notification_settings", "default_user");
     const unsubscribe = onSnapshot(
@@ -201,7 +208,7 @@ export function NotificationProvider({ children }) {
       }
     );
     return () => unsubscribe();
-  }, []);
+  }, [_deferReady]);
 
   // ─── Unread Count ───
   const unreadCount = useMemo(() => {

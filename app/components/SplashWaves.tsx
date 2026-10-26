@@ -13,31 +13,21 @@ const AnimatedView = Animated.View;
 
 export const SplashWaves: React.FC = () => {
   const wave1 = useSharedValue(0);
-  const wave2 = useSharedValue(0);
 
   useEffect(() => {
-    // Slow, soothing continuous cycle for the waves (looping from 0 to 2*PI)
+    // Single wave animation instead of two — reduces worklet overhead
     wave1.value = withRepeat(
       withTiming(Math.PI * 2, {
-        duration: 8000,
+        duration: 9000,
         easing: Easing.linear,
       }),
       -1,
       false
     );
+  }, [wave1]);
 
-    wave2.value = withRepeat(
-      withTiming(Math.PI * 2, {
-        duration: 11000,
-        easing: Easing.linear,
-      }),
-      -1,
-      false
-    );
-  }, [wave1, wave2]);
-
-  // Top-left wave anim styles
-  const tlStyle1 = useAnimatedStyle(() => {
+  // Top-left wave anim style
+  const tlStyle = useAnimatedStyle(() => {
     const tx = Math.sin(wave1.value) * 8;
     const ty = Math.cos(wave1.value) * 5;
     return {
@@ -45,28 +35,12 @@ export const SplashWaves: React.FC = () => {
     };
   });
 
-  const tlStyle2 = useAnimatedStyle(() => {
-    const tx = Math.cos(wave2.value) * 10;
-    const ty = Math.sin(wave2.value) * 7;
-    return {
-      transform: [{ translateX: tx }, { translateY: ty }, { scale: 0.99 }],
-    };
-  });
-
-  // Bottom-right wave anim styles
-  const brStyle1 = useAnimatedStyle(() => {
-    const tx = Math.sin(wave2.value) * 9;
-    const ty = Math.cos(wave2.value) * 6;
+  // Bottom-right wave anim style
+  const brStyle = useAnimatedStyle(() => {
+    const tx = Math.sin(wave1.value + Math.PI) * 9;
+    const ty = Math.cos(wave1.value + Math.PI) * 6;
     return {
       transform: [{ translateX: tx }, { translateY: ty }, { scale: 1.02 }],
-    };
-  });
-
-  const brStyle2 = useAnimatedStyle(() => {
-    const tx = Math.cos(wave1.value) * 7;
-    const ty = Math.sin(wave1.value) * 8;
-    return {
-      transform: [{ translateX: tx }, { translateY: ty }, { scale: 0.98 }],
     };
   });
 
@@ -86,25 +60,14 @@ export const SplashWaves: React.FC = () => {
           <Path d="M0 0 L350 0 C 250 150 150 250 0 350 Z" fill="url(#tlGlow)" />
         </Svg>
 
-        <AnimatedView style={[styles.waveWrapper, tlStyle1]}>
+        <AnimatedView style={[styles.waveWrapper, tlStyle]}>
           <Svg width="400" height="400" viewBox="0 0 400 400" fill="none">
-            {/* Fine, flowing gold curves */}
+            {/* Combined wave curves in a single Path for fewer SVG nodes */}
             <Path
-              d="M -40,180 C 60,150 110,60 210,-40 M -40,230 C 90,190 140,80 250,-40 M -40,130 C 30,100 80,40 160,-40"
+              d="M -40,180 C 60,150 110,60 210,-40 M -40,230 C 90,190 140,80 250,-40 M -40,130 C 30,100 80,40 160,-40 M -40,210 C 80,170 125,70 230,-40"
               stroke="#D4AF37"
-              strokeWidth="0.8"
-              opacity="0.25"
-            />
-          </Svg>
-        </AnimatedView>
-
-        <AnimatedView style={[styles.waveWrapper, tlStyle2]}>
-          <Svg width="400" height="400" viewBox="0 0 400 400" fill="none">
-            <Path
-              d="M -40,210 C 80,170 125,70 230,-40 M -40,280 C 110,230 170,100 290,-40"
-              stroke="#F5D76E"
-              strokeWidth="1.2"
-              opacity="0.2"
+              strokeWidth="0.9"
+              opacity="0.22"
             />
           </Svg>
         </AnimatedView>
@@ -124,24 +87,13 @@ export const SplashWaves: React.FC = () => {
           <Path d="M350 350 L0 350 C 100 200 200 100 350 0 Z" fill="url(#brGlow)" />
         </Svg>
 
-        <AnimatedView style={[styles.waveWrapper, brStyle1]}>
+        <AnimatedView style={[styles.waveWrapper, brStyle]}>
           <Svg width="400" height="400" viewBox="0 0 400 400" fill="none">
             <Path
-              d="M 440,220 C 340,250 290,340 190,440 M 440,170 C 310,210 260,320 150,440 M 440,270 C 370,300 320,360 240,440"
+              d="M 440,220 C 340,250 290,340 190,440 M 440,170 C 310,210 260,320 150,440 M 440,270 C 370,300 320,360 240,440 M 440,190 C 320,230 275,330 170,440"
               stroke="#D4AF37"
-              strokeWidth="0.8"
-              opacity="0.25"
-            />
-          </Svg>
-        </AnimatedView>
-
-        <AnimatedView style={[styles.waveWrapper, brStyle2]}>
-          <Svg width="400" height="400" viewBox="0 0 400 400" fill="none">
-            <Path
-              d="M 440,190 C 320,230 275,330 170,440 M 440,120 C 290,170 230,300 110,440"
-              stroke="#F5D76E"
-              strokeWidth="1.2"
-              opacity="0.2"
+              strokeWidth="0.9"
+              opacity="0.22"
             />
           </Svg>
         </AnimatedView>

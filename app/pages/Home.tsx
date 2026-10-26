@@ -24,8 +24,9 @@ import { captureRef } from "react-native-view-shot";
 import Animated, {
     FadeInDown,
 } from "react-native-reanimated";
-import { db, normalizeDateValue } from "../../src/config/firebase";
-import { collection, onSnapshot, doc, setDoc } from "firebase/firestore";
+import { db } from "../../src/config/firebase";
+import { onSnapshot, doc, setDoc } from "firebase/firestore";
+import { useDeferredInit } from "../../hooks/useDeferredInit";
 
 // Contexts
 import { CustomerContext } from "../context/CustomerContext";
@@ -54,6 +55,7 @@ export default function Home() {
   const { colors, spacing, radius, shadows } = theme;
   const styles = useMemo(() => getStyles(theme), [theme]);
   const { scrollViewRef, handleScroll, handleContentSizeChange } = useScrollRestoration("/");
+  const _deferReady = useDeferredInit();
 
   // Retrieve values from Firebase-backed contexts
   const { orders, todaySales, deleteOrder, editOrder } = useContext(OrderContext) as any;
@@ -149,6 +151,7 @@ export default function Home() {
   ], []);
 
   useEffect(() => {
+    if (!_deferReady) return;
     const gstDocRef = doc(db, "app_settings", "gst_management");
     const unsubscribe = onSnapshot(gstDocRef, (snap) => {
       if (snap.exists()) {
@@ -162,7 +165,7 @@ export default function Home() {
       }
     }, () => {});
     return () => unsubscribe();
-  }, []);
+  }, [_deferReady]);
 
   const upcomingGstDueDates = useMemo(() => {
     if (!gstSettings.gstEnabled) return [];
@@ -232,6 +235,7 @@ export default function Home() {
   };
 
   useEffect(() => {
+    if (!_deferReady) return;
     const completedDocRef = doc(db, "app_settings", "gst_completed");
     const unsubscribe = onSnapshot(completedDocRef, (snap) => {
       if (snap.exists()) {
@@ -242,7 +246,7 @@ export default function Home() {
       }
     }, () => {});
     return () => unsubscribe();
-  }, []);
+  }, [_deferReady]);
 
   const formatGstDate = (date: Date) => {
     const months = ["Jan","Feb","Mar","Apr","May","Jun","Jul","Aug","Sep","Oct","Nov","Dec"];

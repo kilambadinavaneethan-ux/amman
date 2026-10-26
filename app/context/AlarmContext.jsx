@@ -8,6 +8,7 @@ import {
   updateDoc,
 } from "firebase/firestore";
 import { createContext, useContext, useEffect, useState, useMemo, useCallback, useRef } from "react";
+import { useDeferredInit } from "../../hooks/useDeferredInit";
 import { db } from "../../src/config/firebase";
 import { AuthContext } from "./AuthContext";
 import { Platform } from "react-native";
@@ -48,8 +49,12 @@ export function AlarmProvider({ children }) {
     alarmsRef.current = alarms;
   }, [alarms]);
 
-  // Check notification permission status on mount
+  // Defer Firestore listener to reduce startup load
+  const _deferReady = useDeferredInit();
+
+  // Check notification permission status on mount (deferred)
   useEffect(() => {
+    if (!_deferReady) return;
     async function checkPermission() {
       if (!Notifications) {
         setPermissionStatus("unsupported");
@@ -62,7 +67,7 @@ export function AlarmProvider({ children }) {
       }
     }
     checkPermission();
-  }, []);
+  }, [_deferReady]);
 
   // Request notification permissions
   const requestPermissions = useCallback(async () => {
@@ -76,8 +81,9 @@ export function AlarmProvider({ children }) {
     }
   }, []);
 
-  // Real-time listener for alarms collection
+  // Real-time listener for alarms collection (deferred)
   useEffect(() => {
+    if (!_deferReady) { setLoading(false); return; }
     setLoading(true);
     const colRef = collection(db, "alarms");
     const unsubscribe = onSnapshot(colRef, (snapshot) => {
@@ -94,7 +100,7 @@ export function AlarmProvider({ children }) {
     });
 
     return () => unsubscribe();
-  }, []);
+  }, [_deferReady]);
 
   // Schedule a local notification based on alarm properties
   const scheduleLocalNotification = useCallback(async (alarm) => {

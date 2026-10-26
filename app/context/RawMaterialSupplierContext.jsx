@@ -9,6 +9,7 @@ import {
     where,
 } from "firebase/firestore";
 import { createContext, useEffect, useState, useMemo } from "react";
+import { useDeferredInit } from "../../hooks/useDeferredInit";
 import { db, normalizeDateValue } from "../../src/config/firebase";
 
 export const RawMaterialSupplierContext = createContext(null);
@@ -17,7 +18,11 @@ export function RawMaterialSupplierProvider({ children }) {
   const [suppliers, setSuppliers] = useState([]);
   const [loading, setLoading] = useState(true);
 
+  // Defer Firestore listener to reduce startup load
+  const _deferReady = useDeferredInit();
+
   useEffect(() => {
+    if (!_deferReady) { setLoading(false); return; }
     const uid = "default_user";
     setLoading(true);
     const suppliersCollection = collection(db, "raw_material_suppliers");
@@ -52,7 +57,7 @@ export function RawMaterialSupplierProvider({ children }) {
     );
 
     return () => unsubscribe();
-  }, []);
+  }, [_deferReady]);
 
   const addSupplier = async (supplierData) => {
     const uid = "default_user";

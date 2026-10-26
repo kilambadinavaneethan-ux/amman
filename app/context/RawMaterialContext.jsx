@@ -10,6 +10,7 @@ import {
     writeBatch,
 } from "firebase/firestore";
 import { createContext, useEffect, useState, useMemo, useCallback } from "react";
+import { useDeferredInit } from "../../hooks/useDeferredInit";
 import { db, normalizeDateValue } from "../../src/config/firebase";
 
 export const RawMaterialContext = createContext(null);
@@ -18,7 +19,11 @@ export function RawMaterialProvider({ children }) {
   const [logs, setLogs] = useState([]);
   const [loading, setLoading] = useState(true);
 
+  // Defer Firestore listener to reduce startup load
+  const _deferReady = useDeferredInit();
+
   useEffect(() => {
+    if (!_deferReady) { setLoading(false); return; }
     const uid = "default_user";
     setLoading(true);
     const logsCollection = collection(db, "raw_material_logs");
@@ -49,7 +54,7 @@ export function RawMaterialProvider({ children }) {
     );
 
     return () => unsubscribe();
-  }, []);
+  }, [_deferReady]);
 
   const addTransaction = useCallback(async (txData) => {
     const uid = "default_user";

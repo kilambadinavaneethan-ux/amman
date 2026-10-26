@@ -6,6 +6,7 @@ import {
     updateDoc,
 } from "firebase/firestore";
 import { createContext, useEffect, useState, useMemo } from "react";
+import { useDeferredInit } from "../../hooks/useDeferredInit";
 import { db, normalizeDateValue } from "../../src/config/firebase";
 
 export const ContractWorkerContext = createContext(null);
@@ -14,7 +15,11 @@ export function ContractWorkerProvider({ children }) {
   const [contractWorkers, setContractWorkers] = useState([]);
   const [loading, setLoading] = useState(true);
 
+  // Defer Firestore listener to reduce startup load
+  const _deferReady = useDeferredInit();
+
   useEffect(() => {
+    if (!_deferReady) { setLoading(false); return; }
     const coll = collection(db, "contractWorkers");
     const unsub = onSnapshot(
       coll,
@@ -36,7 +41,7 @@ export function ContractWorkerProvider({ children }) {
       },
     );
     return () => unsub();
-  }, []);
+  }, [_deferReady]);
 
   const logContractPayment = async (contractWorkerId, paymentData) => {
     try {

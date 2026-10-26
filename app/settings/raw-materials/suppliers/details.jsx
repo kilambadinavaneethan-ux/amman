@@ -10,6 +10,7 @@ import { OrderContext } from "../../../context/OrderContext";
 import ProtectedRoute from "../../../components/ProtectedRoute";
 import BackButton from "../../../components/BackButton";
 import { useTheme } from "../../../context/ThemeContext";
+import EasyCalendarModal from "../../../components/EasyCalendarModal";
 
 function SupplierDetailsScreen() {
   const { theme } = useTheme();
@@ -36,6 +37,8 @@ function SupplierDetailsScreen() {
   // Direct payment form states
   const [paymentAmt, setPaymentAmt] = useState("");
   const [paymentNotes, setPaymentNotes] = useState("");
+  const [paymentDate, setPaymentDate] = useState(new Date());
+  const [isCalendarOpen, setIsCalendarOpen] = useState(false);
   
   // Purchase form states (for editing purchases)
   const [txQty, setTxQty] = useState("");
@@ -227,24 +230,6 @@ function SupplierDetailsScreen() {
     };
   }, [supplierOrders]);
 
-  if (!supplier) {
-    return (
-      <View style={styles.errorContainer}>
-        <MaterialIcons name="error-outline" size={48} color={colors.accent.danger} />
-        <Text style={styles.errorTitle}>Supplier Not Found</Text>
-        <Text style={styles.errorDesc}>The supplier you are looking for does not exist or has been deleted.</Text>
-        <Pressable style={styles.backLink} onPress={() => router.push("/settings/raw-materials/suppliers")}>
-          <Text style={styles.backLinkText}>Return to List</Text>
-        </Pressable>
-      </View>
-    );
-  }
-
-  const suppliedMaterialsList = items.filter(item => 
-    supplier.suppliedMaterials && supplier.suppliedMaterials.includes(item.id)
-  );
-
-  const balance = Number(supplier.balance || 0);
   const openingBalanceVal = useMemo(() => {
     if (!supplier) return 0;
     if (supplier.openingBalance !== undefined) return Number(supplier.openingBalance || 0);
@@ -253,19 +238,29 @@ function SupplierDetailsScreen() {
     return 0;
   }, [supplier, combinedLogs]);
 
-  // Calculate accumulated purchase costs and payments
-  const purchases = ledgerLogs.filter((l) => l.type === "purchase");
-  const payments = ledgerLogs.filter((l) => l.type === "payment");
-  const totalPurchases = purchases.reduce((sum, l) => sum + Number(l.totalCost || 0), 0);
-  const totalPaid = purchases.reduce((sum, l) => sum + Number(l.amountPaid || 0), 0) + payments.reduce((sum, l) => sum + Number(l.amount || 0), 0);
+  const suppliedMaterialsList = useMemo(() => {
+    if (!supplier?.suppliedMaterials) return [];
+    return items.filter((item) => supplier.suppliedMaterials.includes(item.id));
+  }, [items, supplier?.suppliedMaterials]);
+
+  const balance = Number(supplier?.balance || 0);
+  const purchases = useMemo(() => ledgerLogs.filter((l) => l.type === "purchase"), [ledgerLogs]);
+  const payments = useMemo(() => ledgerLogs.filter((l) => l.type === "payment"), [ledgerLogs]);
+  const totalPurchases = useMemo(() => purchases.reduce((sum, l) => sum + Number(l.totalCost || 0), 0), [purchases]);
+  const totalPaid = useMemo(
+    () => purchases.reduce((sum, l) => sum + Number(l.amountPaid || 0), 0) + payments.reduce((sum, l) => sum + Number(l.amount || 0), 0),
+    [purchases, payments]
+  );
 
   const handleDeleteSupplier = async () => {
+    if (!supplier?.id) return;
+    const targetSupplierId = supplier.id;
     setDeletingSupplier(true);
     try {
-      const ok = await deleteSupplier(supplier.id);
+      const ok = await deleteSupplier(targetSupplierId);
       setDeleteSupplierModal(false);
       if (ok) {
-        router.push("/settings/raw-materials/suppliers");
+        router.replace("/settings/raw-materials/suppliers");
       } else {
         alert("Failed to delete supplier from database.");
       }
@@ -276,10 +271,32 @@ function SupplierDetailsScreen() {
     }
   };
 
+  if (!supplier) {
+    if (deletingSupplier) {
+      return (
+        <View style={styles.loadingContainer}>
+          <ActivityIndicator size="large" color={colors.accent.primary} />
+          <Text style={styles.loadingText}>Deleting supplier...</Text>
+        </View>
+      );
+    }
+    return (
+      <View style={styles.errorContainer}>
+        <MaterialIcons name="error-outline" size={48} color={colors.accent.danger} />
+        <Text style={styles.errorTitle}>Supplier Not Found</Text>
+        <Text style={styles.errorDesc}>The supplier you are looking for does not exist or has been deleted.</Text>
+        <Pressable style={styles.backLink} onPress={() => router.replace("/settings/raw-materials/suppliers")}>
+          <Text style={styles.backLinkText}>Return to List</Text>
+        </Pressable>
+      </View>
+    );
+  }
+
   const handleOpenPayment = () => {
     setEditingLog(null);
     setPaymentAmt("");
     setPaymentNotes("");
+    setPaymentDate(new Date());
     setErrorMsg("");
     setPaymentModal(true);
   };
@@ -288,6 +305,7 @@ function SupplierDetailsScreen() {
     setEditingLog(null);
     setPaymentAmt("");
     setPaymentNotes("Advance Payment to Supplier");
+    setPaymentDate(new Date());
     setErrorMsg("");
     setPaymentModal(true);
   };
@@ -295,6 +313,7 @@ function SupplierDetailsScreen() {
   const handleClosePayment = () => {
     setPaymentModal(false);
     setEditingLog(null);
+    setIsCalendarOpen(false);
   };
 
   const handleClosePurchase = () => {
@@ -308,6 +327,7 @@ function SupplierDetailsScreen() {
     if (log.type === "payment") {
       setPaymentAmt(String(log.amount || ""));
       setPaymentNotes(log.notes || "");
+      setPaymentDate(log.date ? new Date(log.date) : new Date());
       setPaymentModal(true);
     } else if (log.type === "purchase") {
       setTxQty(String(log.quantity || ""));
@@ -331,6 +351,16 @@ function SupplierDetailsScreen() {
     const defaultNotes = isAdvance ? `Advance Payment to ${supplier.name}` : `Paid to ${supplier.name}`;
     const finalNotes = paymentNotes.trim() || defaultNotes;
 
+    const now = new Date();
+    const saveDate = new Date(paymentDate);
+    if (
+      saveDate.getFullYear() === now.getFullYear() &&
+      saveDate.getMonth() === now.getMonth() &&
+      saveDate.getDate() === now.getDate()
+    ) {
+      saveDate.setHours(now.getHours(), now.getMinutes(), now.getSeconds(), now.getMilliseconds());
+    }
+
     setLoggingPayment(true);
     try {
       let success = false;
@@ -338,6 +368,7 @@ function SupplierDetailsScreen() {
         success = await updateTransaction(editingLog.id, {
           amount: amount,
           notes: finalNotes,
+          date: saveDate,
         });
       } else {
         success = await addTransaction({
@@ -349,7 +380,7 @@ function SupplierDetailsScreen() {
           supplierId: supplier.id,
           supplierName: supplier.name,
           notes: finalNotes,
-          date: new Date(),
+          date: saveDate,
         });
       }
 
@@ -983,6 +1014,23 @@ function SupplierDetailsScreen() {
               editable={!loggingPayment}
             />
 
+            <Text style={styles.modalInputLabel}>Payment Date</Text>
+            <Pressable
+              style={styles.datePickerBtn}
+              onPress={() => !loggingPayment && setIsCalendarOpen(true)}
+            >
+              <View style={{ flexDirection: "row", alignItems: "center", gap: 8 }}>
+                <MaterialIcons name="event" size={18} color={colors.accent.primary} />
+                <Text style={styles.datePickerBtnText}>
+                  {paymentDate.toLocaleDateString("en-IN", { day: "2-digit", month: "short", year: "numeric" })}
+                </Text>
+              </View>
+              <View style={styles.datePickerChangeChip}>
+                <MaterialIcons name="edit-calendar" size={13} color={colors.accent.primary} />
+                <Text style={styles.datePickerChangeChipText}>Change Date</Text>
+              </View>
+            </Pressable>
+
             <Text style={styles.modalInputLabel}>Transaction Notes / Ref ID</Text>
             <TextInput
               style={[styles.modalTextInput, styles.modalTextArea]}
@@ -1009,6 +1057,18 @@ function SupplierDetailsScreen() {
           </View>
         </View>
       </Modal>
+
+      {/* Payment Calendar Modal */}
+      <EasyCalendarModal
+        visible={isCalendarOpen}
+        date={paymentDate}
+        onSelectDate={(d) => {
+          setPaymentDate(d);
+          setIsCalendarOpen(false);
+        }}
+        onClose={() => setIsCalendarOpen(false)}
+        title="Select Payment Date"
+      />
 
       {/* Modal 2.5: Edit Purchase */}
       <Modal visible={purchaseModal} transparent animationType="slide">
@@ -1644,6 +1704,37 @@ const getStyles = (theme) => {
     fontSize: 14,
     color: colors.text.primary,
     marginBottom: 10,
+  },
+  datePickerBtn: {
+    flexDirection: "row",
+    alignItems: "center",
+    justifyContent: "space-between",
+    backgroundColor: colors.bg.card,
+    borderWidth: 1.5,
+    borderColor: colors.border.medium,
+    borderRadius: 8,
+    paddingHorizontal: 10,
+    height: 40,
+    marginBottom: 10,
+  },
+  datePickerBtnText: {
+    fontSize: 13,
+    fontWeight: "600",
+    color: colors.text.primary,
+  },
+  datePickerChangeChip: {
+    flexDirection: "row",
+    alignItems: "center",
+    gap: 4,
+    backgroundColor: `${colors.accent.primary}15`,
+    paddingHorizontal: 8,
+    paddingVertical: 4,
+    borderRadius: 6,
+  },
+  datePickerChangeChipText: {
+    fontSize: 11,
+    fontWeight: "700",
+    color: colors.accent.primary,
   },
   modalTextArea: {
     height: 60,

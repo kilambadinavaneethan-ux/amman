@@ -8,6 +8,7 @@ import {
     updateDoc,
 } from "firebase/firestore";
 import { createContext, useEffect, useState, useMemo } from "react";
+import { useDeferredInit } from "../../hooks/useDeferredInit";
 import { db, normalizeDateValue } from "../../src/config/firebase";
 
 export const DeliveryPartnerContext = createContext(null);
@@ -16,7 +17,11 @@ export function DeliveryPartnerProvider({ children }) {
   const [partners, setPartners] = useState([]);
   const [loading, setLoading] = useState(true);
 
+  // Defer Firestore listener to reduce startup load
+  const _deferReady = useDeferredInit();
+
   useEffect(() => {
+    if (!_deferReady) { setLoading(false); return; }
     setLoading(true);
     const partnersCollection = collection(db, "deliveryPartners");
 
@@ -47,7 +52,7 @@ export function DeliveryPartnerProvider({ children }) {
     );
 
     return () => unsubscribe();
-  }, []);
+  }, [_deferReady]);
 
   const addPartner = async (partnerData) => {
     try {

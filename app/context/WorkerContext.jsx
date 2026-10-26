@@ -11,6 +11,7 @@ import {
     where,
 } from "firebase/firestore";
 import { createContext, useEffect, useState, useMemo } from "react";
+import { useDeferredInit } from "../../hooks/useDeferredInit";
 import { db, normalizeDateValue } from "../../src/config/firebase";
 import { getDocsOfflineSafe } from "../../src/utils/offlineHelpers";
 
@@ -25,7 +26,11 @@ export function WorkerProvider({ children }) {
   const [attendanceSchedulerConfig, setAttendanceSchedulerConfig] =
     useState(null);
 
+  // Defer Firestore listeners to reduce startup load
+  const _deferReady = useDeferredInit();
+
   useEffect(() => {
+    if (!_deferReady) { setLoading(false); return; }
     setLoading(true);
     const workersCollection = collection(db, "workers");
 
@@ -54,10 +59,11 @@ export function WorkerProvider({ children }) {
     );
 
     return () => unsubscribe();
-  }, []);
+  }, [_deferReady]);
 
   // Real-time listener for recent attendance records (last 30 days)
   useEffect(() => {
+    if (!_deferReady) { setLoadingAttendance(false); return; }
     const attCol = collection(db, "workerAttendance");
     // Only load last 30 days of attendance to reduce Firestore reads
     const thirtyDaysAgo = new Date();
@@ -95,7 +101,7 @@ export function WorkerProvider({ children }) {
     );
 
     return () => unsubscribe();
-  }, []);
+  }, [_deferReady]);
 
   const getTodayDateString = () => {
     const today = new Date();
@@ -1014,10 +1020,12 @@ export function WorkerProvider({ children }) {
 
   const logPayment = async (workerId, paymentData) => {
     try {
+      const paymentDate = paymentData.createdAt || paymentData.date || new Date();
       const docRef = await addDoc(collection(db, "workerPayments"), {
         workerId,
         ...paymentData,
-        createdAt: new Date(),
+        createdAt: paymentDate,
+        date: paymentDate,
       });
 
       // Update worker payment totals

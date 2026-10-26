@@ -38,6 +38,7 @@ import { getDocsOfflineSafe } from "../../src/utils/offlineHelpers";
 import AnimatedCounter from "../components/AnimatedCounter";
 import { CustomerShareBottomSheet } from "../../src/components/sharing/CustomerShareBottomSheet";
 import { CustomerShareData } from "../../src/types/sharing";
+import EasyCalendarModal from "../components/EasyCalendarModal";
 
 const CATEGORY_CONFIG: Record<string, { icon: string; color: string; label: string }> = {
   "Fuel": { icon: "local-gas-station", color: "#059669", label: "Fuel" },
@@ -190,6 +191,8 @@ export default function ExpenseBalances() {
   const [payAmount, setPayAmount] = useState("");
   const [payMethod, setPayMethod] = useState("Cash");
   const [payNotes, setPayNotes] = useState("");
+  const [payDate, setPayDate] = useState<Date>(new Date());
+  const [isPayCalendarOpen, setIsPayCalendarOpen] = useState(false);
   const [isSavingPayment, setIsSavingPayment] = useState(false);
   const [showSuccessAnim, setShowSuccessAnim] = useState(false);
   const [isRepayMode, setIsRepayMode] = useState(false);
@@ -714,6 +717,7 @@ export default function ExpenseBalances() {
     setPayTargetType(type);
     setPayMethod("Cash");
     setPayNotes("");
+    setPayDate(new Date());
     setIsRepayMode(initialRepayMode);
 
     const isAdvanceOrRepay = initialRepayMode || (
@@ -749,8 +753,10 @@ export default function ExpenseBalances() {
     setPayAmount("");
     setPayMethod("Cash");
     setPayNotes("");
+    setPayDate(new Date());
     setIsRepayMode(false);
     setShowSuccessAnim(false);
+    setIsPayCalendarOpen(false);
   };
 
   const handleSavePayment = async () => {
@@ -796,6 +802,25 @@ export default function ExpenseBalances() {
     const effectiveNotes = payNotes.trim() || defaultNotes;
     const loggedAmount = isRepayMode ? -payAmtNum : payAmtNum;
 
+    const now = new Date();
+    const savePayDate = new Date(payDate);
+    const isSaveDateOnly = (d: Date) => {
+      if (!d || isNaN(d.getTime())) return true;
+      const isLocalMidnight = d.getHours() === 0 && d.getMinutes() === 0 && d.getSeconds() === 0;
+      const isUtcMidnight = d.getUTCHours() === 0 && d.getUTCMinutes() === 0 && d.getUTCSeconds() === 0;
+      const isIstUtcMidnight = d.getHours() === 5 && d.getMinutes() === 30 && d.getSeconds() === 0;
+      return isLocalMidnight || isUtcMidnight || isIstUtcMidnight;
+    };
+    if (
+      savePayDate.getFullYear() === now.getFullYear() &&
+      savePayDate.getMonth() === now.getMonth() &&
+      savePayDate.getDate() === now.getDate()
+    ) {
+      savePayDate.setHours(now.getHours(), now.getMinutes(), now.getSeconds(), now.getMilliseconds());
+    } else if (isSaveDateOnly(savePayDate)) {
+      savePayDate.setHours(now.getHours(), now.getMinutes(), now.getSeconds(), now.getMilliseconds());
+    }
+
     setIsSavingPayment(true);
 
     try {
@@ -805,6 +830,7 @@ export default function ExpenseBalances() {
           amount: payAmtNum,
           paymentMethod: payMethod,
           notes: payNotes.trim(),
+          paidAt: savePayDate,
         });
       } else if (payTargetType === "supplier") {
         result = await addTransaction({
@@ -816,13 +842,15 @@ export default function ExpenseBalances() {
           supplierId: selectedTarget.id,
           supplierName: selectedTarget.name,
           notes: effectiveNotes,
-          date: new Date(),
+          date: savePayDate,
         });
       } else if (payTargetType === "worker") {
         result = await logPayment(selectedTarget.id, {
           amount: loggedAmount,
           paymentMethod: payMethod,
           notes: effectiveNotes,
+          createdAt: savePayDate,
+          date: savePayDate,
         });
       } else if (payTargetType === "delivery") {
         // Log payment in deliveryPayments
@@ -831,7 +859,8 @@ export default function ExpenseBalances() {
           amount: loggedAmount,
           paymentMethod: payMethod,
           notes: effectiveNotes,
-          createdAt: new Date(),
+          createdAt: savePayDate,
+          date: savePayDate,
         });
         // Update delivery partner totals
         const partnerRef = doc(db, "deliveryPartners", selectedTarget.id);
@@ -2864,6 +2893,30 @@ export default function ExpenseBalances() {
                   })}
                 </View>
 
+                {/* Payment Date Selector */}
+                <Text style={styles.fieldLabel}>Payment Date</Text>
+                <Pressable
+                  style={styles.datePickerBtn}
+                  onPress={() => setIsPayCalendarOpen(true)}
+                >
+                  <View style={{ flexDirection: "row", alignItems: "center", gap: 10 }}>
+                    <MaterialIcons name="event" size={20} color={colors.accent.primary} />
+                    <Text style={styles.datePickerBtnText}>
+                      {payDate.toLocaleDateString("en-IN", {
+                        day: "2-digit",
+                        month: "short",
+                        year: "numeric",
+                      })}
+                    </Text>
+                  </View>
+                  <View style={styles.datePickerChangeChip}>
+                    <MaterialIcons name="edit-calendar" size={14} color={colors.accent.primary} />
+                    <Text style={styles.datePickerChangeChipText}>
+                      Change Date
+                    </Text>
+                  </View>
+                </Pressable>
+
                 {/* Notes */}
                 <Text style={styles.fieldLabel}>Notes (Optional)</Text>
                 <TextInput
@@ -2902,6 +2955,18 @@ export default function ExpenseBalances() {
           </View>
         </View>
       </Modal>
+
+      {/* Pay Balance Calendar Modal */}
+      <EasyCalendarModal
+        visible={isPayCalendarOpen}
+        date={payDate}
+        onSelectDate={(d) => {
+          setPayDate(d);
+          setIsPayCalendarOpen(false);
+        }}
+        onClose={() => setIsPayCalendarOpen(false)}
+        title="Select Payment Date"
+      />
 
       {/* Add Expense Modal */}
       <Modal
@@ -4344,6 +4409,37 @@ const getStyles = (theme: any) => {
     fontWeight: "700",
     color: colors.text.secondary,
     marginBottom: 8,
+  },
+  datePickerBtn: {
+    flexDirection: "row",
+    alignItems: "center",
+    justifyContent: "space-between",
+    backgroundColor: colors.bg.primary,
+    borderWidth: 1,
+    borderColor: colors.border.medium,
+    borderRadius: 12,
+    paddingHorizontal: 14,
+    height: 48,
+    marginBottom: 16,
+  },
+  datePickerBtnText: {
+    fontSize: 14,
+    fontWeight: "600",
+    color: colors.text.primary,
+  },
+  datePickerChangeChip: {
+    flexDirection: "row",
+    alignItems: "center",
+    gap: 4,
+    backgroundColor: `${colors.accent.primary}15`,
+    paddingHorizontal: 10,
+    paddingVertical: 5,
+    borderRadius: 8,
+  },
+  datePickerChangeChipText: {
+    fontSize: 12,
+    fontWeight: "700",
+    color: colors.accent.primary,
   },
   amountInput: {
     borderWidth: 1,

@@ -25,12 +25,12 @@ import { WorkerProvider } from "./context/WorkerContext";
 import { PopupProvider } from "./context/PopupContext";
 import { ScrollProvider } from "./context/ScrollContext";
 import { NotificationProvider } from "./context/NotificationContext";
+import { ZoomProvider } from "./context/ZoomContext";
 import { NetworkProvider, useNetwork } from "./context/NetworkContext";
 import OfflineBanner from "./components/OfflineBanner";
 import * as SplashScreen from "expo-splash-screen";
 import { PremiumSplash } from "./components/PremiumSplash";
 import AuthSplashScreen from "../src/screens/SplashScreen";
-import * as RN from "react-native";
 
 // Ignore harmless transient console logs from showing up in LogBox popup UI
 LogBox.ignoreLogs([
@@ -44,6 +44,22 @@ LogBox.ignoreLogs([
 if (__DEV__) {
 const originalConsoleError = console.error;
 console.error = (...args) => {
+  // Fast-path: if first arg is a string that doesn't match any known pattern, skip expensive processing
+  const first = args[0];
+  if (typeof first === "string" &&
+    !first.includes("Firestore") &&
+    !first.includes("permissions") &&
+    !first.includes("Permission") &&
+    !first.includes("Failed migrating") &&
+    !first.includes("Migration runner") &&
+    !first.includes("Backend didn") &&
+    !first.includes("offline mode") &&
+    !first.includes("React state update") &&
+    !first.includes("hasn't mounted")) {
+    originalConsoleError(...args);
+    return;
+  }
+
   const message = args
     .map((arg) => {
       if (typeof arg === "string") return arg;
@@ -161,13 +177,14 @@ function AppContent() {
       const now = Date.now();
 
       if (!lastTs || now - parseInt(lastTs, 10) >= intervalMs) {
-        const { DEFAULT_FIREBASE_CONFIG } = require("../src/config/firebase");
-        const { createDatabaseBackup } = require("../src/services/backupService");
-        const { db } = require("../src/config/firebase");
+        const [firebaseModule, backupModule] = await Promise.all([
+          import("../src/config/firebase"),
+          import("../src/services/backupService"),
+        ]);
 
-        const config = DEFAULT_FIREBASE_CONFIG;
+        const config = firebaseModule.DEFAULT_FIREBASE_CONFIG;
         console.log("[AutoBackup] Starting silent background auto-backup...");
-        const result = await createDatabaseBackup(db, config);
+        const result = await backupModule.createDatabaseBackup(firebaseModule.db, config);
         if (result.success && result.backup) {
           console.log("[AutoBackup] Background auto-backup created successfully:", result.backup.fileName);
           await AsyncStorage.setItem("backup_last_auto_ts", String(now));
@@ -265,8 +282,6 @@ function AppContentWithContexts() {
     </ItemProvider>
   );
 }
-
-import { ZoomProvider } from "./context/ZoomContext";
 
 export default function Layout() {
   return (

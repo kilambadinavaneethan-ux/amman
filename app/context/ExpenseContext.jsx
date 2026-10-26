@@ -12,6 +12,7 @@ import {
 } from "firebase/firestore";
 import { getDownloadURL, ref, uploadBytes } from "firebase/storage";
 import { createContext, useEffect, useState, useMemo, useCallback, useRef } from "react";
+import { useDeferredInit } from "../../hooks/useDeferredInit";
 import { db, normalizeDateValue, storage } from "../../src/config/firebase";
 
 export const ExpenseContext = createContext(null);
@@ -29,6 +30,9 @@ export function ExpenseProvider({ children }) {
   const [paymentsLoading, setPaymentsLoading] = useState(true);
   const [budgetsLoading, setBudgetsLoading] = useState(true);
   const [recurringLoading, setRecurringLoading] = useState(true);
+
+  // Defer secondary expense listeners to reduce startup load
+  const _deferReady = useDeferredInit();
 
   // ─── Expenses Listener (incremental updates via docChanges) ───
   const isInitialExpensesLoadRef = useRef(true);
@@ -90,9 +94,10 @@ export function ExpenseProvider({ children }) {
     return () => unsubscribe();
   }, []);
 
-  // ─── Expense Payments Listener (incremental updates via docChanges) ───
+  // ─── Expense Payments Listener (deferred — not needed for dashboard) ───
   const isInitialPaymentsLoadRef = useRef(true);
   useEffect(() => {
+    if (!_deferReady) { setPaymentsLoading(false); return; }
     setPaymentsLoading(true);
     isInitialPaymentsLoadRef.current = true;
     const paymentsCollection = collection(db, "expense_payments");
@@ -148,10 +153,11 @@ export function ExpenseProvider({ children }) {
     );
 
     return () => unsubscribe();
-  }, []);
+  }, [_deferReady]);
 
-  // ─── Expense Budgets Listener ───
+  // ─── Expense Budgets Listener (deferred) ───
   useEffect(() => {
+    if (!_deferReady) { setBudgetsLoading(false); return; }
     setBudgetsLoading(true);
     const budgetsCollection = collection(db, "expense_budgets");
 
@@ -171,10 +177,11 @@ export function ExpenseProvider({ children }) {
     );
 
     return () => unsubscribe();
-  }, []);
+  }, [_deferReady]);
 
-  // ─── Recurring Expenses Listener ───
+  // ─── Recurring Expenses Listener (deferred) ───
   useEffect(() => {
+    if (!_deferReady) { setRecurringLoading(false); return; }
     setRecurringLoading(true);
     const recurringCollection = collection(db, "recurring_expenses");
 
@@ -199,7 +206,7 @@ export function ExpenseProvider({ children }) {
     );
 
     return () => unsubscribe();
-  }, []);
+  }, [_deferReady]);
 
   // ─── Image Upload (existing) ───
   const uploadExpenseImage = useCallback(async (uri) => {
@@ -348,6 +355,12 @@ export function ExpenseProvider({ children }) {
       });
 
       const paymentDocRef = doc(collection(db, "expense_payments"));
+      const paymentDate = paymentData.paidAt
+        ? normalizeDateValue(paymentData.paidAt)
+        : paymentData.date
+          ? normalizeDateValue(paymentData.date)
+          : new Date();
+
       batch.set(paymentDocRef, {
         expenseId: expenseId,
         expenseTitle: expenseDoc.title || "",
@@ -355,7 +368,7 @@ export function ExpenseProvider({ children }) {
         amount: payAmount,
         paymentMethod: paymentData.paymentMethod || "Cash",
         notes: paymentData.notes || "",
-        paidAt: new Date(),
+        paidAt: paymentDate,
         createdAt: new Date(),
       });
 
