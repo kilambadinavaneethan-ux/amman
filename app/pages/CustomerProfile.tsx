@@ -586,6 +586,7 @@ export default function CustomerProfile() {
         deliveryDate: deliveryDateObj,
         type: "order",
         description: isCancelled ? `[CANCELLED] ${itemDescription}` : itemDescription,
+        notes: order.notes !== undefined ? order.notes : (order.description || ""),
         orderAmount: order.total || 0,
         paymentReceived: order.paidAmount || 0,
         balanceChange: balChange,
@@ -642,6 +643,7 @@ export default function CustomerProfile() {
           deliveryDate: null,
           type: "refund",
           description: payment.notes ? `Refund: ${payment.notes}` : `Advance Refund (${payment.paymentMethod || "Cash"})`,
+          notes: payment.notes || "",
           orderAmount: 0,
           paymentReceived: -refAmt,
           refundAmount: refAmt,
@@ -668,6 +670,7 @@ export default function CustomerProfile() {
         deliveryDate: null,
         type: "payment",
         description: desc,
+        notes: payment.notes || "",
         orderAmount: 0,
         paymentReceived: amtRec,
         discountAmount: discAmt,
@@ -835,12 +838,21 @@ export default function CustomerProfile() {
         const rawPaid = Number(l.paymentReceived || (l.type === 'payment' ? (l.amount || l.paid) : l.paid) || 0);
         const rawAmount = Number(l.orderAmount || (l.type === 'order' ? l.amount : 0) || 0);
 
+        const resolvedNotes = (() => {
+          if (l.notes !== undefined && l.notes !== null) return String(l.notes).trim();
+          if (orig.notes !== undefined && orig.notes !== null) return String(orig.notes).trim();
+          if (orig.description && !orig.description.startsWith('Order #') && !orig.description.startsWith('[CANCELLED]')) {
+            return String(orig.description).trim();
+          }
+          return '';
+        })();
+
         return {
           id: l.id || String(Math.random()),
           date: l.date || l.orderDate,
           type: l.type === 'payment' ? 'payment' : l.type === 'opening' ? 'opening' : 'order',
           description: l.description || (l.type === 'payment' ? 'Payment Received' : `Order #${l.id?.slice(0, 8)}`),
-          notes: l.notes || orig.notes || orig.description || orig.note || orig.remarks || orig.paymentNotes || orig.paymentNote || '',
+          notes: resolvedNotes,
           amount: rawAmount,
           paid: rawPaid,
           balance: Number(l.runningBalance || 0),
@@ -1620,7 +1632,7 @@ export default function CustomerProfile() {
       setEditOrderPaymentMethod(orig.paymentMethod || orig.paymentMode || "Cash");
       setEditOrderDiscount(String(orig.discount !== undefined ? orig.discount : 0));
       setEditOrderDiscountType(orig.discountType || "amount");
-      setEditOrderNotes(orig.notes || "");
+      setEditOrderNotes(orig.notes !== undefined ? orig.notes : (orig.description || ""));
       setEditOrderShipment(String(orig.shipmentCharge !== undefined ? orig.shipmentCharge : 0));
       setEditOrderShipmentDistance(String(orig.shipmentDistance !== undefined ? orig.shipmentDistance : 0));
       setEditOrderExtra(String(orig.extraAmount !== undefined ? orig.extraAmount : 0));
@@ -1851,6 +1863,7 @@ export default function CustomerProfile() {
         const excessAdv = Math.max(0, paidAmt - newTotal);
         
         const primaryItem = editOrderItems[0];
+        const trimmedOrderNotes = editOrderNotes.trim();
         
         const newOrderPayload = {
           ...selectedEntry.original,
@@ -1864,7 +1877,8 @@ export default function CustomerProfile() {
           discount: discountVal,
           discountType: editOrderDiscountType,
           discountAmount: calculatedDiscount,
-          notes: editOrderNotes.trim(),
+          notes: trimmedOrderNotes,
+          description: trimmedOrderNotes,
           paymentMethod: editOrderPaymentMethod,
           paymentMode: editOrderPaymentMethod,
           paymentType: editOrderPaymentMethod,

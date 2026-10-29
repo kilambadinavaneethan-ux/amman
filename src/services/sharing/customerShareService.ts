@@ -82,6 +82,9 @@ export const customerShareService = {
           if (l.notes) {
             msg += `   📝 notes: ${l.notes}\n`;
           }
+          if (l.paid && l.paid > 0) {
+            msg += `   🟢 வரவு: -${formatCurrency(l.paid)}\n`;
+          }
           msg += `   🔴 பற்று: +${formatCurrency(l.amount)} | பாக்கி: ${formatCurrency(l.balance)}\n\n`;
         } else if (l.type === 'payment') {
           msg += `${idx + 1}. [${dmy}] 💳 ${l.description || 'ரொக்கம் வரவு'}\n`;
@@ -637,8 +640,8 @@ export const customerShareService = {
       const d = item.date instanceof Date ? item.date : new Date(item.date);
       const dmy = !isNaN(d.getTime()) ? `${String(d.getDate()).padStart(2, '0')}.${String(d.getMonth() + 1).padStart(2, '0')}.${String(d.getFullYear()).slice(-2)}` : '';
 
-      const debitVal = (isOrder || isOpening) ? item.amount : 0;
-      const creditVal = isPayment ? item.paid : 0;
+      const debitVal = (isOrder || isOpening) ? Number(item.amount || 0) : 0;
+      const creditVal = Number(item.paid || 0);
 
       let particulars = '';
       if (isOpening) {

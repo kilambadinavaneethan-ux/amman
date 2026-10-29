@@ -1430,7 +1430,7 @@ export function OrderProvider({ children }) {
         deliveryMinRate: Number(newOrderData.deliveryMinRate !== undefined ? newOrderData.deliveryMinRate : 0),
         extraAmount: Number(newOrderData.extraAmount || 0),
         extraAmountDescription: newOrderData.extraAmountDescription || "",
-        description: newOrderData.description !== undefined ? String(newOrderData.description).trim() : (oldOrderData.description || ""),
+        description: newOrderData.notes !== undefined ? String(newOrderData.notes).trim() : (newOrderData.description !== undefined ? String(newOrderData.description).trim() : (oldOrderData.description || "")),
         notes: newOrderData.notes !== undefined ? String(newOrderData.notes).trim() : (newOrderData.description !== undefined ? String(newOrderData.description).trim() : (oldOrderData.notes || "")),
         discount: Number(newOrderData.discount !== undefined ? newOrderData.discount : (oldOrderData.discount || 0)),
         discountType: newOrderData.discountType || oldOrderData.discountType || "amount",

@@ -41,6 +41,8 @@ import {
   formatCurrencyCompact,
   formatDate,
   formatDateShort,
+  TrendPoint,
+  ItemSalesSummary,
 } from '../../src/services/sharing/salesReportService';
 import { adaptToTransactionData } from '../../src/utils/transactionAdapter';
 import { TransactionShareBottomSheet } from '../../src/components/sharing/TransactionShareBottomSheet';
@@ -120,6 +122,13 @@ export default function SalesReportScreen() {
   // Loading & Processing Flags
   const [exportingPdf, setExportingPdf] = useState(false);
   const [exportingCsv, setExportingCsv] = useState(false);
+
+  // Products Sales Summary Modal from Timeline Tap
+  const [productsSummaryModalVisible, setProductsSummaryModalVisible] = useState(false);
+  const [selectedTimelineTrend, setSelectedTimelineTrend] = useState<TrendPoint | null>(null);
+  const [productsSummaryMode, setProductsSummaryMode] = useState<'timeline_point' | 'all_products'>('timeline_point');
+  const [productSummarySearch, setProductSummarySearch] = useState('');
+  const [productSummarySortBy, setProductSummarySortBy] = useState<'revenue' | 'units' | 'name'>('revenue');
 
   // Load Saved Configuration
   useEffect(() => {
@@ -404,6 +413,62 @@ export default function SalesReportScreen() {
     setShareBottomSheetVisible(true);
   };
 
+  // Handle Open Products Summary from Timeline Tap or Header Action
+  const handleOpenProductsSummary = useCallback((trend: TrendPoint | null) => {
+    setSelectedTimelineTrend(trend);
+    setProductsSummaryMode(trend ? 'timeline_point' : 'all_products');
+    setProductSummarySearch('');
+    setProductSummarySortBy('revenue');
+    setProductsSummaryModalVisible(true);
+  }, []);
+
+  // Compute products list to display in Products Sales Summary Modal
+  const displayedProductSummaries = useMemo(() => {
+    let list: ItemSalesSummary[] = [];
+    if (productsSummaryMode === 'timeline_point' && selectedTimelineTrend?.itemSummaries) {
+      list = selectedTimelineTrend.itemSummaries;
+    } else {
+      list = reportData.itemSummaries || [];
+    }
+
+    if (productSummarySearch.trim()) {
+      const q = productSummarySearch.toLowerCase();
+      list = list.filter((p) => (p.itemName || '').toLowerCase().includes(q));
+    }
+
+    return [...list].sort((a, b) => {
+      if (productSummarySortBy === 'units') {
+        return (b.totalUnits || 0) - (a.totalUnits || 0);
+      }
+      if (productSummarySortBy === 'name') {
+        return (a.itemName || '').localeCompare(b.itemName || '');
+      }
+      return (b.totalRevenue || 0) - (a.totalRevenue || 0);
+    });
+  }, [productsSummaryMode, selectedTimelineTrend, reportData.itemSummaries, productSummarySearch, productSummarySortBy]);
+
+  // Compute total aggregates for modal KPI cards
+  const productSummaryTotals = useMemo(() => {
+    let sourceList: ItemSalesSummary[] = [];
+    if (productsSummaryMode === 'timeline_point' && selectedTimelineTrend?.itemSummaries) {
+      sourceList = selectedTimelineTrend.itemSummaries;
+    } else {
+      sourceList = reportData.itemSummaries || [];
+    }
+
+    const totalRevenue = sourceList.reduce((acc, p) => acc + (p.totalRevenue || 0), 0);
+    const totalUnits = sourceList.reduce((acc, p) => acc + (p.totalUnits || 0), 0);
+    const totalCount = sourceList.length;
+    const topProduct = sourceList[0]?.itemName || 'None';
+
+    return {
+      totalRevenue,
+      totalUnits,
+      totalCount,
+      topProduct,
+    };
+  }, [productsSummaryMode, selectedTimelineTrend, reportData.itemSummaries]);
+
   return (
     <ProtectedRoute>
       <View style={styles.screen}>
@@ -670,9 +735,24 @@ export default function SalesReportScreen() {
                     <MaterialIcons name="auto-graph" size={18} color={colors.accent.primary} />
                     <Text style={styles.sectionTitle}>Sales Activity Timeline</Text>
                   </View>
+                  <Pressable
+                    style={styles.timelineSummaryHeaderBtn}
+                    onPress={() => handleOpenProductsSummary(null)}
+                  >
+                    <MaterialIcons name="inventory-2" size={13} color={colors.accent.primary} />
+                    <Text style={styles.timelineSummaryHeaderBtnText}>All Products Summary</Text>
+                  </Pressable>
+                </View>
+
+                {/* Subheader info & tap instruction */}
+                <View style={styles.timelineSubHeader}>
                   <Text style={styles.sectionMeta}>
                     {currentTrends.length} {trendGranularity === 'day' ? 'Active Days' : trendGranularity === 'month' ? 'Active Months' : trendGranularity === 'quarter' ? 'Active Quarters' : 'Active Years'}
                   </Text>
+                  <View style={styles.timelineTapHint}>
+                    <MaterialIcons name="touch-app" size={13} color={colors.accent.primary} />
+                    <Text style={styles.timelineTapHintText}>Tap row for product sales</Text>
+                  </View>
                 </View>
 
                 {/* Granularity Filter Selector: Day Wise / Month Wise / Quarter Wise / Year Wise */}
@@ -709,7 +789,11 @@ export default function SalesReportScreen() {
                       const maxDaily = Math.max(...currentTrends.map((t) => t.salesAmount || 1));
                       const barPercent = Math.min(100, Math.max(6, Math.round((trend.salesAmount / maxDaily) * 100)));
                       return (
-                        <View key={trend.key || trend.dateKey} style={styles.trendRow}>
+                        <Pressable
+                          key={trend.key || trend.dateKey}
+                          style={({ pressed }) => [styles.trendRow, pressed && styles.trendRowPressed]}
+                          onPress={() => handleOpenProductsSummary(trend)}
+                        >
                           <View style={styles.trendDateCol}>
                             <Text style={styles.trendDate} numberOfLines={1}>
                               {trend.label || trend.dateLabel}
@@ -744,7 +828,8 @@ export default function SalesReportScreen() {
                               {trend.ordersCount} ord{trend.unitsCount ? ` • ${trend.unitsCount}u` : ''}
                             </Text>
                           </View>
-                        </View>
+                          <MaterialIcons name="chevron-right" size={16} color={colors.text.muted} />
+                        </Pressable>
                       );
                     })}
                   </View>
@@ -1278,16 +1363,21 @@ export default function SalesReportScreen() {
                   <View style={styles.drillSection}>
                     <Text style={styles.drillLabel}>Purchased Items</Text>
                     {Array.isArray(selectedOrder.items) && selectedOrder.items.length > 0 ? (
-                      selectedOrder.items.map((itm: any, idx: number) => (
-                        <View key={idx} style={styles.drillItemRow}>
-                          <Text style={styles.drillItemName}>
-                            {itm.name || itm.itemName} x{itm.quantity || itm.qty || 1}
-                          </Text>
-                          <Text style={styles.drillItemPrice}>
-                            {formatCurrency(itm.totalPrice || itm.total || (itm.quantity || 1) * (itm.unitPrice || 0))}
-                          </Text>
-                        </View>
-                      ))
+                      selectedOrder.items.map((itm: any, idx: number) => {
+                        const qty = Number(itm.quantity || itm.qty || 1);
+                        const rate = Number(itm.rate ?? itm.unitPrice ?? itm.price ?? 0);
+                        const price = Number(itm.grossTotal ?? itm.totalPrice ?? itm.total ?? (qty * rate));
+                        return (
+                          <View key={idx} style={styles.drillItemRow}>
+                            <Text style={styles.drillItemName}>
+                              {itm.name || itm.itemName} x{qty}
+                            </Text>
+                            <Text style={styles.drillItemPrice}>
+                              {formatCurrency(price)}
+                            </Text>
+                          </View>
+                        );
+                      })
                     ) : (
                       <Text style={styles.drillSub}>Standard Order</Text>
                     )}
@@ -1329,6 +1419,274 @@ export default function SalesReportScreen() {
                   </Pressable>
                 </ScrollView>
               )}
+            </View>
+          </View>
+        </Modal>
+
+        {/* Products Sales Summary Modal from Timeline Tap */}
+        <Modal
+          visible={productsSummaryModalVisible}
+          transparent
+          animationType="fade"
+          onRequestClose={() => setProductsSummaryModalVisible(false)}
+        >
+          <View style={styles.modalBg}>
+            <View style={[styles.modalContent, styles.productSummaryModalContent]}>
+              {/* Modal Header */}
+              <View style={styles.modalHeader}>
+                <View style={{ flex: 1, marginRight: spacing.sm }}>
+                  <View style={{ flexDirection: 'row', alignItems: 'center', gap: 6 }}>
+                    <MaterialIcons name="inventory-2" size={20} color={colors.accent.primary} />
+                    <Text style={styles.modalTitle} numberOfLines={1}>
+                      Products Sales Summary
+                    </Text>
+                  </View>
+                  <Text style={styles.modalSubTitle} numberOfLines={1}>
+                    {productsSummaryMode === 'timeline_point' && selectedTimelineTrend
+                      ? `${selectedTimelineTrend.label} (${selectedTimelineTrend.subLabel || ''}) • ${selectedTimelineTrend.ordersCount} orders`
+                      : `${reportData.formattedDateRange} • Total Portfolio`}
+                  </Text>
+                </View>
+                <Pressable
+                  onPress={() => setProductsSummaryModalVisible(false)}
+                  hitSlop={8}
+                  style={styles.modalCloseBtn}
+                >
+                  <MaterialIcons name="close" size={22} color={colors.text.muted} />
+                </Pressable>
+              </View>
+
+              {/* Mode Segmented Selector (if opened from a timeline entry) */}
+              {selectedTimelineTrend && (
+                <View style={styles.modalSegmentContainer}>
+                  <Pressable
+                    style={[
+                      styles.modalSegmentBtn,
+                      productsSummaryMode === 'timeline_point' && styles.modalSegmentBtnActive,
+                    ]}
+                    onPress={() => setProductsSummaryMode('timeline_point')}
+                  >
+                    <MaterialIcons
+                      name="event"
+                      size={14}
+                      color={productsSummaryMode === 'timeline_point' ? '#FFFFFF' : colors.text.secondary}
+                    />
+                    <Text
+                      style={[
+                        styles.modalSegmentText,
+                        productsSummaryMode === 'timeline_point' && styles.modalSegmentTextActive,
+                      ]}
+                      numberOfLines={1}
+                    >
+                      {selectedTimelineTrend.label} Products
+                    </Text>
+                  </Pressable>
+
+                  <Pressable
+                    style={[
+                      styles.modalSegmentBtn,
+                      productsSummaryMode === 'all_products' && styles.modalSegmentBtnActive,
+                    ]}
+                    onPress={() => setProductsSummaryMode('all_products')}
+                  >
+                    <MaterialIcons
+                      name="all-inclusive"
+                      size={14}
+                      color={productsSummaryMode === 'all_products' ? '#FFFFFF' : colors.text.secondary}
+                    />
+                    <Text
+                      style={[
+                        styles.modalSegmentText,
+                        productsSummaryMode === 'all_products' && styles.modalSegmentTextActive,
+                      ]}
+                      numberOfLines={1}
+                    >
+                      All Products Total
+                    </Text>
+                  </Pressable>
+                </View>
+              )}
+
+              {/* KPI Summary Cards */}
+              <View style={styles.modalKpiCardsRow}>
+                <View style={[styles.modalKpiCard, { borderColor: `${colors.accent.primary}30` }]}>
+                  <Text style={styles.modalKpiLabel}>TOTAL REVENUE</Text>
+                  <Text style={[styles.modalKpiValue, { color: colors.accent.primary }]} numberOfLines={1}>
+                    {formatCurrency(productSummaryTotals.totalRevenue)}
+                  </Text>
+                  <Text style={styles.modalKpiSub}>
+                    {productSummaryTotals.totalCount} {productSummaryTotals.totalCount === 1 ? 'product' : 'products'}
+                  </Text>
+                </View>
+
+                <View style={[styles.modalKpiCard, { borderColor: `${colors.accent.success}30` }]}>
+                  <Text style={styles.modalKpiLabel}>UNITS SOLD</Text>
+                  <Text style={[styles.modalKpiValue, { color: colors.accent.success }]} numberOfLines={1}>
+                    {productSummaryTotals.totalUnits}
+                  </Text>
+                  <Text style={styles.modalKpiSub}>units total</Text>
+                </View>
+              </View>
+
+              {/* Search & Sort Controls */}
+              <View style={styles.modalFilterRow}>
+                <View style={styles.modalSearchBox}>
+                  <MaterialIcons name="search" size={16} color={colors.text.muted} />
+                  <TextInput
+                    style={styles.modalSearchInput}
+                    placeholder="Search product..."
+                    placeholderTextColor={colors.text.muted}
+                    value={productSummarySearch}
+                    onChangeText={setProductSummarySearch}
+                  />
+                  {productSummarySearch.length > 0 && (
+                    <Pressable onPress={() => setProductSummarySearch('')} hitSlop={6}>
+                      <MaterialIcons name="cancel" size={16} color={colors.text.muted} />
+                    </Pressable>
+                  )}
+                </View>
+
+                <View style={styles.modalSortGroup}>
+                  <Pressable
+                    style={[
+                      styles.modalSortBtn,
+                      productSummarySortBy === 'revenue' && styles.modalSortBtnActive,
+                    ]}
+                    onPress={() => setProductSummarySortBy('revenue')}
+                  >
+                    <Text
+                      style={[
+                        styles.modalSortBtnText,
+                        productSummarySortBy === 'revenue' && styles.modalSortBtnTextActive,
+                      ]}
+                    >
+                      ₹ High
+                    </Text>
+                  </Pressable>
+                  <Pressable
+                    style={[
+                      styles.modalSortBtn,
+                      productSummarySortBy === 'units' && styles.modalSortBtnActive,
+                    ]}
+                    onPress={() => setProductSummarySortBy('units')}
+                  >
+                    <Text
+                      style={[
+                        styles.modalSortBtnText,
+                        productSummarySortBy === 'units' && styles.modalSortBtnTextActive,
+                      ]}
+                    >
+                      Units
+                    </Text>
+                  </Pressable>
+                  <Pressable
+                    style={[
+                      styles.modalSortBtn,
+                      productSummarySortBy === 'name' && styles.modalSortBtnActive,
+                    ]}
+                    onPress={() => setProductSummarySortBy('name')}
+                  >
+                    <Text
+                      style={[
+                        styles.modalSortBtnText,
+                        productSummarySortBy === 'name' && styles.modalSortBtnTextActive,
+                      ]}
+                    >
+                      A-Z
+                    </Text>
+                  </Pressable>
+                </View>
+              </View>
+
+              {/* Scrollable Products Breakdown */}
+              <ScrollView
+                style={styles.modalProductScroll}
+                contentContainerStyle={{ paddingBottom: spacing.sm }}
+                showsVerticalScrollIndicator={true}
+              >
+                {displayedProductSummaries.length === 0 ? (
+                  <View style={styles.modalEmptyWrap}>
+                    <MaterialIcons name="inventory" size={36} color={colors.text.muted} />
+                    <Text style={styles.modalEmptyText}>
+                      {productSummarySearch
+                        ? `No products match "${productSummarySearch}"`
+                        : 'No product sales recorded for this timeframe.'}
+                    </Text>
+                  </View>
+                ) : (
+                  displayedProductSummaries.map((item, idx) => {
+                    const sharePct =
+                      productSummaryTotals.totalRevenue > 0
+                        ? Math.min(100, (item.totalRevenue / productSummaryTotals.totalRevenue) * 100)
+                        : 0;
+
+                    return (
+                      <View key={item.itemId || idx} style={styles.modalProductCard}>
+                        <View style={styles.modalRankBadge}>
+                          <Text style={styles.modalRankText}>#{idx + 1}</Text>
+                        </View>
+                        <View style={styles.modalProductMain}>
+                          <View style={styles.modalProductTitleRow}>
+                            <Text style={styles.modalProductName} numberOfLines={1}>
+                              {item.itemName}
+                            </Text>
+                            <Text style={styles.modalProductAmount}>
+                              {formatCurrency(item.totalRevenue)}
+                            </Text>
+                          </View>
+                          <Text style={styles.modalProductSub}>
+                            {item.totalUnits} Units sold • Avg {formatCurrency(item.unitPriceAvg)} • {item.ordersCount} Orders
+                          </Text>
+
+                          {/* Contribution Progress Bar */}
+                          <View style={styles.modalProgressBarWrap}>
+                            <View style={styles.modalProgressTrack}>
+                              <View
+                                style={[
+                                  styles.modalProgressFill,
+                                  {
+                                    width: `${Math.max(4, sharePct)}%`,
+                                    backgroundColor:
+                                      idx === 0
+                                        ? colors.accent.success
+                                        : idx === 1
+                                        ? colors.accent.primary
+                                        : colors.accent.info,
+                                  },
+                                ]}
+                              />
+                            </View>
+                            <Text style={styles.modalProgressLabel}>
+                              {sharePct.toFixed(1)}% of sales
+                            </Text>
+                          </View>
+                        </View>
+                      </View>
+                    );
+                  })
+                )}
+              </ScrollView>
+
+              {/* Modal Footer Actions */}
+              <View style={styles.modalFooterRow}>
+                <Pressable
+                  style={styles.modalSecondaryActionBtn}
+                  onPress={() => {
+                    setProductsSummaryModalVisible(false);
+                    setActiveTab('items');
+                  }}
+                >
+                  <MaterialIcons name="open-in-new" size={16} color={colors.accent.primary} />
+                  <Text style={styles.modalSecondaryActionBtnText}>Full Products Tab</Text>
+                </Pressable>
+
+                <Pressable
+                  style={styles.modalPrimaryActionBtn}
+                  onPress={() => setProductsSummaryModalVisible(false)}
+                >
+                  <Text style={styles.modalPrimaryActionBtnText}>Done</Text>
+                </Pressable>
+              </View>
             </View>
           </View>
         </Modal>
@@ -1948,16 +2306,55 @@ const getStyles = (theme: any) => {
     },
 
     // Trend Timeline
+    timelineSummaryHeaderBtn: {
+      flexDirection: 'row',
+      alignItems: 'center',
+      gap: 5,
+      paddingVertical: 5,
+      paddingHorizontal: 9,
+      borderRadius: radius.full,
+      backgroundColor: `${colors.accent.primary}15`,
+      borderWidth: 1,
+      borderColor: `${colors.accent.primary}35`,
+    },
+    timelineSummaryHeaderBtnText: {
+      fontSize: 11,
+      fontWeight: '700',
+      color: colors.accent.primary,
+    },
+    timelineSubHeader: {
+      flexDirection: 'row',
+      alignItems: 'center',
+      justifyContent: 'space-between',
+      marginBottom: spacing.xs,
+      paddingHorizontal: 2,
+    },
+    timelineTapHint: {
+      flexDirection: 'row',
+      alignItems: 'center',
+      gap: 3,
+    },
+    timelineTapHintText: {
+      fontSize: 10,
+      fontWeight: '600',
+      color: colors.accent.primary,
+    },
     trendList: {
-      gap: 10,
+      gap: 8,
     },
     trendRow: {
       flexDirection: 'row',
       alignItems: 'center',
-      gap: 8,
+      gap: 6,
+      paddingVertical: 6,
+      paddingHorizontal: 6,
+      borderRadius: radius.md,
+    },
+    trendRowPressed: {
+      backgroundColor: `${colors.accent.primary}15`,
     },
     trendDateCol: {
-      width: 78,
+      width: 76,
       justifyContent: 'center',
     },
     trendDate: {
@@ -1984,7 +2381,7 @@ const getStyles = (theme: any) => {
       borderRadius: 6,
     },
     trendMeta: {
-      width: 90,
+      width: 82,
       alignItems: 'flex-end',
     },
     trendAmount: {
@@ -2476,6 +2873,267 @@ const getStyles = (theme: any) => {
       fontSize: 12,
       fontWeight: '700',
       color: colors.text.primary,
+    },
+
+    // Products Sales Summary Modal
+    productSummaryModalContent: {
+      maxHeight: '88%',
+      maxWidth: 480,
+      padding: spacing.lg,
+    },
+    modalSubTitle: {
+      fontSize: 11,
+      fontWeight: '600',
+      color: colors.text.muted,
+      marginTop: 2,
+    },
+    modalCloseBtn: {
+      padding: 4,
+    },
+    modalSegmentContainer: {
+      flexDirection: 'row',
+      backgroundColor: colors.bg.elevated,
+      borderRadius: radius.md,
+      padding: 3,
+      marginBottom: spacing.sm,
+      gap: 4,
+      borderWidth: 1,
+      borderColor: colors.border.subtle,
+    },
+    modalSegmentBtn: {
+      flex: 1,
+      flexDirection: 'row',
+      alignItems: 'center',
+      justifyContent: 'center',
+      paddingVertical: 7,
+      paddingHorizontal: 6,
+      borderRadius: radius.sm,
+      gap: 5,
+    },
+    modalSegmentBtnActive: {
+      backgroundColor: colors.accent.primary,
+      ...shadows.subtle,
+    },
+    modalSegmentText: {
+      fontSize: 11,
+      fontWeight: '600',
+      color: colors.text.secondary,
+    },
+    modalSegmentTextActive: {
+      color: '#FFFFFF',
+      fontWeight: '800',
+    },
+    modalKpiCardsRow: {
+      flexDirection: 'row',
+      gap: spacing.sm,
+      marginBottom: spacing.sm,
+    },
+    modalKpiCard: {
+      flex: 1,
+      backgroundColor: colors.bg.elevated,
+      borderRadius: radius.md,
+      padding: spacing.sm,
+      borderWidth: 1,
+    },
+    modalKpiLabel: {
+      fontSize: 9,
+      fontWeight: '800',
+      color: colors.text.muted,
+      letterSpacing: 0.5,
+      marginBottom: 2,
+    },
+    modalKpiValue: {
+      fontSize: 15,
+      fontWeight: '800',
+    },
+    modalKpiSub: {
+      fontSize: 10,
+      fontWeight: '500',
+      color: colors.text.secondary,
+      marginTop: 2,
+    },
+    modalFilterRow: {
+      flexDirection: 'row',
+      gap: spacing.xs,
+      marginBottom: spacing.sm,
+      alignItems: 'center',
+    },
+    modalSearchBox: {
+      flex: 1,
+      flexDirection: 'row',
+      alignItems: 'center',
+      backgroundColor: colors.bg.elevated,
+      borderWidth: 1,
+      borderColor: colors.border.subtle,
+      borderRadius: radius.md,
+      paddingHorizontal: spacing.sm,
+      height: 36,
+      gap: 6,
+    },
+    modalSearchInput: {
+      flex: 1,
+      fontSize: 12,
+      color: colors.text.primary,
+      paddingVertical: 0,
+    },
+    modalSortGroup: {
+      flexDirection: 'row',
+      backgroundColor: colors.bg.elevated,
+      borderRadius: radius.md,
+      padding: 2,
+      borderWidth: 1,
+      borderColor: colors.border.subtle,
+      height: 36,
+      alignItems: 'center',
+    },
+    modalSortBtn: {
+      paddingHorizontal: 8,
+      paddingVertical: 5,
+      borderRadius: radius.sm - 2,
+    },
+    modalSortBtnActive: {
+      backgroundColor: colors.accent.primary,
+    },
+    modalSortBtnText: {
+      fontSize: 10,
+      fontWeight: '600',
+      color: colors.text.secondary,
+    },
+    modalSortBtnTextActive: {
+      color: '#FFFFFF',
+      fontWeight: '800',
+    },
+    modalProductScroll: {
+      flexGrow: 1,
+      maxHeight: 340,
+    },
+    modalEmptyWrap: {
+      paddingVertical: 32,
+      alignItems: 'center',
+      justifyContent: 'center',
+      gap: 8,
+    },
+    modalEmptyText: {
+      fontSize: 12,
+      color: colors.text.muted,
+      textAlign: 'center',
+      fontWeight: '500',
+      paddingHorizontal: spacing.md,
+    },
+    modalProductCard: {
+      flexDirection: 'row',
+      alignItems: 'center',
+      backgroundColor: colors.bg.elevated,
+      borderRadius: radius.md,
+      padding: spacing.sm,
+      marginBottom: spacing.xs,
+      borderWidth: 1,
+      borderColor: colors.border.subtle,
+      gap: spacing.sm,
+    },
+    modalRankBadge: {
+      width: 26,
+      height: 26,
+      borderRadius: 13,
+      backgroundColor: `${colors.accent.primary}18`,
+      alignItems: 'center',
+      justifyContent: 'center',
+    },
+    modalRankText: {
+      fontSize: 11,
+      fontWeight: '800',
+      color: colors.accent.primary,
+    },
+    modalProductMain: {
+      flex: 1,
+      minWidth: 0,
+    },
+    modalProductTitleRow: {
+      flexDirection: 'row',
+      justifyContent: 'space-between',
+      alignItems: 'center',
+      marginBottom: 2,
+    },
+    modalProductName: {
+      fontSize: 13,
+      fontWeight: '700',
+      color: colors.text.primary,
+      flex: 1,
+      marginRight: 6,
+    },
+    modalProductAmount: {
+      fontSize: 13,
+      fontWeight: '800',
+      color: colors.text.primary,
+    },
+    modalProductSub: {
+      fontSize: 10,
+      color: colors.text.secondary,
+      fontWeight: '500',
+      marginBottom: 5,
+    },
+    modalProgressBarWrap: {
+      flexDirection: 'row',
+      alignItems: 'center',
+      gap: 6,
+    },
+    modalProgressTrack: {
+      flex: 1,
+      height: 6,
+      backgroundColor: `${colors.text.muted}20`,
+      borderRadius: 3,
+      overflow: 'hidden',
+    },
+    modalProgressFill: {
+      height: '100%',
+      borderRadius: 3,
+    },
+    modalProgressLabel: {
+      fontSize: 9,
+      fontWeight: '700',
+      color: colors.text.muted,
+      width: 65,
+      textAlign: 'right',
+    },
+    modalFooterRow: {
+      flexDirection: 'row',
+      alignItems: 'center',
+      gap: spacing.sm,
+      paddingTop: spacing.sm,
+      borderTopWidth: 1,
+      borderTopColor: colors.border.subtle,
+      marginTop: spacing.xs,
+    },
+    modalSecondaryActionBtn: {
+      flex: 1,
+      flexDirection: 'row',
+      alignItems: 'center',
+      justifyContent: 'center',
+      gap: 6,
+      paddingVertical: 10,
+      borderRadius: radius.md,
+      backgroundColor: `${colors.accent.primary}15`,
+      borderWidth: 1,
+      borderColor: `${colors.accent.primary}30`,
+    },
+    modalSecondaryActionBtnText: {
+      fontSize: 12,
+      fontWeight: '700',
+      color: colors.accent.primary,
+    },
+    modalPrimaryActionBtn: {
+      flex: 1,
+      alignItems: 'center',
+      justifyContent: 'center',
+      paddingVertical: 10,
+      borderRadius: radius.md,
+      backgroundColor: colors.accent.primary,
+      ...shadows.subtle,
+    },
+    modalPrimaryActionBtnText: {
+      fontSize: 12,
+      fontWeight: '700',
+      color: '#FFFFFF',
     },
   });
 };

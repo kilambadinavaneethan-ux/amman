@@ -414,6 +414,15 @@ export function PaymentProvider({ children }) {
       batch.update(paymentRef, paymentUpdateData);
 
       await batch.commit();
+
+      setPayments((prev) =>
+        prev.map((p) =>
+          p.id === paymentId
+            ? { ...p, ...paymentUpdateData, id: paymentId }
+            : p
+        )
+      );
+
       return true;
     } catch (error) {
       console.error("editPayment error:", error);

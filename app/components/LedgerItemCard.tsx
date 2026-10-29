@@ -149,6 +149,15 @@ const LedgerItemCardComponent: React.FC<LedgerItemCardProps> = ({
                 })}
               </View>
             )}
+            {(() => {
+              const orderNote = (entry.notes || entry.original?.notes || (entry.original?.description && !entry.original?.description.startsWith('Order #') ? entry.original.description : ''))?.trim();
+              if (!orderNote) return null;
+              return (
+                <Text style={{ fontSize: 9, color: colors.text.muted, marginTop: 1 }} numberOfLines={2}>
+                  📝 {orderNote}
+                </Text>
+              );
+            })()}
           </View>
         )}
         {entry.type === "payment" && (

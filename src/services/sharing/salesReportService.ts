@@ -1,9 +1,9 @@
-import { Share, Alert, Platform } from 'react-native';
+import AsyncStorage from '@react-native-async-storage/async-storage';
+import * as FileSystem from 'expo-file-system/legacy';
 import * as Print from 'expo-print';
 import * as Sharing from 'expo-sharing';
-import * as FileSystem from 'expo-file-system/legacy';
-import AsyncStorage from '@react-native-async-storage/async-storage';
 import { doc, getDoc, setDoc } from 'firebase/firestore';
+import { Alert } from 'react-native';
 import { db } from '../../config/firebase';
 
 export type ReportPeriod =
@@ -113,6 +113,7 @@ export interface TrendPoint {
   ordersCount: number;
   collectedAmount: number;
   unitsCount?: number;
+  itemSummaries?: ItemSalesSummary[];
 }
 
 export interface SalesReportData {
@@ -428,6 +429,24 @@ export function computeSalesReportData(
   const quarterlyMap: { [key: string]: TrendPoint } = {};
   const yearlyMap: { [key: string]: TrendPoint } = {};
 
+  const dailyItemMap: { [key: string]: { [itemId: string]: ItemSalesSummary } } = {};
+  const monthlyItemMap: { [key: string]: { [itemId: string]: ItemSalesSummary } } = {};
+  const quarterlyItemMap: { [key: string]: { [itemId: string]: ItemSalesSummary } } = {};
+  const yearlyItemMap: { [key: string]: { [itemId: string]: ItemSalesSummary } } = {};
+
+  // Build product catalog lookup to resolve item rates if missing from order lines
+  const itemCatalogMap: { [key: string]: any } = {};
+  if (Array.isArray(items)) {
+    items.forEach((catItem: any) => {
+      if (catItem) {
+        if (catItem.id) itemCatalogMap[String(catItem.id)] = catItem;
+        if (catItem.itemId) itemCatalogMap[String(catItem.itemId)] = catItem;
+        if (catItem.itemName) itemCatalogMap[String(catItem.itemName).toLowerCase()] = catItem;
+        if (catItem.name) itemCatalogMap[String(catItem.name).toLowerCase()] = catItem;
+      }
+    });
+  }
+
   filteredOrders.forEach((o) => {
     const isCancelled = (o.status || '').toLowerCase() === 'cancelled';
     const total = Number(o.total || o.totalAmount || 0);
@@ -468,18 +487,79 @@ export function computeSalesReportData(
     }
 
     let orderUnits = 0;
-    const orderItems = Array.isArray(o.items) && o.items.length > 0 ? o.items : [];
-    if (orderItems.length > 0) {
-      orderItems.forEach((itm: any) => {
-        const qty = Number(itm.quantity || itm.qty || 0);
-        const unitPrice = Number(itm.unitPrice || itm.price || 0);
-        const itemTotal = Number(itm.totalPrice || itm.total || qty * unitPrice);
-        const itmId = itm.id || itm.itemId || itm.name || 'unknown_item';
-        const itmName = itm.name || itm.itemName || 'Product Item';
-        const itmType = itm.itemType || 'product';
+    const currentOrderItems: {
+      id: string;
+      name: string;
+      type: string;
+      qty: number;
+      unitPrice: number;
+      total: number;
+    }[] = [];
+
+    // Support both multi-item orders (o.items) and legacy single-item orders (o.itemId / o.itemName)
+    const rawItems: any[] = Array.isArray(o.items) && o.items.length > 0
+      ? o.items
+      : (o.itemId || o.itemName
+        ? [{
+          id: o.itemId,
+          itemId: o.itemId,
+          name: o.itemName,
+          itemName: o.itemName,
+          quantity: o.quantity || 1,
+          rate: o.rate,
+          grossTotal: o.grossTotal || total,
+        }]
+        : []);
+
+    if (rawItems.length > 0) {
+      rawItems.forEach((itm: any) => {
+        const itmId = String(itm.id || itm.itemId || itm.name || itm.itemName || 'unknown_item');
+        const itmName = String(itm.name || itm.itemName || itemCatalogMap[itmId]?.itemName || 'Product Item');
+        const itmType = itm.itemType || itm.rateType || itemCatalogMap[itmId]?.rateType || 'product';
+
+        const qty = Number(itm.quantity ?? itm.qty ?? itm.count ?? 0);
+
+        const catalogItem = itemCatalogMap[itmId] || itemCatalogMap[itmName.toLowerCase()];
+        const catalogRate = Number(
+          catalogItem?.rate ?? catalogItem?.price ?? catalogItem?.sellingPrice ?? catalogItem?.unitPrice ?? 0
+        );
+
+        const parsedRate = Number(
+          itm.rate ??
+          itm.unitPrice ??
+          itm.price ??
+          (itm.grossTotal && qty > 0 ? Number(itm.grossTotal) / qty : undefined) ??
+          (itm.total && qty > 0 ? Number(itm.total) / qty : undefined) ??
+          (itm.totalPrice && qty > 0 ? Number(itm.totalPrice) / qty : undefined) ??
+          catalogRate ??
+          0
+        );
+
+        let itemTotal = Number(
+          itm.grossTotal ??
+          itm.totalPrice ??
+          itm.total ??
+          (qty > 0 && parsedRate > 0 ? qty * parsedRate : 0)
+        );
+
+        // If itemTotal is still 0 and this is the only item in the order, fall back to the order product total
+        if (itemTotal === 0 && rawItems.length === 1 && total > 0) {
+          itemTotal = total;
+        }
+
+        const unitPrice = parsedRate > 0 ? parsedRate : (qty > 0 && itemTotal > 0 ? itemTotal / qty : 0);
 
         orderUnits += qty;
         totalUnits += qty;
+
+        currentOrderItems.push({
+          id: itmId,
+          name: itmName,
+          type: itmType,
+          qty,
+          unitPrice,
+          total: itemTotal,
+        });
 
         if (!itemMap[itmId]) {
           itemMap[itmId] = {
@@ -501,6 +581,14 @@ export function computeSalesReportData(
       const q = Number(o.quantity || 1);
       orderUnits += q;
       totalUnits += q;
+      currentOrderItems.push({
+        id: 'standard_order',
+        name: 'Standard Order',
+        type: 'product',
+        qty: q,
+        unitPrice: q > 0 ? total / q : total,
+        total: total,
+      });
     }
 
     const cId = o.customerId || o.customer?.id || o.customerName || 'unnamed_customer';
@@ -638,6 +726,35 @@ export function computeSalesReportData(
     yearlyMap[yKey].ordersCount += 1;
     yearlyMap[yKey].collectedAmount += paid;
     yearlyMap[yKey].unitsCount = (yearlyMap[yKey].unitsCount || 0) + orderUnits;
+
+    // Accumulate items for each trend granularity
+    const recordTrendItems = (bucketMap: { [k: string]: { [id: string]: ItemSalesSummary } }, bucketKey: string) => {
+      if (!bucketMap[bucketKey]) {
+        bucketMap[bucketKey] = {};
+      }
+      currentOrderItems.forEach((ci) => {
+        if (!bucketMap[bucketKey][ci.id]) {
+          bucketMap[bucketKey][ci.id] = {
+            itemId: ci.id,
+            itemName: ci.name,
+            itemType: ci.type,
+            totalUnits: 0,
+            totalRevenue: 0,
+            unitPriceAvg: ci.unitPrice,
+            ordersCount: 0,
+            sharePercent: 0,
+          };
+        }
+        bucketMap[bucketKey][ci.id].totalUnits += ci.qty;
+        bucketMap[bucketKey][ci.id].totalRevenue += ci.total;
+        bucketMap[bucketKey][ci.id].ordersCount += 1;
+      });
+    };
+
+    recordTrendItems(dailyItemMap, dKey);
+    recordTrendItems(monthlyItemMap, mKey);
+    recordTrendItems(quarterlyItemMap, qKey);
+    recordTrendItems(yearlyItemMap, yKey);
   });
 
   const validOrdersCount = filteredOrders.length - cancelledOrdersCount;
@@ -663,10 +780,32 @@ export function computeSalesReportData(
 
   const deliverySummaries = Object.values(deliveryMap).sort((a, b) => b.ordersCount - a.ordersCount);
 
-  const dailyTrends = Object.values(dailyMap).sort((a, b) => a.key.localeCompare(b.key));
-  const monthlyTrends = Object.values(monthlyMap).sort((a, b) => a.key.localeCompare(b.key));
-  const quarterlyTrends = Object.values(quarterlyMap).sort((a, b) => a.key.localeCompare(b.key));
-  const yearlyTrends = Object.values(yearlyMap).sort((a, b) => a.key.localeCompare(b.key));
+  const finalizeTrendPoints = (
+    trendsMap: { [key: string]: TrendPoint },
+    itemsBucketMap: { [key: string]: { [itemId: string]: ItemSalesSummary } }
+  ): TrendPoint[] => {
+    return Object.values(trendsMap)
+      .map((tp) => {
+        const bucket = itemsBucketMap[tp.key] || {};
+        const items = Object.values(bucket)
+          .map((itm) => ({
+            ...itm,
+            unitPriceAvg: itm.totalUnits > 0 ? itm.totalRevenue / itm.totalUnits : itm.unitPriceAvg,
+            sharePercent: tp.salesAmount > 0 ? (itm.totalRevenue / tp.salesAmount) * 100 : 0,
+          }))
+          .sort((a, b) => b.totalRevenue - a.totalRevenue);
+        return {
+          ...tp,
+          itemSummaries: items,
+        };
+      })
+      .sort((a, b) => a.key.localeCompare(b.key));
+  };
+
+  const dailyTrends = finalizeTrendPoints(dailyMap, dailyItemMap);
+  const monthlyTrends = finalizeTrendPoints(monthlyMap, monthlyItemMap);
+  const quarterlyTrends = finalizeTrendPoints(quarterlyMap, quarterlyItemMap);
+  const yearlyTrends = finalizeTrendPoints(yearlyMap, yearlyItemMap);
 
   const paymentStatusSummaries: PaymentStatusSummary[] = [
     {
@@ -707,8 +846,8 @@ export function computeSalesReportData(
     filter.period === 'today'
       ? `Today (${formatDate(startDate)})`
       : filter.period === 'yesterday'
-      ? `Yesterday (${formatDate(startDate)})`
-      : `${formatDate(startDate)} – ${formatDate(endDate)}`;
+        ? `Yesterday (${formatDate(startDate)})`
+        : `${formatDate(startDate)} – ${formatDate(endDate)}`;
 
   return {
     filter,
@@ -772,8 +911,8 @@ export function generateSalesReportHtml(
   const customerRowsHtml =
     topCustomers.length > 0
       ? topCustomers
-          .map(
-            (c, idx) => `
+        .map(
+          (c, idx) => `
       <tr>
         <td style="text-align:center; color:#64748B; font-weight:600;">${idx + 1}</td>
         <td>
@@ -790,15 +929,15 @@ export function generateSalesReportHtml(
         <td style="text-align:right; font-weight:600; color:#64748B;">${c.sharePercent.toFixed(1)}%</td>
       </tr>
     `
-          )
-          .join('')
+        )
+        .join('')
       : `<tr><td colspan="8" style="text-align:center; padding:16px; color:#64748B;">No customer data available</td></tr>`;
 
   const itemRowsHtml =
     topItems.length > 0
       ? topItems
-          .map(
-            (item, idx) => `
+        .map(
+          (item, idx) => `
       <tr>
         <td style="text-align:center; color:#64748B; font-weight:600;">${idx + 1}</td>
         <td style="font-weight:700; color:#0F172A;">${item.itemName}</td>
@@ -808,8 +947,8 @@ export function generateSalesReportHtml(
         <td style="text-align:right; font-weight:600; color:#64748B;">${item.sharePercent.toFixed(1)}%</td>
       </tr>
     `
-          )
-          .join('')
+        )
+        .join('')
       : `<tr><td colspan="6" style="text-align:center; padding:16px; color:#64748B;">No product sales available</td></tr>`;
 
   const orderRowsHtml = filteredOrders
@@ -988,8 +1127,7 @@ export function generateSalesReportHtml(
   </table>
 
   <!-- Recent Transactions Ledger -->
-  ${
-    orderRowsHtml
+  ${orderRowsHtml
       ? `
   <div class="section-title">
     <span>📋 Sales Ledger & Invoice Registry (First ${Math.min(30, filteredOrders.length)} of ${filteredOrders.length})</span>
@@ -1013,7 +1151,7 @@ export function generateSalesReportHtml(
   </table>
   `
       : ''
-  }
+    }
 
   <!-- Footer Note & Authorization Signature -->
   <div class="footer">

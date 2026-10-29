@@ -238,7 +238,7 @@ export function CustomerShareBottomSheet({
       const isOpeningItem = item.type === 'opening';
       const isPayment = item.type === 'payment';
       const debitVal = (isOrder || isOpeningItem) ? Number(item.amount || 0) : 0;
-      const creditVal = isPayment ? Number(item.paid || 0) : 0;
+      const creditVal = Number(item.paid || 0);
       running += (debitVal - creditVal);
       return {
         ...item,

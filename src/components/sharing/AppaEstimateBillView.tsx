@@ -453,8 +453,8 @@ export const AppaEstimateBillView = React.forwardRef<View, AppaEstimateBillViewP
                   const isOpening = item.type === 'opening';
 
                   const dmy = formatDateDMY(item.date);
-                  const debitVal = isOrder || isOpening ? item.amount : 0;
-                  const creditVal = isPayment ? item.paid : 0;
+                  const debitVal = isOrder || isOpening ? Number(item.amount || 0) : 0;
+                  const creditVal = Number(item.paid || 0);
 
                   return (
                     <View
