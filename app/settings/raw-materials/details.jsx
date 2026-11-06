@@ -256,6 +256,98 @@ function RawMaterialDetailsScreen() {
     };
   }, [materialLogs, workerAttendance, presentedDates]);
 
+  // Calculate days between previous purchase and latest (current) purchase, counting only worker presented days
+  const lastPurchaseInterval = useMemo(() => {
+    const purchaseLogs = materialLogs.filter((log) => log.type === "purchase");
+    if (!purchaseLogs || purchaseLogs.length === 0) {
+      return {
+        formatted: "N/A",
+        unit: "",
+        subtext: "No purchases logged",
+        daysNumber: null,
+      };
+    }
+
+    const timestamps = purchaseLogs
+      .map((log) => {
+        const raw = log.date || log.createdAt;
+        if (!raw) return null;
+        if (raw instanceof Date) return raw.getTime();
+        if (raw.toDate && typeof raw.toDate === "function") return raw.toDate().getTime();
+        const d = new Date(raw);
+        return isNaN(d.getTime()) ? null : d.getTime();
+      })
+      .filter((ts) => ts !== null)
+      .sort((a, b) => a - b);
+
+    if (timestamps.length === 0) {
+      return {
+        formatted: "N/A",
+        unit: "",
+        subtext: "No purchase dates",
+        daysNumber: null,
+      };
+    }
+
+    if (timestamps.length === 1) {
+      return {
+        formatted: "1",
+        unit: "Purchase",
+        subtext: "Only 1 purchase logged",
+        daysNumber: null,
+      };
+    }
+
+    const hasAttendanceData = (workerAttendance || []).length > 0;
+    const prevPurchase = timestamps[timestamps.length - 2];
+    const latestPurchase = timestamps[timestamps.length - 1];
+
+    let intervalDays = 0;
+
+    if (hasAttendanceData) {
+      const startDate = new Date(prevPurchase);
+      startDate.setHours(0, 0, 0, 0);
+      const endDate = new Date(latestPurchase);
+      endDate.setHours(0, 0, 0, 0);
+
+      const curr = new Date(startDate);
+      while (curr < endDate) {
+        const key = formatDateKey(curr);
+        if (presentedDates.has(key)) {
+          intervalDays++;
+        }
+        curr.setDate(curr.getDate() + 1);
+      }
+    } else {
+      // Fallback to calendar days if attendance was never logged
+      intervalDays = Math.max(0, Math.round((latestPurchase - prevPurchase) / (1000 * 60 * 60 * 24)));
+    }
+
+    let displayVal = "";
+    let unitVal = "Days";
+    if (intervalDays === 0) {
+      displayVal = "0";
+      unitVal = "Days";
+    } else if (intervalDays === 1) {
+      displayVal = "1";
+      unitVal = "Day";
+    } else {
+      displayVal = `${intervalDays}`;
+      unitVal = "Days";
+    }
+
+    const subtext = hasAttendanceData
+      ? `Between last 2 purchases (${intervalDays} working ${intervalDays === 1 ? "day" : "days"})`
+      : `Between last 2 purchases`;
+
+    return {
+      formatted: displayVal,
+      unit: unitVal,
+      subtext,
+      daysNumber: intervalDays,
+    };
+  }, [materialLogs, workerAttendance, presentedDates]);
+
   const handleDeleteMaterial = async () => {
     if (!material?.id) return;
     const targetMaterialId = material.id;
@@ -643,6 +735,24 @@ function RawMaterialDetailsScreen() {
             {averagePurchaseDays.subtext ? (
               <Text style={{ fontSize: 9.5, color: colors.text.muted, marginTop: 2 }} numberOfLines={1}>
                 {averagePurchaseDays.subtext}
+              </Text>
+            ) : null}
+          </View>
+
+          <View style={styles.gridCell}>
+            <View style={{ flexDirection: "row", alignItems: "center", justifyContent: "space-between" }}>
+              <Text style={styles.gridLabel}>Last - Current Purchase</Text>
+              <MaterialIcons name="history" size={13} color={colors.accent.primary} />
+            </View>
+            <Text style={styles.gridValue}>
+              {lastPurchaseInterval.formatted}{" "}
+              {lastPurchaseInterval.unit ? (
+                <Text style={styles.gridUnit}>{lastPurchaseInterval.unit}</Text>
+              ) : null}
+            </Text>
+            {lastPurchaseInterval.subtext ? (
+              <Text style={{ fontSize: 9.5, color: colors.text.muted, marginTop: 2 }} numberOfLines={1}>
+                {lastPurchaseInterval.subtext}
               </Text>
             ) : null}
           </View>
