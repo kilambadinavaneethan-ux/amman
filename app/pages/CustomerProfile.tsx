@@ -795,7 +795,10 @@ export default function CustomerProfile() {
     const currentPending = customer.totalPending !== undefined ? Number(customer.totalPending) : Number(customer.balance || 0);
     const openingEntry = (ledgerEntries || []).find((l: any) => l.type === 'opening');
     const oldBalance = openingEntry ? Number(openingEntry.runningBalance) : Number(customer.openingBalance || customer.previousBalance || 0);
-    const totalPaid = (ledgerEntries || []).reduce((sum: number, l: any) => sum + (l.paymentReceived || 0), 0);
+    const totalPaid = (ledgerEntries || []).reduce(
+      (sum: number, l: any) => sum + (Number(l.paymentReceived || 0) + Number(l.discountAmount || 0)),
+      0
+    );
 
     return {
       customer: {
@@ -835,7 +838,9 @@ export default function CustomerProfile() {
             }))
           : undefined;
 
-        const rawPaid = Number(l.paymentReceived || (l.type === 'payment' ? (l.amount || l.paid) : l.paid) || 0);
+        const discAmt = Number(l.discountAmount || orig.discountAmount || 0);
+        const basePaid = Number(l.paymentReceived || (l.type === 'payment' ? (l.amount || l.paid) : l.paid) || 0);
+        const rawPaid = basePaid + discAmt;
         const rawAmount = Number(l.orderAmount || (l.type === 'order' ? l.amount : 0) || 0);
 
         const resolvedNotes = (() => {
@@ -866,7 +871,8 @@ export default function CustomerProfile() {
           extraAmount: Number(orig.extraAmount || 0),
           extraAmountDescription: orig.extraAmountDescription || 'Extra Charge',
           taxAmount: Number(orig.taxAmount || 0),
-          discountAmount: Number(orig.discountAmount || 0),
+          discountAmount: discAmt,
+          paymentReceived: basePaid,
         };
       }),
     };

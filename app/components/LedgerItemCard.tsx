@@ -217,10 +217,8 @@ const LedgerItemCardComponent: React.FC<LedgerItemCardProps> = ({
           ? `-₹${Math.abs(entry.balanceChange).toLocaleString("en-IN")}`
           : entry.type === "refund"
           ? `-₹${Math.abs(entry.refundAmount || entry.paymentReceived || 0).toLocaleString("en-IN")}`
-          : entry.paymentReceived > 0
-          ? `₹${entry.paymentReceived.toLocaleString("en-IN")}`
-          : entry.discountAmount > 0
-          ? `Disc: ₹${entry.discountAmount.toLocaleString("en-IN")}`
+          : (Number(entry.paymentReceived || 0) + Number(entry.discountAmount || 0)) > 0
+          ? `₹${(Number(entry.paymentReceived || 0) + Number(entry.discountAmount || 0)).toLocaleString("en-IN")}`
           : "—"}
       </Text>
       <Text

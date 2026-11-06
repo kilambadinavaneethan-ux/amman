@@ -378,10 +378,15 @@ const CustomerStatementViewComponent: React.ForwardRefRenderFunction<any, Custom
                   (item.discountAmount || 0) > 0
                 );
 
-                const creditAmount = item.type === 'payment'
-                  ? (item.paid || item.amount || 0)
-                  : (item.paid || 0);
-                const debitAmount = item.type === 'payment'
+                const isPayment = item.type === 'payment';
+                const disc = isPayment ? Number(item.discountAmount || 0) : 0;
+                const rawPaid = isPayment
+                  ? Number(item.paid || item.amount || 0)
+                  : Number(item.paid || 0);
+                const creditAmount = (rawPaid >= (item.paymentReceived || 0) + disc && disc > 0)
+                  ? rawPaid
+                  : (rawPaid + disc);
+                const debitAmount = isPayment
                   ? 0
                   : (item.amount || 0);
 

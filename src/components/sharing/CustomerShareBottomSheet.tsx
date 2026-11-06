@@ -238,10 +238,16 @@ export function CustomerShareBottomSheet({
       const isOpeningItem = item.type === 'opening';
       const isPayment = item.type === 'payment';
       const debitVal = (isOrder || isOpeningItem) ? Number(item.amount || 0) : 0;
-      const creditVal = Number(item.paid || 0);
+      const rawPaid = Number(item.paid || 0);
+      const disc = isPayment ? Number(item.discountAmount || 0) : 0;
+      // Ensure creditVal reflects the full balance reduction (paid + discount)
+      const creditVal = (rawPaid >= (item.paymentReceived || 0) + disc && disc > 0)
+        ? rawPaid
+        : (rawPaid + disc);
       running += (debitVal - creditVal);
       return {
         ...item,
+        paid: isPayment ? creditVal : rawPaid,
         balance: running,
       };
     });

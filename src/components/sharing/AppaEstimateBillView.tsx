@@ -230,7 +230,13 @@ export const AppaEstimateBillView = React.forwardRef<any, AppaEstimateBillViewPr
     const totalDebit = ledger
       .filter((l) => l.type === 'order' || l.type === 'opening')
       .reduce((sum, l) => sum + (l.amount || 0), 0);
-    const totalCredit = ledger.reduce((sum, l) => sum + (l.paid || 0), 0);
+    const totalCredit = ledger.reduce((sum, l) => {
+      const isPay = l.type === 'payment';
+      const raw = Number(l.paid || 0);
+      const d = isPay ? Number(l.discountAmount || 0) : 0;
+      const c = (raw >= (l.paymentReceived || 0) + d && d > 0) ? raw : (raw + d);
+      return sum + c;
+    }, 0);
     const netDue = data.summary.netBalanceDue;
     const isPaid = (netDue || 0) <= 0;
 
@@ -454,7 +460,11 @@ export const AppaEstimateBillView = React.forwardRef<any, AppaEstimateBillViewPr
 
                   const dmy = formatDateDMY(item.date);
                   const debitVal = isOrder || isOpening ? Number(item.amount || 0) : 0;
-                  const creditVal = Number(item.paid || 0);
+                  const rawPaid = Number(item.paid || 0);
+                  const disc = isPayment ? Number(item.discountAmount || 0) : 0;
+                  const creditVal = (rawPaid >= (item.paymentReceived || 0) + disc && disc > 0)
+                    ? rawPaid
+                    : (rawPaid + disc);
 
                   return (
                     <View

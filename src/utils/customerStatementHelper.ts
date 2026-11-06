@@ -266,7 +266,7 @@ export function buildCustomerShareData(
     0
   );
   const totalPaid = (ledgerEntries || []).reduce(
-    (sum: number, l: any) => sum + (l.paymentReceived || 0),
+    (sum: number, l: any) => sum + (Number(l.paymentReceived || 0) + Number(l.discountAmount || 0)),
     0
   );
 
@@ -316,9 +316,11 @@ export function buildCustomerShareData(
             }))
           : undefined;
 
-      const rawPaid = Number(
+      const discAmt = Number(l.discountAmount || orig.discountAmount || 0);
+      const basePaid = Number(
         l.paymentReceived || (l.type === 'payment' ? l.amount || l.paid : l.paid) || 0
       );
+      const rawPaid = basePaid + discAmt;
       const rawAmount = Number(l.orderAmount || (l.type === 'order' ? l.amount : 0) || 0);
 
       return {
@@ -341,7 +343,8 @@ export function buildCustomerShareData(
         extraAmount: orig.extraAmount,
         extraAmountDescription: orig.extraAmountDescription,
         taxAmount: orig.taxAmount,
-        discountAmount: orig.discountAmount || l.discountAmount,
+        discountAmount: discAmt,
+        paymentReceived: basePaid,
       };
     }),
   };

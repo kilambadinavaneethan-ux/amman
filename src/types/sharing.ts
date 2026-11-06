@@ -204,6 +204,7 @@ export interface CustomerShareData {
     extraAmountDescription?: string;
     taxAmount?: number;
     discountAmount?: number;
+    paymentReceived?: number;
   }>;
   options?: {
     includeProfileInfo?: boolean;
