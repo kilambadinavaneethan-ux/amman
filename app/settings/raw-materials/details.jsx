@@ -1,7 +1,9 @@
-import React, { useContext, useState, useMemo } from "react";
+import React, { useContext, useState, useMemo, useEffect } from "react";
 import { View, Text, StyleSheet, ScrollView, Pressable, ActivityIndicator, Modal, TextInput } from "react-native";
 import { useRouter, useLocalSearchParams } from "expo-router";
 import { MaterialIcons } from "@expo/vector-icons";
+import { collection, onSnapshot } from "firebase/firestore";
+import { db, normalizeDateValue } from "../../../src/config/firebase";
 import { ItemContext } from "../../context/ItemContext";
 import { RawMaterialContext } from "../../context/RawMaterialContext";
 import { UserContext } from "../../context/UserContext";
@@ -10,6 +12,16 @@ import ProtectedRoute from "../../components/ProtectedRoute";
 import BackButton from "../../components/BackButton";
 import EasyCalendarModal from "../../components/EasyCalendarModal";
 import { useTheme } from "../../context/ThemeContext";
+
+const formatDateKey = (dateVal) => {
+  if (!dateVal) return "";
+  const d = normalizeDateValue(dateVal);
+  if (!d || isNaN(d.getTime())) return "";
+  const yyyy = d.getFullYear();
+  const mm = String(d.getMonth() + 1).padStart(2, "0");
+  const dd = String(d.getDate()).padStart(2, "0");
+  return `${yyyy}-${mm}-${dd}`;
+};
 
 function RawMaterialDetailsScreen() {
   const { theme } = useTheme();
@@ -49,6 +61,42 @@ function RawMaterialDetailsScreen() {
   const [deletingLog, setDeletingLog] = useState(false);
   const [errorMsg, setErrorMsg] = useState("");
 
+  // Worker Attendance listener to calculate actual working/presented days
+  const [workerAttendance, setWorkerAttendance] = useState([]);
+
+  useEffect(() => {
+    const attCol = collection(db, "workerAttendance");
+    const unsubscribe = onSnapshot(
+      attCol,
+      (snapshot) => {
+        const records = snapshot.docs.map((d) => ({
+          id: d.id,
+          ...d.data(),
+          createdAt: normalizeDateValue(d.data().createdAt),
+        }));
+        setWorkerAttendance(records);
+      },
+      (error) => {
+        console.error("Worker attendance listener error in RawMaterialDetails:", error);
+      }
+    );
+    return () => unsubscribe();
+  }, []);
+
+  // Set of calendar dates (YYYY-MM-DD) where at least one worker was present (excluding absent-only days)
+  const presentedDates = useMemo(() => {
+    const dates = new Set();
+    (workerAttendance || []).forEach((att) => {
+      if (att.status && att.status !== "absent") {
+        const key = formatDateKey(att.createdAt || att.date);
+        if (key) {
+          dates.add(key);
+        }
+      }
+    });
+    return dates;
+  }, [workerAttendance]);
+
   // Find material details
   const material = items.find((itm) => itm.id === id);
 
@@ -81,7 +129,7 @@ function RawMaterialDetailsScreen() {
       }, 0);
   }, [materialLogs, material?.costPrice]);
 
-  // Calculate average purchase days (interval in days between consecutive purchases)
+  // Calculate average purchase days (interval in days between consecutive purchases, counting only worker presented days)
   const averagePurchaseDays = useMemo(() => {
     const purchaseLogs = materialLogs.filter((log) => log.type === "purchase");
     if (!purchaseLogs || purchaseLogs.length === 0) {
@@ -114,7 +162,34 @@ function RawMaterialDetailsScreen() {
       };
     }
 
+    const hasAttendanceData = (workerAttendance || []).length > 0;
+
     if (timestamps.length === 1) {
+      if (hasAttendanceData) {
+        let presentedSince = 0;
+        const curr = new Date(timestamps[0]);
+        curr.setHours(0, 0, 0, 0);
+        const today = new Date();
+        today.setHours(0, 0, 0, 0);
+        while (curr < today) {
+          const key = formatDateKey(curr);
+          if (presentedDates.has(key)) {
+            presentedSince++;
+          }
+          curr.setDate(curr.getDate() + 1);
+        }
+        return {
+          formatted: "1",
+          unit: "Purchase",
+          subtext: presentedSince === 0
+            ? "Bought today"
+            : presentedSince === 1
+            ? "1 working day ago"
+            : `${presentedSince} working days ago`,
+          daysNumber: null,
+        };
+      }
+
       const daysSince = Math.max(0, Math.floor((Date.now() - timestamps[0]) / (1000 * 60 * 60 * 24)));
       return {
         formatted: "1",
@@ -126,17 +201,41 @@ function RawMaterialDetailsScreen() {
 
     const firstPurchase = timestamps[0];
     const lastPurchase = timestamps[timestamps.length - 1];
-    const totalSpanDays = (lastPurchase - firstPurchase) / (1000 * 60 * 60 * 24);
     const intervalsCount = timestamps.length - 1;
 
-    const avgDays = totalSpanDays / intervalsCount;
+    let avgDays = 0;
+    let totalPresentedDays = 0;
+
+    if (hasAttendanceData) {
+      // Loop calendar days from first purchase to last purchase, counting only presented days
+      const startDate = new Date(firstPurchase);
+      startDate.setHours(0, 0, 0, 0);
+      const endDate = new Date(lastPurchase);
+      endDate.setHours(0, 0, 0, 0);
+
+      const curr = new Date(startDate);
+      while (curr < endDate) {
+        const key = formatDateKey(curr);
+        if (presentedDates.has(key)) {
+          totalPresentedDays++;
+        }
+        curr.setDate(curr.getDate() + 1);
+      }
+      avgDays = totalPresentedDays / intervalsCount;
+    } else {
+      // Graceful fallback to calendar days if attendance was never logged
+      const totalSpanDays = (lastPurchase - firstPurchase) / (1000 * 60 * 60 * 24);
+      avgDays = totalSpanDays / intervalsCount;
+    }
 
     let displayVal = "";
     let unitVal = "Days";
-    if (avgDays < 1) {
-      const hours = Math.round(avgDays * 24);
-      displayVal = hours <= 1 ? "< 1" : `${hours}`;
-      unitVal = hours <= 1 ? "Day" : "Hours";
+    if (avgDays === 0) {
+      displayVal = "0";
+      unitVal = "Days";
+    } else if (avgDays < 1) {
+      displayVal = avgDays.toFixed(1);
+      unitVal = "Day";
     } else if (avgDays < 10) {
       displayVal = avgDays.toFixed(1);
       unitVal = "Days";
@@ -145,13 +244,17 @@ function RawMaterialDetailsScreen() {
       unitVal = "Days";
     }
 
+    const subtext = hasAttendanceData
+      ? `Avg across ${timestamps.length} purchases (${totalPresentedDays} working ${totalPresentedDays === 1 ? "day" : "days"})`
+      : `Avg across ${timestamps.length} purchases`;
+
     return {
       formatted: displayVal,
       unit: unitVal,
-      subtext: `Avg across ${timestamps.length} purchases`,
+      subtext,
       daysNumber: avgDays,
     };
-  }, [materialLogs]);
+  }, [materialLogs, workerAttendance, presentedDates]);
 
   const handleDeleteMaterial = async () => {
     if (!material?.id) return;

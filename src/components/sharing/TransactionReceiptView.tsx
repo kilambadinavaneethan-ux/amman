@@ -24,7 +24,7 @@ function formatCurrency(amount: number | undefined): string {
   return `₹${amount.toLocaleString('en-IN', { minimumFractionDigits: 2, maximumFractionDigits: 2 })}`;
 }
 
-const TransactionReceiptViewComponent: React.ForwardRefRenderFunction<View, Props> = (
+const TransactionReceiptViewComponent: React.ForwardRefRenderFunction<any, Props> = (
   { transaction, settings, template: propTemplate, isDark },
   ref
 ) => {

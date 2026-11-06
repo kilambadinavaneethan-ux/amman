@@ -125,7 +125,7 @@ export default function CustomerProfile() {
   useEffect(() => {
     if (!isLocked) return;
 
-    const unsubscribe = navigation.addListener("beforeRemove", (e: any) => {
+    const unsubscribe = (navigation as any).addListener("beforeRemove", (e: any) => {
       e.preventDefault();
       Alert.alert(
         "🔒 Screen Locked",

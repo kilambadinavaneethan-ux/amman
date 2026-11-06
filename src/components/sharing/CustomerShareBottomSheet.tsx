@@ -66,7 +66,7 @@ export function CustomerShareBottomSheet({
   const [useAvargal, setUseAvargal] = useState<boolean>(false);
   const [editableCustomerName, setEditableCustomerName] = useState<string>('');
 
-  const viewShotRef = useRef<View>(null);
+  const viewShotRef = useRef<any>(null);
 
   useEffect(() => {
     if (visible) {

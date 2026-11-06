@@ -177,7 +177,7 @@ function formatCurrency(amount: number | undefined): string {
   return `₹${Number(amount).toLocaleString('en-IN', { minimumFractionDigits: 2, maximumFractionDigits: 2 })}`;
 }
 
-export const AppaEstimateBillView = React.forwardRef<View, AppaEstimateBillViewProps>(
+export const AppaEstimateBillView = React.forwardRef<any, AppaEstimateBillViewProps>(
   (
     {
       data,

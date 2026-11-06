@@ -68,7 +68,7 @@ export function SignaturePadModal({
     height: 180,
   });
 
-  const canvasRef = useRef<View>(null);
+  const canvasRef = useRef<any>(null);
   const activeStrokeRef = useRef<string>('');
   const canvasOriginRef = useRef<{ x: number; y: number }>({ x: 0, y: 0 });
   const autoSaveTimerRef = useRef<ReturnType<typeof setTimeout> | null>(null);
@@ -88,7 +88,7 @@ export function SignaturePadModal({
   useEffect(() => {
     if (visible) {
       const timer = setTimeout(() => {
-        canvasRef.current?.measureInWindow((x, y, w, h) => {
+        canvasRef.current?.measureInWindow((x: number, y: number, w: number, h: number) => {
           if (w > 0 && h > 0) {
             canvasOriginRef.current = { x, y };
           }
@@ -154,7 +154,7 @@ export function SignaturePadModal({
     if (width > 0 && height > 0) {
       setCanvasDimensions({ width: Math.round(width), height: Math.round(height) });
     }
-    canvasRef.current?.measureInWindow((x, y, w, h) => {
+    canvasRef.current?.measureInWindow((x: number, y: number, w: number, h: number) => {
       if (w > 0 && h > 0) {
         canvasOriginRef.current = { x, y };
       }

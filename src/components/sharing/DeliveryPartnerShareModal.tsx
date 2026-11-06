@@ -67,7 +67,7 @@ export function DeliveryPartnerShareModal({
   const [includeBonuses, setIncludeBonuses] = useState(true);
   const [includePurchasedOrders, setIncludePurchasedOrders] = useState(true);
 
-  const viewShotRef = useRef<View>(null);
+  const viewShotRef = useRef<any>(null);
 
   useEffect(() => {
     if (visible) {

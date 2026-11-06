@@ -756,7 +756,7 @@ export default function Home() {
   // Activity Log Long-Press Profile Details Modal states
   const [selectedActivityProfile, setSelectedActivityProfile] = useState<any>(null);
   const [isActivityProfileModalOpen, setIsActivityProfileModalOpen] = useState(false);
-  const activityCardRef = useRef<View>(null);
+  const activityCardRef = useRef<any>(null);
   const [isSharingImage, setIsSharingImage] = useState(false);
 
   // Re-calculate inventory stock value reactively (active finished products only)

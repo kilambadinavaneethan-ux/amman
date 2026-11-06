@@ -39,7 +39,7 @@ function formatDateTime(dateVal: Date | string): string {
   return `${datePart}\n${timePart}`;
 }
 
-const CustomerStatementViewComponent: React.ForwardRefRenderFunction<View, CustomerStatementViewProps> = (
+const CustomerStatementViewComponent: React.ForwardRefRenderFunction<any, CustomerStatementViewProps> = (
   { data, company = {}, settings, template, isDark = false },
   ref
 ) => {
