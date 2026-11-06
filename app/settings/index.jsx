@@ -66,6 +66,7 @@ function SettingsHome() {
       icon: "account-balance-wallet",
       color: theme.colors.accent.success,
       items: [
+        { label: "Fund Flow Management", icon: "swap-horiz", route: "/settings/fund-flow" },
         { label: "Sales Report Management", icon: "assessment", route: "/settings/sales-reports" },
         { label: "Received Payments", icon: "account-balance-wallet", route: "/received-payments" },
         { label: "Expense Payment Management", icon: "payments", route: "/settings/expense-payments" },

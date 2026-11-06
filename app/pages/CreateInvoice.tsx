@@ -1231,7 +1231,12 @@ export default function CreateInvoice() {
                       <Text style={[styles.itemCardName, active && styles.itemCardNameActive]}>
                         {item.itemName}
                       </Text>
-                      {item.status !== "Inactive" && item.itemType !== "raw_material" ? (
+                      {item.isWastage ? (
+                        <View style={{ flexDirection: "row", alignItems: "center", gap: 4, marginVertical: 2, backgroundColor: "#fffbeb", paddingHorizontal: 6, paddingVertical: 2, borderRadius: 4, alignSelf: "flex-start", borderWidth: 1, borderColor: "#fef3c7" }}>
+                          <MaterialIcons name="recycling" size={11} color="#d97706" />
+                          <Text style={{ fontSize: 9, fontWeight: "800", color: "#b45309", textTransform: "uppercase" }}>Wastage / Scrap</Text>
+                        </View>
+                      ) : item.status !== "Inactive" && item.itemType !== "raw_material" ? (
                         <View style={{ flexDirection: "row", alignItems: "center", gap: 4, marginVertical: 2 }}>
                           <View style={{ width: 6, height: 6, borderRadius: 3, backgroundColor: "#10B981" }} />
                           <Text style={{ fontSize: 9, fontWeight: "700", color: "#10B981", textTransform: "uppercase" }}>Active</Text>

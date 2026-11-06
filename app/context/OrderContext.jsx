@@ -243,10 +243,15 @@ export function OrderProvider({ children }) {
     }
 
     // 3. Delivery Partner offset
-    if (type === "delivery_partner") {
+    if (type === "delivery_partner" || (!type && (customerId.startsWith("partner_") || customerId.startsWith("dp_")))) {
       try {
-        const partnerRef = doc(db, "deliveryPartners", customerId);
-        const snap = await getDoc(partnerRef);
+        const cleanPartnerId = customerId.replace(/^partner_/, "").replace(/^dp_/, "");
+        let partnerRef = doc(db, "deliveryPartners", cleanPartnerId);
+        let snap = await getDoc(partnerRef);
+        if (!snap.exists()) {
+          partnerRef = doc(db, "deliveryPartners", customerId);
+          snap = await getDoc(partnerRef);
+        }
         if (snap.exists()) {
           const data = snap.data();
           const currentPending = Number(data.totalPending || 0);

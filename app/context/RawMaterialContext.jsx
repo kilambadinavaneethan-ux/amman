@@ -12,6 +12,7 @@ import {
 import { createContext, useEffect, useState, useMemo, useCallback } from "react";
 import { useDeferredInit } from "../../hooks/useDeferredInit";
 import { db, normalizeDateValue } from "../../src/config/firebase";
+import { syncWastageStockOnConsumption } from "../../src/services/wastageService";
 
 export const RawMaterialContext = createContext(null);
 
@@ -166,6 +167,20 @@ export function RawMaterialProvider({ children }) {
       });
 
       await batch.commit();
+
+      // Synchronize wastage stock if this transaction is consumption
+      if (txData.type === "consumption" && txData.materialId) {
+        try {
+          await syncWastageStockOnConsumption(
+            txData.materialId,
+            Number(txData.quantity),
+            txData.notes || `Consumption of ${txData.quantity} units`
+          );
+        } catch (wastageErr) {
+          console.error("Error syncing wastage on consumption:", wastageErr);
+        }
+      }
+
       return true;
     } catch (error) {
       throw error;
@@ -266,6 +281,20 @@ export function RawMaterialProvider({ children }) {
       // 3. Delete the log entry
       batch.delete(logRef);
       await batch.commit();
+
+      // Synchronize wastage stock rollback if this deleted transaction was consumption
+      if (logData.type === "consumption" && logData.materialId) {
+        try {
+          await syncWastageStockOnConsumption(
+            logData.materialId,
+            -Number(logData.quantity),
+            `Rollback: deleted consumption log of ${logData.quantity}`
+          );
+        } catch (wastageErr) {
+          console.error("Error rolling back wastage on log delete:", wastageErr);
+        }
+      }
+
       return true;
     } catch (error) {
       return false;
@@ -494,6 +523,25 @@ export function RawMaterialProvider({ children }) {
       });
 
       await batch.commit();
+
+      if (oldData.type === "consumption") {
+        const oldQty = Number(oldData.quantity || 0);
+        const newQty = Number(
+          updatedData.quantity !== undefined ? updatedData.quantity : oldQty
+        );
+        const diff = newQty - oldQty;
+        if (diff !== 0 && oldData.materialId) {
+          try {
+            await syncWastageStockOnConsumption(
+              oldData.materialId,
+              diff,
+              `Consumption quantity updated (${oldQty} -> ${newQty})`
+            );
+          } catch (wastageErr) {
+            console.error("Error updating wastage on transaction edit:", wastageErr);
+          }
+        }
+      }
 
       setLogs((prev) =>
         prev.map((l) =>

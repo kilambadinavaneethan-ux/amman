@@ -1,11 +1,12 @@
 import React, { useContext, useState, useMemo } from "react";
-import { View, Text, StyleSheet, ScrollView, TextInput, Pressable, ActivityIndicator } from "react-native";
+import { View, Text, StyleSheet, ScrollView, TextInput, Pressable, ActivityIndicator, Switch } from "react-native";
 import { useRouter } from "expo-router";
 import { MaterialIcons } from "@expo/vector-icons";
 import { ItemContext } from "../../context/ItemContext";
 import ProtectedRoute from "../../components/ProtectedRoute";
 import BackButton from "../../components/BackButton";
 import { useTheme } from "../../context/ThemeContext";
+import { createOrUpdateWastageProduct } from "../../../src/services/wastageService";
 
 const UNITS = [
   { label: "Bag", value: "bag" },
@@ -21,7 +22,7 @@ function AddRawMaterialScreen() {
   const { colors, spacing, radius, shadows } = theme;
   const styles = useMemo(() => getStyles(theme), [theme]);
   const router = useRouter();
-  const { addItem } = useContext(ItemContext);
+  const { addItem, updateItem } = useContext(ItemContext);
 
   const [itemName, setItemName] = useState("");
   const [selectedUnit, setSelectedUnit] = useState("bag");
@@ -30,8 +31,36 @@ function AddRawMaterialScreen() {
   const [reorderLevel, setReorderLevel] = useState("5");
   const [description, setDescription] = useState("");
 
+  // Wastage Tracking State (Default OFF)
+  const [isWastageEnabled, setIsWastageEnabled] = useState(false);
+  const [wastageName, setWastageName] = useState("");
+  const [wastageSellingRate, setWastageSellingRate] = useState("0");
+  const [wastageNameManuallyEdited, setWastageNameManuallyEdited] = useState(false);
+
   const [saving, setSaving] = useState(false);
   const [error, setError] = useState("");
+
+  const handleItemNameChange = (text) => {
+    setItemName(text);
+    if (!wastageNameManuallyEdited && isWastageEnabled) {
+      if (text.toLowerCase().includes("cement")) {
+        setWastageName("Cement Bag Wastage");
+      } else {
+        setWastageName(text.trim() ? `${text.trim()} Wastage` : "");
+      }
+    }
+  };
+
+  const handleWastageToggle = (enabled) => {
+    setIsWastageEnabled(enabled);
+    if (enabled && !wastageName) {
+      if (itemName.toLowerCase().includes("cement")) {
+        setWastageName("Cement Bag Wastage");
+      } else {
+        setWastageName(itemName.trim() ? `${itemName.trim()} Wastage` : "Cement Bag Wastage");
+      }
+    }
+  };
 
   const handleSave = async () => {
     setError("");
@@ -59,9 +88,17 @@ function AddRawMaterialScreen() {
       return;
     }
 
+    if (isWastageEnabled && !wastageName.trim()) {
+      setError("Wastage Name is required when Wastage Tracking is ON.");
+      return;
+    }
+
     setSaving(true);
 
     try {
+      const finalWastageName = isWastageEnabled ? wastageName.trim() : "";
+      const finalWastageRate = isWastageEnabled ? parseFloat(wastageSellingRate) || 0 : 0;
+
       const itemId = await addItem({
         itemName: itemName.trim(),
         itemType: "raw_material",
@@ -71,9 +108,26 @@ function AddRawMaterialScreen() {
         openingStock: openStockVal,
         reorderLevel: reorderVal,
         description: description.trim(),
+        trackWastage: isWastageEnabled,
+        wastageName: finalWastageName,
+        wastageSellingRate: finalWastageRate,
       });
 
       if (itemId) {
+        if (isWastageEnabled) {
+          const wastageProductId = await createOrUpdateWastageProduct(
+            itemId,
+            itemName.trim(),
+            finalWastageName,
+            true,
+            finalWastageRate,
+            undefined,
+            selectedUnit
+          );
+          if (wastageProductId && updateItem) {
+            await updateItem(itemId, { wastageItemId: wastageProductId });
+          }
+        }
         router.push("/settings/raw-materials");
       } else {
         setError("Failed to register raw material in the database.");
@@ -115,7 +169,7 @@ function AddRawMaterialScreen() {
         <TextInput
           style={styles.input}
           value={itemName}
-          onChangeText={setItemName}
+          onChangeText={handleItemNameChange}
           placeholder="e.g. Cement (Birla), River Sand, Gravel 10mm"
           placeholderTextColor={colors.text.muted}
           editable={!saving}
@@ -195,6 +249,62 @@ function AddRawMaterialScreen() {
           textAlignVertical="top"
           editable={!saving}
         />
+
+        {/* Wastage Tracking Card */}
+        <View style={styles.wastageCard}>
+          <View style={styles.wastageHeader}>
+            <View style={[styles.wastageIconWrap, isWastageEnabled && styles.wastageIconWrapActive]}>
+              <MaterialIcons
+                name="recycling"
+                size={22}
+                color={isWastageEnabled ? colors.accent.warning : colors.text.muted}
+              />
+            </View>
+            <View style={{ flex: 1 }}>
+              <Text style={styles.wastageTitle}>Wastage Tracking</Text>
+              <Text style={styles.wastageDesc}>
+                Auto-generate sellable waste (e.g. empty bags) when this raw material is used.
+              </Text>
+            </View>
+            <Switch
+              value={isWastageEnabled}
+              onValueChange={handleWastageToggle}
+              trackColor={{ false: colors.border.medium, true: colors.accent.primary }}
+              thumbColor="#FFFFFF"
+            />
+          </View>
+
+          {isWastageEnabled && (
+            <View style={styles.wastageExpanded}>
+              <Text style={styles.label}>Wastage Item Name (Shown in + Bill) *</Text>
+              <TextInput
+                style={styles.input}
+                value={wastageName}
+                onChangeText={(text) => {
+                  setWastageName(text);
+                  setWastageNameManuallyEdited(true);
+                }}
+                placeholder="e.g. Cement Bag Wastage, Empty Cement Bags"
+                placeholderTextColor={colors.text.muted}
+                editable={!saving}
+              />
+              <Text style={styles.helperText}>
+                This name will show under &quot;2. Product details&quot; in + Bill / Invoice with live accumulated stock.
+              </Text>
+
+              <Text style={[styles.label, { marginTop: 12 }]}>Wastage Selling Rate (₹ / Unit)</Text>
+              <TextInput
+                style={styles.input}
+                value={wastageSellingRate}
+                onChangeText={setWastageSellingRate}
+                placeholder="0.00"
+                placeholderTextColor={colors.text.muted}
+                keyboardType="numeric"
+                editable={!saving}
+              />
+            </View>
+          )}
+        </View>
 
         <Pressable
           style={({ pressed }) => [styles.saveBtn, pressed && styles.buttonPressed, saving && styles.saveBtnDisabled]}
@@ -363,6 +473,55 @@ const getStyles = (theme) => {
   },
   buttonPressed: {
     opacity: 0.85,
+  },
+  wastageCard: {
+    backgroundColor: colors.bg.primary,
+    borderWidth: 1.5,
+    borderColor: colors.border.subtle,
+    borderRadius: 14,
+    padding: 14,
+    gap: 12,
+  },
+  wastageHeader: {
+    flexDirection: "row",
+    alignItems: "center",
+    gap: 12,
+  },
+  wastageIconWrap: {
+    width: 40,
+    height: 40,
+    borderRadius: 20,
+    backgroundColor: colors.bg.card,
+    justifyContent: "center",
+    alignItems: "center",
+    borderWidth: 1,
+    borderColor: colors.border.subtle,
+  },
+  wastageIconWrapActive: {
+    backgroundColor: "#fffbeb",
+    borderColor: "#fde68a",
+  },
+  wastageTitle: {
+    fontSize: 14,
+    fontWeight: "700",
+    color: colors.text.primary,
+  },
+  wastageDesc: {
+    fontSize: 11.5,
+    color: colors.text.muted,
+    marginTop: 2,
+    lineHeight: 16,
+  },
+  wastageExpanded: {
+    paddingTop: 10,
+    borderTopWidth: 1,
+    borderTopColor: colors.border.subtle,
+    gap: 8,
+  },
+  helperText: {
+    fontSize: 11,
+    color: colors.text.muted,
+    lineHeight: 15,
   },
 })
 };

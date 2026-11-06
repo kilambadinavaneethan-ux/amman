@@ -23,6 +23,11 @@ import * as Sharing from "expo-sharing";
 import { captureRef } from "react-native-view-shot";
 import Animated, {
     FadeInDown,
+    FadeInLeft,
+    useAnimatedStyle,
+    useSharedValue,
+    withSequence,
+    withTiming,
 } from "react-native-reanimated";
 import { db } from "../../src/config/firebase";
 import { onSnapshot, doc, setDoc } from "firebase/firestore";
@@ -56,6 +61,24 @@ export default function Home() {
   const styles = useMemo(() => getStyles(theme), [theme]);
   const { scrollViewRef, handleScroll, handleContentSizeChange } = useScrollRestoration("/");
   const _deferReady = useDeferredInit();
+
+  // Executive greeting wave animation
+  const waveRotation = useSharedValue(0);
+
+  useEffect(() => {
+    waveRotation.value = withSequence(
+      withTiming(20, { duration: 180 }),
+      withTiming(-14, { duration: 180 }),
+      withTiming(20, { duration: 180 }),
+      withTiming(-10, { duration: 180 }),
+      withTiming(14, { duration: 180 }),
+      withTiming(0, { duration: 180 })
+    );
+  }, []);
+
+  const waveAnimatedStyle = useAnimatedStyle(() => ({
+    transform: [{ rotate: `${waveRotation.value}deg` }],
+  }));
 
   // Retrieve values from Firebase-backed contexts
   const { orders, todaySales, deleteOrder, editOrder } = useContext(OrderContext) as any;
@@ -2610,10 +2633,17 @@ export default function Home() {
       >
         {/* Welcome Section */}
         <View style={[styles.heroSection, { flexDirection: "row", justifyContent: "space-between", alignItems: "center" }]}>
-          <View>
-            <Text style={styles.welcomeText}>Hello Manager 👋</Text>
-            <Text style={styles.syncText}>{syncTime}</Text>
-          </View>
+          <Animated.View entering={FadeInLeft.duration(500).springify()}>
+            <View style={{ flexDirection: "row", alignItems: "center", gap: 6 }}>
+              <Text style={styles.welcomeText}>Hello Boss</Text>
+              <Animated.Text style={[styles.welcomeEmoji, waveAnimatedStyle]}>
+                👋
+              </Animated.Text>
+            </View>
+            <Animated.View entering={FadeInDown.duration(400).delay(100)}>
+              <Text style={styles.syncText}>{syncTime}</Text>
+            </Animated.View>
+          </Animated.View>
 
           <Pressable
             style={({ pressed }) => [
@@ -8182,6 +8212,10 @@ const getStyles = (theme: any) => {
     fontWeight: "800",
     color: colors.text.primary,
     letterSpacing: -0.5,
+  },
+  welcomeEmoji: {
+    fontSize: 24,
+    includeFontPadding: false,
   },
   syncText: {
     fontSize: 13,

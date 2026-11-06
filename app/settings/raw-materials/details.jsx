@@ -110,6 +110,16 @@ function RawMaterialDetailsScreen() {
   const reorderThreshold = Number(material?.reorderLevel !== undefined ? material.reorderLevel : 5);
   const unitSuffix = material?.rateType || "unit";
 
+  // Linked wastage product for this raw material (if wastage tracking is enabled)
+  const linkedWastageProduct = useMemo(() => {
+    if (!material?.trackWastage) return null;
+    return (items || []).find(
+      (itm) =>
+        itm.id === material.wastageItemId ||
+        (itm.rawMaterialId === material.id && itm.isWastage)
+    );
+  }, [items, material]);
+
   // Calculate total stock purchased/bought
   const totalStockBought = useMemo(() => {
     return materialLogs
@@ -764,6 +774,36 @@ function RawMaterialDetailsScreen() {
             <Text style={styles.descText}>{material.description}</Text>
           </View>
         ) : null}
+
+        {material.trackWastage && (
+          <View style={styles.wastageOverviewCard}>
+            <View style={styles.wastageOverviewHeader}>
+              <View style={styles.wastageOverviewIcon}>
+                <MaterialIcons name="recycling" size={20} color="#d97706" />
+              </View>
+              <View style={{ flex: 1 }}>
+                <Text style={styles.wastageOverviewTitle}>Wastage Tracking Active</Text>
+                <Text style={styles.wastageOverviewSub}>
+                  Shown in + Bill as: <Text style={{ fontWeight: "700", color: colors.text.primary }}>{material.wastageName || linkedWastageProduct?.itemName || "Wastage"}</Text>
+                </Text>
+              </View>
+            </View>
+            <View style={styles.wastageOverviewStats}>
+              <View style={styles.wastageStatBox}>
+                <Text style={styles.wastageStatLabel}>Available Wastage Stock</Text>
+                <Text style={styles.wastageStatValue}>
+                  {Number(linkedWastageProduct?.openingStock !== undefined ? linkedWastageProduct.openingStock : (linkedWastageProduct?.stock || 0))} {linkedWastageProduct?.rateType || "units"}
+                </Text>
+              </View>
+              <View style={styles.wastageStatBox}>
+                <Text style={styles.wastageStatLabel}>Billing Rate</Text>
+                <Text style={styles.wastageStatValue}>
+                  ₹{Number(linkedWastageProduct?.sellingRate || 0)}
+                </Text>
+              </View>
+            </View>
+          </View>
+        )}
       </View>
 
       {/* Stock Transaction Actions */}
@@ -1354,6 +1394,60 @@ const getStyles = (theme) => {
     fontSize: 14,
     color: colors.text.secondary,
     lineHeight: 20,
+  },
+  wastageOverviewCard: {
+    marginTop: 12,
+    backgroundColor: "#fffbeb",
+    borderWidth: 1,
+    borderColor: "#fde68a",
+    borderRadius: 12,
+    padding: 12,
+    gap: 10,
+  },
+  wastageOverviewHeader: {
+    flexDirection: "row",
+    alignItems: "center",
+    gap: 10,
+  },
+  wastageOverviewIcon: {
+    width: 34,
+    height: 34,
+    borderRadius: 17,
+    backgroundColor: "#fef3c7",
+    justifyContent: "center",
+    alignItems: "center",
+  },
+  wastageOverviewTitle: {
+    fontSize: 13,
+    fontWeight: "700",
+    color: "#b45309",
+  },
+  wastageOverviewSub: {
+    fontSize: 12,
+    color: colors.text.secondary,
+    marginTop: 1,
+  },
+  wastageOverviewStats: {
+    flexDirection: "row",
+    gap: 10,
+    backgroundColor: colors.bg.card,
+    borderRadius: 8,
+    padding: 8,
+  },
+  wastageStatBox: {
+    flex: 1,
+  },
+  wastageStatLabel: {
+    fontSize: 10,
+    fontWeight: "700",
+    color: colors.text.muted,
+    textTransform: "uppercase",
+  },
+  wastageStatValue: {
+    fontSize: 14,
+    fontWeight: "800",
+    color: "#b45309",
+    marginTop: 2,
   },
   sectionTitle: {
     fontSize: 14,

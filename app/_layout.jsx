@@ -38,6 +38,8 @@ LogBox.ignoreLogs([
   "Firestore has already been started",
   "BloomFilter error",
   "BloomFilterError",
+  "[expo-notifications] Push notifications",
+  "`expo-notifications` functionality is not fully supported",
 ]);
 
 // Intercept Firestore shutting down and other transient errors to prevent red screen crashes in development
@@ -129,7 +131,12 @@ console.warn = (...args) => {
     })
     .join(" ");
 
-  if (message.includes("BloomFilter error") || message.includes("BloomFilterError")) {
+  if (
+    message.includes("BloomFilter error") ||
+    message.includes("BloomFilterError") ||
+    message.includes("[expo-notifications] Push notifications") ||
+    message.includes("`expo-notifications` functionality is not fully supported")
+  ) {
     return;
   }
   originalConsoleWarn(...args);

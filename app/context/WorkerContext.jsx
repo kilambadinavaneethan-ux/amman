@@ -14,6 +14,7 @@ import { createContext, useEffect, useState, useMemo } from "react";
 import { useDeferredInit } from "../../hooks/useDeferredInit";
 import { db, normalizeDateValue } from "../../src/config/firebase";
 import { getDocsOfflineSafe } from "../../src/utils/offlineHelpers";
+import { syncWastageStockOnConsumption } from "../../src/services/wastageService";
 
 export const WorkerContext = createContext(null);
 
@@ -655,6 +656,21 @@ export function WorkerProvider({ children }) {
             date: new Date(),
             createdAt: new Date(),
           });
+
+          // Sync linked wastage stock (e.g. 2 cement bags used = 2 wastage bags)
+          if (rmData.trackWastage) {
+            try {
+              await syncWastageStockOnConsumption(
+                rmDoc.id,
+                diffPieces,
+                diffPieces > 0
+                  ? `Wastage added from worker piece-rate production of ${diffPieces} bags`
+                  : `Wastage rollback from worker attendance adjustment (${diffPieces} bags)`
+              );
+            } catch (wErr) {
+              console.error("Error syncing wastage on worker attendance auto-deduction:", wErr);
+            }
+          }
         }
 
         if (attendanceId) {

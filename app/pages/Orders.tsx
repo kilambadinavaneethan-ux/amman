@@ -3946,6 +3946,12 @@ export default function Orders() {
                               >
                                 {item.itemName} {item.status === "Inactive" ? "(Inactive)" : ""}
                               </Text>
+                              {item.isWastage && (
+                                <View style={{ flexDirection: "row", alignItems: "center", gap: 3, marginTop: 2, backgroundColor: "#fffbeb", paddingHorizontal: 5, paddingVertical: 1, borderRadius: 4, alignSelf: "flex-start" }}>
+                                  <MaterialIcons name="recycling" size={10} color="#d97706" />
+                                  <Text style={{ fontSize: 8.5, fontWeight: "800", color: "#b45309", textTransform: "uppercase" }}>Wastage</Text>
+                                </View>
+                              )}
                               <View style={{ flexDirection: "row", alignItems: "center", gap: 3, marginTop: 3 }}>
                                 <View style={{ width: 6, height: 6, borderRadius: 3, backgroundColor: stockColor }} />
                                 <Text style={[styles.itemCardStock, { color: stockColor, marginTop: 0 }]}>

@@ -387,6 +387,121 @@ export default function ExpenseBalances() {
     });
   }, [attendanceLoaded, workers, workerFinancialsMap]);
 
+  // Live financial metrics for Delivery Partners matching details.jsx & accounting ledger
+  const deliveryFinancialsMap = useMemo(() => {
+    const map = new Map<string, {
+      totalEarned: number;
+      totalPaid: number;
+      productOrderDue: number;
+      pending: number;
+      isAdvance: boolean;
+      effectiveAdvance: number;
+    }>();
+
+    (deliveryPartners || []).forEach((partner: any) => {
+      const pId = String(partner.id);
+
+      // 1. Delivery Trips Earnings (Base freight + loading + unloading)
+      const tripsForPartner = (deliveryTrips || []).filter((t: any) => String(t.partnerId) === pId);
+      const tripEarnings = tripsForPartner.reduce((sum: number, t: any) => {
+        const load = Number(t.loadingCharge || 0);
+        const unload = Number(t.unloadingCharge || 0);
+        let base = 0;
+        if (t.baseDeliveryCharge !== undefined && t.baseDeliveryCharge !== null) {
+          base = Number(t.baseDeliveryCharge);
+        } else if (t.deliveryCharge !== undefined && t.deliveryCharge !== null) {
+          const rawDelCharge = Number(t.deliveryCharge || 0);
+          base = rawDelCharge >= load + unload ? rawDelCharge - load - unload : rawDelCharge;
+        }
+        const total = (t.deliveryCharge !== undefined && Number(t.deliveryCharge) > 0)
+          ? Math.max(Number(t.deliveryCharge), base + load + unload)
+          : (base + load + unload);
+        return sum + total;
+      }, 0);
+
+      // 2. Driver Bonuses
+      const bonusEarned = (deliveryBonuses || [])
+        .filter((b: any) => String(b.partnerId) === pId)
+        .reduce((sum: number, b: any) => sum + Number(b.amount || 0), 0);
+
+      // 3. Total Earned / Payable
+      const totalEarned = tripEarnings + bonusEarned;
+
+      // 4. Net Driver Payouts Paid (Payouts - Repayments)
+      let grossDisbursed = 0;
+      let grossRepaid = 0;
+      (deliveryPayments || [])
+        .filter((p: any) => String(p.partnerId) === pId)
+        .forEach((p: any) => {
+          const rawAmt = Number(p.amount || 0);
+          const isRepay = p.isRepayment || rawAmt < 0;
+          const absAmt = Math.abs(rawAmt);
+          if (isRepay) grossRepaid += absAmt;
+          else grossDisbursed += absAmt;
+        });
+      const totalPaid = grossDisbursed - grossRepaid;
+
+      // 5. Product Orders Purchased by the Delivery Partner as Customer
+      const productOrders = (orders || []).filter(
+        (o: any) =>
+          String(o.customerId) === pId ||
+          String(o.customerId) === `partner_${pId}` ||
+          String(o.customerId) === `dp_${pId}`
+      );
+      const productOrderDue = productOrders.reduce((sum: number, o: any) => {
+        const balDue = o.balanceDue !== undefined && o.balanceDue !== null
+          ? Number(o.balanceDue)
+          : Math.max(0, Number(o.total || 0) - Number(o.paidAmount || 0));
+        return sum + balDue;
+      }, 0);
+
+      // 6. Net Pending Due & Advance (Wages earned - Payouts paid - Product purchases offset)
+      const pending = totalEarned - totalPaid - productOrderDue;
+      const isAdvance = pending < 0;
+      const effectiveAdvance = isAdvance ? Math.abs(pending) : 0;
+
+      map.set(partner.id, {
+        totalEarned,
+        totalPaid,
+        productOrderDue,
+        pending,
+        isAdvance,
+        effectiveAdvance,
+      });
+    });
+
+    return map;
+  }, [deliveryPartners, deliveryTrips, deliveryBonuses, deliveryPayments, orders]);
+
+  // Self-heal any divergent delivery partner totals in Firestore to keep other screens in sync
+  useEffect(() => {
+    if (!deliveryPartners || deliveryPartners.length === 0) return;
+    (deliveryPartners || []).forEach(async (p: any) => {
+      const fin = deliveryFinancialsMap.get(p.id);
+      if (!fin) return;
+      const curEarned = Number(p.totalPayable || 0);
+      const curPaid = Number(p.totalPaid || 0);
+      const curPending = p.totalPending !== undefined ? Number(p.totalPending) : (curEarned - curPaid - fin.productOrderDue);
+      if (
+        Math.abs(curEarned - fin.totalEarned) > 0.01 ||
+        Math.abs(curPaid - fin.totalPaid) > 0.01 ||
+        Math.abs(curPending - fin.pending) > 0.01
+      ) {
+        try {
+          const pRef = doc(db, "deliveryPartners", p.id);
+          await updateDoc(pRef, {
+            totalPayable: fin.totalEarned,
+            totalPaid: fin.totalPaid,
+            totalPending: fin.pending,
+            updatedAt: new Date(),
+          });
+        } catch (e) {
+          console.log("Delivery partner self-healing sync error:", e);
+        }
+      }
+    });
+  }, [deliveryPartners, deliveryFinancialsMap]);
+
   const parseDate = (val: any) => {
     if (!val) return new Date();
     if (val instanceof Date) return val;
@@ -558,12 +673,13 @@ export default function ExpenseBalances() {
     let outstanding = 0;
     let advance = 0;
     (deliveryPartners || []).forEach((p: any) => {
-      const pend = Number(p.totalPending || 0);
+      const fin = deliveryFinancialsMap.get(p.id);
+      const pend = fin ? fin.pending : Number(p.totalPending || 0);
       if (pend > 0) outstanding += pend;
       else if (pend < 0) advance += Math.abs(pend);
     });
     return { totalDeliveryPending: outstanding, totalDeliveryAdvance: advance };
-  }, [deliveryPartners]);
+  }, [deliveryPartners, deliveryFinancialsMap]);
 
   const totalAdvancePaid = useMemo(() => totalExpenseAdvance + totalSupplierAdvance + totalWorkerAdvance + totalDeliveryAdvance, [totalExpenseAdvance, totalSupplierAdvance, totalWorkerAdvance, totalDeliveryAdvance]);
 
@@ -597,13 +713,15 @@ export default function ExpenseBalances() {
 
   // Filter delivery partners (pending balance, advance paid, or search match)
   const pendingDeliveries = useMemo(() => (deliveryPartners || []).filter((p: any) => {
-    const pending = Number(p.totalPending || 0);
+    const fin = deliveryFinancialsMap.get(p.id);
+    const pending = fin ? fin.pending : Number(p.totalPending || 0);
     const matchesSearch =
       !searchQuery ||
       p.name?.toLowerCase().includes(searchQuery.toLowerCase()) ||
-      p.phone?.toLowerCase().includes(searchQuery.toLowerCase());
-    return (pending !== 0 || searchQuery.trim() !== "") && p.status === "Active" && matchesSearch;
-  }), [deliveryPartners, searchQuery]);
+      p.phone?.toLowerCase().includes(searchQuery.toLowerCase()) ||
+      p.vehicleNo?.toLowerCase().includes(searchQuery.toLowerCase());
+    return (pending !== 0 || searchQuery.trim() !== "") && (p.status === "Active" || !p.status) && matchesSearch;
+  }), [deliveryPartners, deliveryFinancialsMap, searchQuery]);
 
   const todayStart = useMemo(() => {
     const d = new Date();
@@ -720,12 +838,15 @@ export default function ExpenseBalances() {
     setPayDate(new Date());
     setIsRepayMode(initialRepayMode);
 
+    const delivFin = type === "delivery" ? deliveryFinancialsMap.get(effectiveTarget.id) : null;
+    const partnerPending = delivFin ? delivFin.pending : Number(effectiveTarget.totalPending || 0);
+
     const isAdvanceOrRepay = initialRepayMode || (
       type === "supplier" && Number(effectiveTarget.balance || 0) < 0
     ) || (
       type === "worker" && ((effectiveTarget.totalPending !== undefined ? Number(effectiveTarget.totalPending) : (Number(effectiveTarget.totalWages || 0) - Number(effectiveTarget.totalPaid || 0))) < 0 || Number(effectiveTarget.advanceAmount || 0) > 0)
     ) || (
-      type === "delivery" && Number(effectiveTarget.totalPending || 0) < 0
+      type === "delivery" && partnerPending < 0
     );
 
     if (isAdvanceOrRepay) {
@@ -739,7 +860,7 @@ export default function ExpenseBalances() {
         const workerPending = effectiveTarget.totalPending !== undefined ? Number(effectiveTarget.totalPending) : (Number(effectiveTarget.totalWages || 0) - Number(effectiveTarget.totalPaid || 0));
         setPayAmount(String(workerPending > 0 ? workerPending : ""));
       } else if (type === "delivery") {
-        setPayAmount(String(effectiveTarget.totalPending || ""));
+        setPayAmount(String(partnerPending > 0 ? partnerPending : ""));
       }
     }
 
@@ -1405,6 +1526,48 @@ export default function ExpenseBalances() {
         });
       });
 
+      // Product Orders Purchased by Delivery Partner as Customer
+      (orders || []).forEach((o: any) => {
+        if (
+          String(o.customerId) === String(pId) ||
+          String(o.customerId) === `partner_${pId}` ||
+          String(o.customerId) === `dp_${pId}`
+        ) {
+          const d = parseDate(o.createdAt || o.date);
+          const total = Number(o.total || 0);
+          const paid = Number(o.paidAmount || 0);
+          const balDue = o.balanceDue !== undefined && o.balanceDue !== null ? Number(o.balanceDue) : Math.max(0, total - paid);
+          // In double-entry partner accounting, product orders purchased by the delivery partner offset/reduce what the business owes them.
+          // Therefore, the unpaid order amount is a debit (Dr / deduction) against the partner's balance.
+          const orderOffset = balDue > 0 ? balDue : (paid === 0 ? total : 0);
+          const totalQty = o.items && o.items.length > 0
+            ? o.items.reduce((s: number, itm: any) => s + Number(itm.quantity || 0), 0)
+            : Number(o.quantity || 0);
+
+          let subtitle = `${totalQty > 0 ? `${totalQty.toLocaleString("en-IN")} pcs` : ""}${o.itemName ? ` • ${o.itemName}` : ""}`;
+          if (paid > 0) subtitle += ` • Paid: ₹${paid.toLocaleString("en-IN")}`;
+          if (balDue > 0) subtitle += ` • Due: ₹${balDue.toLocaleString("en-IN")}`;
+          if (o.notes) subtitle += ` • ${o.notes}`;
+
+          rawEntries.push({
+            id: `order-${o.id}`,
+            date: d,
+            type: "order",
+            title: `Product Purchase #${o.id ? o.id.slice(-6).toUpperCase() : ""}`,
+            subtitle,
+            creditAmount: 0,
+            debitAmount: orderOffset,
+            incurredAmount: 0,
+            paidAmount: orderOffset,
+            orderTotal: total,
+            orderPaid: paid,
+            orderBalanceDue: balDue,
+            notes: o.notes || "",
+            raw: o,
+          });
+        }
+      });
+
       rawEntries.sort((a, b) => a.date.getTime() - b.date.getTime());
 
       let running = 0;
@@ -1413,6 +1576,8 @@ export default function ExpenseBalances() {
       let baseFreight = 0;
       let loadUnload = 0;
       let bonusEarned = 0;
+      let totalOrderOffsets = 0;
+      let totalPaidDirect = 0;
 
       const ledger = rawEntries.map((entry) => {
         const cr = Number(entry.creditAmount || 0);
@@ -1423,8 +1588,13 @@ export default function ExpenseBalances() {
           const lu = Number(entry.loadingUnloading !== undefined ? entry.loadingUnloading : (cr - b));
           baseFreight += b;
           loadUnload += lu;
+        } else if (entry.type === "bonus") {
+          bonusEarned += cr;
+        } else if (entry.type === "payment") {
+          totalPaidDirect += dr;
+        } else if (entry.type === "order") {
+          totalOrderOffsets += dr;
         }
-        if (entry.type === "bonus") bonusEarned += cr;
 
         totalCredit += cr;
         totalDebit += dr;
@@ -1440,7 +1610,8 @@ export default function ExpenseBalances() {
       });
 
       const displayLedger = [...ledger].reverse();
-      const pending = Number(target.totalPending !== undefined ? target.totalPending : (totalCredit - totalDebit));
+      const fin = deliveryFinancialsMap.get(target.id);
+      const pending = fin ? fin.pending : (totalCredit - totalDebit);
       const isAdvance = pending < 0;
 
       return {
@@ -1453,20 +1624,22 @@ export default function ExpenseBalances() {
         totalPaid: totalDebit,
         totalCredit,
         totalDebit,
+        totalOrderOffsets,
+        totalPaidDirect,
         ledger,
         displayLedger,
         breakdownStats: [
           { label: "Base Trip Freight (Cr)", value: baseFreight, icon: "local-shipping", color: colors.accent.info },
           ...(loadUnload > 0 ? [{ label: "Loading / Unloading (Cr)", value: loadUnload, icon: "inventory-2", color: "#8b5cf6" }] : []),
           ...(bonusEarned > 0 ? [{ label: "Driver Bonuses (Cr)", value: bonusEarned, icon: "stars", color: "#f59e0b" }] : []),
-          { label: "Total Paid (Dr)", value: totalDebit, icon: "payments", color: colors.accent.success },
+          { label: "Driver Payouts Paid (Dr)", value: totalPaidDirect, icon: "payments", color: colors.accent.success },
           { label: isAdvance ? "Advance Paid (Dr)" : "Balance Due (Cr)", value: Math.abs(pending), icon: "account-balance-wallet", color: isAdvance ? colors.accent.success : colors.accent.danger },
         ],
       };
     }
 
     return null;
-  }, [logs, orders, workerAttendance, workerPayments, workerBonuses, deliveryTrips, deliveryPayments, deliveryBonuses, workerFinancialsMap, colors]);
+  }, [logs, orders, workerAttendance, workerPayments, workerBonuses, deliveryTrips, deliveryPayments, deliveryBonuses, workerFinancialsMap, deliveryFinancialsMap, colors]);
 
   const calcAccountDetails = useMemo(() => {
     if (!calcTarget || !calcTargetType) return null;
@@ -1477,15 +1650,15 @@ export default function ExpenseBalances() {
   const buildAccountShareData = React.useCallback((target: any, type: "supplier" | "worker" | "delivery", details: any): CustomerShareData => {
     const rawLedger = details?.ledger || [];
     const ledger = rawLedger.map((entry: any, idx: number) => {
-      const isSupplierOrder = type === "supplier" && entry.type === "order";
+      const isOrderOffset = (type === "supplier" || type === "delivery") && entry.type === "order";
       const isAdjustmentReduction = type === "supplier" && entry.type === "adjustment" && Number(entry.debitAmount || 0) > 0;
       // In the share statement (CustomerStatementView & AppaEstimateBillView):
       // - 'order' items are placed in the Debit (+) column (increases balance due)
       // - 'payment' items are placed in the Credit (-) column (reduces balance due)
-      // For a supplier statement:
-      // Product orders and adjustment reductions taken by the supplier offset/reduce what the business owes the supplier.
+      // For a supplier or delivery partner statement:
+      // Product orders and adjustment reductions taken by the partner offset/reduce what the business owes them.
       // Therefore, they must calculate to Credit (-), not Debit (+).
-      const isCreditReduction = (entry.debitAmount > 0 && (!entry.creditAmount || entry.creditAmount === 0)) || isSupplierOrder || isAdjustmentReduction;
+      const isCreditReduction = (entry.debitAmount > 0 && (!entry.creditAmount || entry.creditAmount === 0)) || isOrderOffset || isAdjustmentReduction;
 
       const isOpening = entry.type === "opening" || (entry.type === "adjustment" && String(entry.id).startsWith("opening-"));
 
@@ -2307,9 +2480,11 @@ export default function ExpenseBalances() {
                       Delivery Partner Accounts ({pendingDeliveries.length})
                     </Text>
                     {pendingDeliveries.map((partner: any, index: number) => {
-                      const pending = Number(partner.totalPending || 0);
-                      const totalPaid = Number(partner.totalPaid || 0);
-                      const totalEarned = Number(partner.totalPayable || 0);
+                      const fin = deliveryFinancialsMap.get(partner.id);
+                      const pending = fin ? fin.pending : Number(partner.totalPending || 0);
+                      const totalPaid = fin ? fin.totalPaid : Number(partner.totalPaid || 0);
+                      const totalEarned = fin ? fin.totalEarned : Number(partner.totalPayable || 0);
+                      const productPurchasesDue = fin ? fin.productOrderDue : 0;
 
                       return (
                         <Animated.View
@@ -2337,7 +2512,7 @@ export default function ExpenseBalances() {
                                   </View>
                                 </View>
                                 <Text style={styles.categoryLabel} numberOfLines={1}>
-                                  Vehicle: {partner.vehicleNo || "N/A"} • Phone: {partner.phone || "N/A"}
+                                  Vehicle: {partner.vehicleNo || partner.vehicleNumber || "N/A"} • Phone: {partner.phone || partner.mobile || "N/A"}
                                 </Text>
                               </View>
                               <MaterialIcons name="chevron-right" size={20} color="#363B4D" />
@@ -2781,7 +2956,8 @@ export default function ExpenseBalances() {
                       const fin = workerFinancialsMap.get(selectedTarget.id);
                       rem = fin ? fin.pending : (Number(selectedTarget.totalWages || 0) - Number(selectedTarget.totalPaid || 0));
                     } else if (payTargetType === "delivery") {
-                      rem = Number(selectedTarget.totalPending || 0);
+                      const delivFin = deliveryFinancialsMap.get(selectedTarget.id);
+                      rem = delivFin ? delivFin.pending : Number(selectedTarget.totalPending || 0);
                     }
                   }
                   const excess = numVal - Math.max(0, rem);
@@ -2815,7 +2991,8 @@ export default function ExpenseBalances() {
                         const fin = workerFinancialsMap.get(selectedTarget.id);
                         remaining = fin ? fin.pending : (Number(selectedTarget.totalWages || 0) - Number(selectedTarget.totalPaid || 0));
                       } else if (payTargetType === "delivery") {
-                        remaining = Number(selectedTarget.totalPending || 0);
+                        const delivFin = deliveryFinancialsMap.get(selectedTarget.id);
+                        remaining = delivFin ? delivFin.pending : Number(selectedTarget.totalPending || 0);
                       }
                       setPayAmount(String(Math.max(0, remaining)));
                     }}
@@ -2833,7 +3010,10 @@ export default function ExpenseBalances() {
                           const fin = workerFinancialsMap.get(selectedTarget.id);
                           rem = fin ? fin.pending : (Number(selectedTarget.totalWages || 0) - Number(selectedTarget.totalPaid || 0));
                         }
-                        else if (payTargetType === "delivery") rem = Number(selectedTarget.totalPending || 0);
+                        else if (payTargetType === "delivery") {
+                          const delivFin = deliveryFinancialsMap.get(selectedTarget.id);
+                          rem = delivFin ? delivFin.pending : Number(selectedTarget.totalPending || 0);
+                        }
                         const advanceTarget = Math.max(0, rem) + 1000;
                         setPayAmount(String(advanceTarget));
                       }}
