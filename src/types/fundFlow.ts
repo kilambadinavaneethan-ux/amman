@@ -29,7 +29,10 @@ export type InflowCategory =
 export type OutflowCategory =
   | 'Raw Material Purchase'
   | 'Worker Wages'
+  | 'Worker Bonuses & Incentives'
   | 'Delivery & Freight'
+  | 'Delivery Partner Bonuses'
+  | 'Customer Commissions & Rebates'
   | 'Operating Expense'
   | 'Owner Drawings'
   | 'Personal Withdrawal'
@@ -69,7 +72,10 @@ export type UnifiedSourceType =
   | 'operating_expense'
   | 'supplier_payout'
   | 'worker_wage'
+  | 'worker_bonus'
   | 'delivery_fee'
+  | 'delivery_bonus'
+  | 'customer_bonus'
   | 'manual_outflow'
   | 'contra_transfer';
 

@@ -1,4 +1,4 @@
-import React, { useContext, useState, useMemo } from "react";
+import React, { useContext, useState, useMemo, useEffect } from "react";
 import {
   View,
   Text,
@@ -13,6 +13,8 @@ import {
 } from "react-native";
 import { useRouter } from "expo-router";
 import { MaterialIcons } from "@expo/vector-icons";
+import { collection, onSnapshot } from "firebase/firestore";
+import { db, normalizeDateValue } from "../src/config/firebase";
 import { useTheme } from "./context/ThemeContext";
 import { ItemContext } from "./context/ItemContext";
 import { RawMaterialContext } from "./context/RawMaterialContext";
@@ -22,6 +24,16 @@ import ProtectedRoute from "./components/ProtectedRoute";
 import BackButton from "./components/BackButton";
 import EasyCalendarModal from "./components/EasyCalendarModal";
 import { useScrollRestoration } from "./context/ScrollContext";
+
+const formatDateKey = (dateVal) => {
+  if (!dateVal) return "";
+  const d = normalizeDateValue(dateVal);
+  if (!d || isNaN(d.getTime())) return "";
+  const yyyy = d.getFullYear();
+  const mm = String(d.getMonth() + 1).padStart(2, "0");
+  const dd = String(d.getDate()).padStart(2, "0");
+  return `${yyyy}-${mm}-${dd}`;
+};
 
 function RawMaterialStockManager() {
   const { theme } = useTheme();
@@ -55,6 +67,146 @@ function RawMaterialStockManager() {
 
   const [saving, setSaving] = useState(false);
   const [errorMsg, setErrorMsg] = useState("");
+
+  // Worker Attendance listener to calculate actual working/presented days
+  const [workerAttendance, setWorkerAttendance] = useState([]);
+
+  useEffect(() => {
+    const attCol = collection(db, "workerAttendance");
+    const unsubscribe = onSnapshot(
+      attCol,
+      (snapshot) => {
+        const records = snapshot.docs.map((d) => ({
+          id: d.id,
+          ...d.data(),
+          createdAt: normalizeDateValue(d.data().createdAt),
+        }));
+        setWorkerAttendance(records);
+      },
+      (error) => {
+        console.error("Worker attendance listener error in RawMaterialStock:", error);
+      }
+    );
+    return () => unsubscribe();
+  }, []);
+
+  // Set of calendar dates (YYYY-MM-DD) where at least one worker was present (excluding absent-only days)
+  const presentedDates = useMemo(() => {
+    const dates = new Set();
+    (workerAttendance || []).forEach((att) => {
+      if (att.status && att.status !== "absent") {
+        const key = formatDateKey(att.createdAt || att.date);
+        if (key) {
+          dates.add(key);
+        }
+      }
+    });
+    return dates;
+  }, [workerAttendance]);
+
+  // Calculate days between previous purchase and latest (current) purchase, counting only worker presented days
+  const purchaseIntervalMap = useMemo(() => {
+    const hasAttendanceData = (workerAttendance || []).length > 0;
+
+    // Group purchase logs by materialId
+    const purchasesByMaterial = {};
+    (logs || []).forEach((log) => {
+      if (log.type === "purchase" && log.materialId) {
+        if (!purchasesByMaterial[log.materialId]) {
+          purchasesByMaterial[log.materialId] = [];
+        }
+        purchasesByMaterial[log.materialId].push(log);
+      }
+    });
+
+    const result = {};
+
+    Object.keys(purchasesByMaterial).forEach((matId) => {
+      const pLogs = purchasesByMaterial[matId];
+      const timestamps = pLogs
+        .map((log) => {
+          const raw = log.date || log.createdAt;
+          if (!raw) return null;
+          if (raw instanceof Date) return raw.getTime();
+          if (raw.toDate && typeof raw.toDate === "function") return raw.toDate().getTime();
+          const d = new Date(raw);
+          return isNaN(d.getTime()) ? null : d.getTime();
+        })
+        .filter((ts) => ts !== null)
+        .sort((a, b) => a - b);
+
+      if (timestamps.length === 0) {
+        result[matId] = {
+          formatted: "N/A",
+          unit: "",
+          subtext: "No purchases logged",
+          fullSubtext: "No purchases logged",
+          workingDays: null,
+        };
+        return;
+      }
+
+      if (timestamps.length === 1) {
+        result[matId] = {
+          formatted: "1",
+          unit: "Purchase",
+          subtext: "Only 1 purchase logged",
+          fullSubtext: "Only 1 purchase logged",
+          workingDays: null,
+        };
+        return;
+      }
+
+      const prevPurchase = timestamps[timestamps.length - 2];
+      const latestPurchase = timestamps[timestamps.length - 1];
+
+      let intervalDays = 0;
+      if (hasAttendanceData) {
+        const startDate = new Date(prevPurchase);
+        startDate.setHours(0, 0, 0, 0);
+        const endDate = new Date(latestPurchase);
+        endDate.setHours(0, 0, 0, 0);
+
+        const curr = new Date(startDate);
+        while (curr < endDate) {
+          const key = formatDateKey(curr);
+          if (presentedDates.has(key)) {
+            intervalDays++;
+          }
+          curr.setDate(curr.getDate() + 1);
+        }
+      } else {
+        intervalDays = Math.max(0, Math.round((latestPurchase - prevPurchase) / (1000 * 60 * 60 * 24)));
+      }
+
+      const unitVal = intervalDays === 1 ? "Day" : "Days";
+      result[matId] = {
+        formatted: `${intervalDays}`,
+        unit: unitVal,
+        subtext: hasAttendanceData
+          ? `${intervalDays} working ${intervalDays === 1 ? "day" : "days"}`
+          : "Between last 2 purchases",
+        fullSubtext: hasAttendanceData
+          ? `Between last 2 purchases (${intervalDays} working ${intervalDays === 1 ? "day" : "days"})`
+          : "Between last 2 purchases",
+        workingDays: intervalDays,
+      };
+    });
+
+    return result;
+  }, [logs, workerAttendance, presentedDates]);
+
+  const getMaterialInterval = (materialId) => {
+    return (
+      purchaseIntervalMap[materialId] || {
+        formatted: "N/A",
+        unit: "",
+        subtext: "No purchases logged",
+        fullSubtext: "No purchases logged",
+        workingDays: null,
+      }
+    );
+  };
 
   // Get raw materials
   const rawMaterials = items.filter((item) => item.itemType === "raw_material");
@@ -319,6 +471,7 @@ function RawMaterialStockManager() {
               material.openingStock !== undefined ? material.openingStock : material.stock || 0
             );
             const badge = getStatusBadge(material);
+            const interval = getMaterialInterval(material.id);
 
             return (
               <View key={material.id} style={styles.materialCard}>
@@ -344,6 +497,20 @@ function RawMaterialStockManager() {
                     <Text style={styles.metricValue}>
                       {currencySymbol}{Number(material.costPrice || 0).toFixed(2)}
                     </Text>
+                  </View>
+                  <View style={styles.metricItem}>
+                    <View style={{ flexDirection: "row", alignItems: "center", gap: 3 }}>
+                      <Text style={styles.metricLabel} numberOfLines={1}>Last - Current</Text>
+                      <MaterialIcons name="history" size={12} color={colors.accent.primary} />
+                    </View>
+                    <Text style={styles.metricValue}>
+                      {interval.formatted}{interval.unit ? ` ` : ""}<Text style={styles.metricUnit}>{interval.unit}</Text>
+                    </Text>
+                    {interval.subtext ? (
+                      <Text style={styles.metricSubtext} numberOfLines={1}>
+                        {interval.subtext}
+                      </Text>
+                    ) : null}
                   </View>
                 </View>
 
@@ -415,6 +582,24 @@ function RawMaterialStockManager() {
                 <Text style={styles.materialMetaLabel}>
                   Material: <Text style={styles.materialMetaVal}>{activeMaterial.itemName}</Text>
                 </Text>
+
+                {(() => {
+                  const activeInterval = getMaterialInterval(activeMaterial.id);
+                  return (
+                    <View style={styles.modalIntervalBanner}>
+                      <View style={styles.modalIntervalHeader}>
+                        <MaterialIcons name="history" size={15} color={colors.accent.primary} />
+                        <Text style={styles.modalIntervalTitle}>Last - Current Purchase</Text>
+                      </View>
+                      <Text style={styles.modalIntervalValue}>
+                        {activeInterval.formatted}{activeInterval.unit ? ` ${activeInterval.unit}` : ""}
+                        {activeInterval.subtext ? (
+                          <Text style={styles.modalIntervalSubtext}> ({activeInterval.subtext})</Text>
+                        ) : null}
+                      </Text>
+                    </View>
+                  );
+                })()}
 
                 {isPrefilledFromLast && (
                   <View
@@ -832,7 +1017,7 @@ const getStyles = (theme) => {
     borderTopColor: colors.border.subtle,
     paddingTop: 12,
     marginBottom: 16,
-    gap: 16,
+    gap: 12,
   },
   metricItem: {
     flex: 1,
@@ -852,6 +1037,11 @@ const getStyles = (theme) => {
     fontSize: 12,
     fontWeight: "normal",
     color: colors.text.muted,
+  },
+  metricSubtext: {
+    fontSize: 9.5,
+    color: colors.text.muted,
+    marginTop: 2,
   },
   cardActions: {
     flexDirection: "row",
@@ -939,6 +1129,39 @@ const getStyles = (theme) => {
   materialMetaVal: {
     fontWeight: "700",
     color: colors.text.primary,
+  },
+  modalIntervalBanner: {
+    flexDirection: "row",
+    alignItems: "center",
+    justifyContent: "space-between",
+    backgroundColor: `${colors.accent.primary}10`,
+    borderRadius: 8,
+    paddingHorizontal: 12,
+    paddingVertical: 8,
+    marginTop: 6,
+    marginBottom: 14,
+    borderWidth: 1,
+    borderColor: `${colors.accent.primary}25`,
+  },
+  modalIntervalHeader: {
+    flexDirection: "row",
+    alignItems: "center",
+    gap: 6,
+  },
+  modalIntervalTitle: {
+    fontSize: 12,
+    fontWeight: "600",
+    color: colors.text.primary,
+  },
+  modalIntervalValue: {
+    fontSize: 12,
+    fontWeight: "700",
+    color: colors.accent.primary,
+  },
+  modalIntervalSubtext: {
+    fontSize: 11,
+    fontWeight: "400",
+    color: colors.text.muted,
   },
   formGroup: {
     marginBottom: 16,

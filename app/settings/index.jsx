@@ -56,6 +56,7 @@ function SettingsHome() {
       color: theme.colors.accent.info,
       items: [
         { label: "Worker Management", icon: "groups", route: "/settings/workers" },
+        { label: "Bonus Management", icon: "stars", route: "/settings/bonus-management" },
         { label: "Visiting Cards Storage", icon: "badge", route: "/settings/visiting-cards" },
         { label: "Delivery Partners", icon: "local-shipping", route: "/settings/delivery-partners" },
         { label: "Balance Collectors", icon: "payments", route: "/settings/collectors" },

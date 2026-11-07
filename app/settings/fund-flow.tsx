@@ -22,6 +22,8 @@ import ProtectedRoute from "../components/ProtectedRoute";
 import { ExpenseContext } from "../context/ExpenseContext";
 import { PaymentContext } from "../context/PaymentContext";
 import { RawMaterialContext } from "../context/RawMaterialContext";
+import { WorkerContext } from "../context/WorkerContext";
+import { DeliveryPartnerContext } from "../context/DeliveryPartnerContext";
 import { useScrollRestoration } from "../context/ScrollContext";
 import { useTheme } from "../context/ThemeContext";
 import { UserContext } from "../context/UserContext";
@@ -99,10 +101,15 @@ export default function FundFlowManagementScreen() {
   const { logs: rawLogs = [], loading: loadingRawLogs } =
     (useContext(RawMaterialContext) as any) || {};
   const { profile: userProfile } = (useContext(UserContext) as any) || {};
+  const { workers = [] } = (useContext(WorkerContext) as any) || {};
+  const { partners: deliveryPartners = [] } = (useContext(DeliveryPartnerContext) as any) || {};
 
   // Secondary collections
   const [workerPayments, setWorkerPayments] = useState<any[]>([]);
   const [deliveryPayments, setDeliveryPayments] = useState<any[]>([]);
+  const [workerBonuses, setWorkerBonuses] = useState<any[]>([]);
+  const [deliveryBonuses, setDeliveryBonuses] = useState<any[]>([]);
+  const [customerBonuses, setCustomerBonuses] = useState<any[]>([]);
   const [fundAccounts, setFundAccounts] = useState<FundAccount[]>(DEFAULT_FUND_ACCOUNTS);
   const [fundTransactions, setFundTransactions] = useState<FundTransaction[]>([]);
   const [loadingDirect, setLoadingDirect] = useState(true);
@@ -223,9 +230,54 @@ export default function FundFlowManagementScreen() {
       (err) => console.log("deliveryPayments error:", err)
     );
 
+    const qWorkerBonus = query(collection(db, "workerBonuses"), orderBy("createdAt", "desc"));
+    const unsubWorkerBonus = onSnapshot(
+      qWorkerBonus,
+      (snap) => {
+        const docs = snap.docs.map((d) => ({
+          id: d.id,
+          ...d.data(),
+          createdAt: normalizeDateValue(d.data().createdAt || d.data().date),
+        }));
+        setWorkerBonuses(docs);
+      },
+      (err) => console.log("workerBonuses error in fund-flow:", err)
+    );
+
+    const qDeliveryBonus = query(collection(db, "deliveryPartnerBonuses"), orderBy("createdAt", "desc"));
+    const unsubDeliveryBonus = onSnapshot(
+      qDeliveryBonus,
+      (snap) => {
+        const docs = snap.docs.map((d) => ({
+          id: d.id,
+          ...d.data(),
+          createdAt: normalizeDateValue(d.data().createdAt || d.data().date),
+        }));
+        setDeliveryBonuses(docs);
+      },
+      (err) => console.log("deliveryPartnerBonuses error in fund-flow:", err)
+    );
+
+    const qCustomerBonus = query(collection(db, "customerBonuses"), orderBy("createdAt", "desc"));
+    const unsubCustomerBonus = onSnapshot(
+      qCustomerBonus,
+      (snap) => {
+        const docs = snap.docs.map((d) => ({
+          id: d.id,
+          ...d.data(),
+          createdAt: normalizeDateValue(d.data().createdAt || d.data().date),
+        }));
+        setCustomerBonuses(docs);
+      },
+      (err) => console.log("customerBonuses error in fund-flow:", err)
+    );
+
     return () => {
       unsubWorker();
       unsubDelivery();
+      unsubWorkerBonus();
+      unsubDeliveryBonus();
+      unsubCustomerBonus();
     };
   }, []);
 
@@ -233,6 +285,23 @@ export default function FundFlowManagementScreen() {
     setRefreshing(true);
     setTimeout(() => setRefreshing(false), 600);
   }, []);
+
+  // Name mapping maps for workers and delivery partners
+  const workerMap = useMemo(() => {
+    const map = new Map<string, { name: string }>();
+    (workers || []).forEach((w: any) => {
+      map.set(w.id, { name: w.name || w.fullName || "Worker" });
+    });
+    return map;
+  }, [workers]);
+
+  const partnerMap = useMemo(() => {
+    const map = new Map<string, { name: string }>();
+    (deliveryPartners || []).forEach((p: any) => {
+      map.set(p.id, { name: p.name || p.partnerName || "Delivery Partner" });
+    });
+    return map;
+  }, [deliveryPartners]);
 
   // Compute Date Bounds
   const dateBounds = useMemo(() => {
@@ -248,8 +317,13 @@ export default function FundFlowManagementScreen() {
       rawLogs,
       workerPayments,
       deliveryPayments,
+      workerBonuses,
+      deliveryBonuses,
+      customerBonuses,
       fundTransactions,
       accounts: fundAccounts,
+      workerMap,
+      partnerMap,
     });
   }, [
     customerPayments,
@@ -258,8 +332,13 @@ export default function FundFlowManagementScreen() {
     rawLogs,
     workerPayments,
     deliveryPayments,
+    workerBonuses,
+    deliveryBonuses,
+    customerBonuses,
     fundTransactions,
     fundAccounts,
+    workerMap,
+    partnerMap,
   ]);
 
   // Account Balances across ALL entries
@@ -532,15 +611,25 @@ export default function FundFlowManagementScreen() {
   const renderEntryCard = (item: UnifiedFundEntry, idx: number = 0) => {
     const isInflow = item.type === "inflow";
     const isTransfer = item.type === "transfer";
+    const isBonus =
+      item.sourceType === "worker_bonus" ||
+      item.sourceType === "delivery_bonus" ||
+      item.sourceType === "customer_bonus";
+
     const color = isInflow
       ? colors.accent.success
       : isTransfer
       ? colors.accent.info
+      : isBonus
+      ? "#F59E0B"
       : colors.accent.danger;
+
     const iconName = isInflow
       ? "arrow-downward"
       : isTransfer
       ? "swap-horiz"
+      : isBonus
+      ? "stars"
       : "arrow-upward";
 
     return (
@@ -2202,6 +2291,12 @@ export default function FundFlowManagementScreen() {
                       <Text style={styles.detailLabel}>Category:</Text>
                       <Text style={styles.detailVal}>{selectedEntry.category}</Text>
                     </View>
+                    {selectedEntry.partyName ? (
+                      <View style={styles.detailRow}>
+                        <Text style={styles.detailLabel}>Party / Recipient:</Text>
+                        <Text style={styles.detailVal}>{selectedEntry.partyName}</Text>
+                      </View>
+                    ) : null}
                     <View style={styles.detailRow}>
                       <Text style={styles.detailLabel}>Account / Mode:</Text>
                       <Text style={styles.detailVal}>

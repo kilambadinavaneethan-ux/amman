@@ -69,7 +69,10 @@ export const INFLOW_CATEGORIES = [
 export const OUTFLOW_CATEGORIES = [
   'Raw Material Purchase',
   'Worker Wages',
+  'Worker Bonuses & Incentives',
   'Delivery & Freight',
+  'Delivery Partner Bonuses',
+  'Customer Commissions & Rebates',
   'Operating Expense',
   'Owner Drawings',
   'Personal Withdrawal',
@@ -396,8 +399,13 @@ export function unifyFundEntries({
   rawLogs = [],
   workerPayments = [],
   deliveryPayments = [],
+  workerBonuses = [],
+  deliveryBonuses = [],
+  customerBonuses = [],
   fundTransactions = [],
   accounts = DEFAULT_FUND_ACCOUNTS,
+  workerMap = new Map(),
+  partnerMap = new Map(),
 }: {
   customerPayments?: any[];
   expenses?: any[];
@@ -405,8 +413,13 @@ export function unifyFundEntries({
   rawLogs?: any[];
   workerPayments?: any[];
   deliveryPayments?: any[];
+  workerBonuses?: any[];
+  deliveryBonuses?: any[];
+  customerBonuses?: any[];
   fundTransactions?: FundTransaction[];
   accounts?: FundAccount[];
+  workerMap?: Map<string, { name: string }>;
+  partnerMap?: Map<string, { name: string }>;
 }): UnifiedFundEntry[] {
   const stream: UnifiedFundEntry[] = [];
   const accountMap = new Map<string, FundAccount>();
@@ -588,7 +601,95 @@ export function unifyFundEntries({
     });
   });
 
-  // 7. Manual Fund Transactions (INFLOW / OUTFLOW / CONTRA TRANSFER)
+  // 7. Worker Bonuses & Incentives (OUTFLOW)
+  (workerBonuses || []).forEach((wb) => {
+    const amt = Number(wb.amount || 0);
+    if (amt <= 0) return;
+    const date = parseSafeDate(wb.createdAt || wb.date);
+    const method = wb.paymentMethod || 'Cash';
+    const accId = resolveAccountIdFromPaymentMethod(method, accounts);
+    const acc = accountMap.get(accId);
+    const workerName = workerMap.get(wb.workerId)?.name || wb.workerName || 'Worker';
+
+    stream.push({
+      id: `wb_${wb.id}`,
+      rawId: wb.id,
+      type: 'outflow',
+      sourceType: 'worker_bonus',
+      sourceLabel: 'Worker Bonus',
+      title: wb.reason ? `Bonus (${wb.reason}): ${workerName}` : `Worker Bonus: ${workerName}`,
+      category: 'Worker Bonuses & Incentives',
+      amount: amt,
+      paymentMethod: method,
+      date,
+      accountId: accId,
+      accountName: acc?.name || method,
+      partyName: workerName,
+      notes: wb.notes || '',
+      isManual: false,
+    });
+  });
+
+  // 8. Delivery Partner Bonuses (OUTFLOW)
+  (deliveryBonuses || []).forEach((db) => {
+    const amt = Number(db.amount || 0);
+    if (amt <= 0) return;
+    const date = parseSafeDate(db.createdAt || db.date);
+    const method = db.paymentMethod || 'Cash';
+    const accId = resolveAccountIdFromPaymentMethod(method, accounts);
+    const acc = accountMap.get(accId);
+    const partnerName = partnerMap.get(db.partnerId)?.name || db.partnerName || 'Delivery Partner';
+
+    stream.push({
+      id: `db_${db.id}`,
+      rawId: db.id,
+      type: 'outflow',
+      sourceType: 'delivery_bonus',
+      sourceLabel: 'Delivery Bonus',
+      title: db.reason ? `Bonus (${db.reason}): ${partnerName}` : `Delivery Bonus: ${partnerName}`,
+      category: 'Delivery Partner Bonuses',
+      amount: amt,
+      paymentMethod: method,
+      date,
+      accountId: accId,
+      accountName: acc?.name || method,
+      partyName: partnerName,
+      notes: db.notes || '',
+      isManual: false,
+    });
+  });
+
+  // 9. Marked Customer Commissions & Rebates (OUTFLOW)
+  (customerBonuses || []).forEach((cb) => {
+    const amt = Number(cb.amount || 0);
+    if (amt <= 0) return;
+    const date = parseSafeDate(cb.createdAt || cb.date);
+    const method = cb.paymentMethod || 'Cash';
+    const accId = resolveAccountIdFromPaymentMethod(method, accounts);
+    const acc = accountMap.get(accId);
+    const customerName = cb.customerName || 'Marked Customer';
+    const markingsText = cb.markings && cb.markings.length > 0 ? ` [${cb.markings.join(', ')}]` : '';
+
+    stream.push({
+      id: `cb_${cb.id}`,
+      rawId: cb.id,
+      type: 'outflow',
+      sourceType: 'customer_bonus',
+      sourceLabel: 'Customer Commission / Rebate',
+      title: cb.reason ? `${cb.reason}: ${customerName}${markingsText}` : `Customer Commission: ${customerName}`,
+      category: 'Customer Commissions & Rebates',
+      amount: amt,
+      paymentMethod: method,
+      date,
+      accountId: accId,
+      accountName: acc?.name || method,
+      partyName: `${customerName}${markingsText}`,
+      notes: cb.notes || '',
+      isManual: false,
+    });
+  });
+
+  // 10. Manual Fund Transactions (INFLOW / OUTFLOW / CONTRA TRANSFER)
   (fundTransactions || []).forEach((ft) => {
     const amt = Number(ft.amount || 0);
     if (amt <= 0) return;
