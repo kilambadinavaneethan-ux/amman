@@ -994,8 +994,8 @@ function PartnerDetailsScreen() {
   }, [partnerPayments]);
 
   const periodNetDeliveryWage = useMemo(() => {
-    return periodTripEarnings + periodBonusEarned - periodPaymentBreakdown.netPaid;
-  }, [periodTripEarnings, periodBonusEarned, periodPaymentBreakdown.netPaid]);
+    return periodTripEarnings - periodPaymentBreakdown.netPaid;
+  }, [periodTripEarnings, periodPaymentBreakdown.netPaid]);
 
   const periodProductOrderDue = useMemo(() => {
     return filteredPartnerCustomerOrders.reduce((sum, o) => sum + Number(o.balanceDue || 0), 0);
@@ -1026,7 +1026,7 @@ function PartnerDetailsScreen() {
       }
     });
     const netPaid = grossDisbursed - grossRepaid;
-    const netDeliveryWage = tripEarnings + bonusEarned - netPaid;
+    const netDeliveryWage = tripEarnings - netPaid;
     const productOrderDue = allPartnerCustomerOrders.reduce((sum, o) => sum + Number(o.balanceDue || 0), 0);
     const finalSettlement = netDeliveryWage - productOrderDue;
 
@@ -1039,7 +1039,7 @@ function PartnerDetailsScreen() {
       grossDisbursed,
       grossRepaid,
       netPaid,
-      totalPayable: tripEarnings + bonusEarned,
+      totalPayable: tripEarnings,
       netDeliveryWage,
       productOrderDue,
       finalSettlement,
@@ -5070,29 +5070,7 @@ function PartnerDetailsScreen() {
                     </Text>
                   </View>
 
-                  {/* Step 2: Bonuses */}
-                  <View style={styles.breakdownRow}>
-                    <View style={styles.breakdownRowLeft}>
-                      <MaterialIcons name="stars" size={16} color="#8b5cf6" />
-                      <Text style={styles.breakdownRowLabel}>Performance Bonuses</Text>
-                      <Text style={styles.breakdownRowCount}>({partnerBonuses.length} rewards)</Text>
-                    </View>
-                    <Text style={[styles.breakdownRowVal, { color: "#8b5cf6" }]}>
-                      +₹{liveBonusEarned.toLocaleString("en-IN")}
-                    </Text>
-                  </View>
-
-                  {/* Subtotal: Gross Earnings */}
-                  <View style={[styles.breakdownRow, styles.breakdownSubtotalRow]}>
-                    <Text style={styles.breakdownSubtotalLabel}>∑ Total Gross Earnings</Text>
-                    <Text style={styles.breakdownSubtotalVal}>
-                      ₹{(liveTripEarnings + liveBonusEarned).toLocaleString("en-IN")}
-                    </Text>
-                  </View>
-
-                  <View style={styles.breakdownDivider} />
-
-                  {/* Step 3: Payouts */}
+                  {/* Step 2: Payouts */}
                   <View style={styles.breakdownRow}>
                     <View style={styles.breakdownRowLeft}>
                       <MaterialIcons name="payment" size={16} color="#dc2626" />
@@ -5103,7 +5081,7 @@ function PartnerDetailsScreen() {
                     </Text>
                   </View>
 
-                  {/* Step 4: Advance Repaid */}
+                  {/* Step 3: Advance Repaid */}
                   {(dateFilter === "all" ? allTimeComputed.grossRepaid : periodPaymentBreakdown.grossRepaid) > 0 && (
                     <View style={styles.breakdownRow}>
                       <View style={styles.breakdownRowLeft}>
@@ -5123,6 +5101,20 @@ function PartnerDetailsScreen() {
                       {liveNetDeliveryWage < 0 ? "-" : ""}₹{Math.abs(liveNetDeliveryWage).toLocaleString("en-IN")}
                     </Text>
                   </View>
+
+                  {/* Separate Bonus Rewards (Non-Due) */}
+                  {liveBonusEarned > 0 && (
+                    <View style={[styles.breakdownRow, { marginTop: 4, backgroundColor: "#FAF5FF", padding: 8, borderRadius: 8 }]}>
+                      <View style={styles.breakdownRowLeft}>
+                        <MaterialIcons name="stars" size={16} color="#8b5cf6" />
+                        <Text style={[styles.breakdownRowLabel, { color: "#7e22ce", fontWeight: "700" }]}>Bonus Rewards (Awarded / Non-due)</Text>
+                        <Text style={styles.breakdownRowCount}>({partnerBonuses.length} rewards)</Text>
+                      </View>
+                      <Text style={[styles.breakdownRowVal, { color: "#8b5cf6", fontWeight: "800" }]}>
+                        ₹{liveBonusEarned.toLocaleString("en-IN")}
+                      </Text>
+                    </View>
+                  )}
 
                   {/* Step 5: Product Orders Offset (if any) */}
                   {liveOrderDue > 0 && (

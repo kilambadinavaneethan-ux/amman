@@ -860,10 +860,16 @@ function InvoiceManagementScreen() {
     );
   }, []);
 
-  const appaSettings: AppaEstimateBillSettings = useMemo(() => ({
-    ...DEFAULT_APPA_ESTIMATE_BILL_SETTINGS,
-    ...(template.appaBillSettings || {}),
-  }), [template.appaBillSettings]);
+  const appaSettings: AppaEstimateBillSettings = useMemo(() => {
+    const base = {
+      ...DEFAULT_APPA_ESTIMATE_BILL_SETTINGS,
+      ...(template.appaBillSettings || {}),
+    };
+    if (!base.titleEnglish || base.titleEnglish.trim().toUpperCase() === 'ESTEEMATE') {
+      base.titleEnglish = 'ESTIMATE';
+    }
+    return base;
+  }, [template.appaBillSettings]);
 
   const effectiveAppaLogoUri = appaSettings.companyLogoUri || userProfile?.company?.logoUrl || userProfile?.photoURL || userProfile?.logoUrl || '';
 
@@ -3168,7 +3174,7 @@ function InvoiceManagementScreen() {
               style={[styles.input, { backgroundColor: colors.bg.primary, borderColor, color: textColor }]}
               value={appaSettings.titleEnglish}
               onChangeText={(val) => updateAppaField('titleEnglish', val)}
-              placeholder="ESTEEMATE"
+              placeholder="ESTIMATE"
               placeholderTextColor={subTextColor}
             />
 

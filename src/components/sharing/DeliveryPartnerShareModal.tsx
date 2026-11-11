@@ -148,8 +148,8 @@ export function DeliveryPartnerShareModal({
       totalOrderItemsCount += qty;
     });
 
-    // Net delivery wages: Trip earnings + Bonuses - Total paid
-    const netDeliveryPending = totalPayable + totalBonuses - totalPaid;
+    // Net delivery wages: Trip freight earnings - Total paid (bonuses are awarded perks and not unpaid dues)
+    const netDeliveryPending = totalPayable - totalPaid;
     // Deduct product order balance due if included
     const netPending = includePurchasedOrders
       ? netDeliveryPending - totalOrderDue

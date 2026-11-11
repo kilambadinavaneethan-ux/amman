@@ -67,6 +67,8 @@ const COLLECTIONS = [
   { key: "deliveryTrips", collectionName: "deliveryTrips", label: "Delivery Trips", icon: "alt-route" as const },
   { key: "deliveryPayments", collectionName: "deliveryPayments", label: "Delivery Payments", icon: "price-check" as const },
   { key: "deliveryPartnerBonuses", collectionName: "deliveryPartnerBonuses", label: "Delivery Partner Bonuses", icon: "loyalty" as const },
+  { key: "customerBonuses", collectionName: "customerBonuses", label: "Customer Bonuses & Commissions", icon: "loyalty" as const },
+  { key: "otherBonuses", collectionName: "otherBonuses", label: "Goodwill & Other Bonuses", icon: "card-giftcard" as const },
   { key: "moneyCollectors", collectionName: "moneyCollectors", label: "Money Collectors", icon: "account-balance" as const },
   { key: "rawMaterialSuppliers", collectionName: "raw_material_suppliers", label: "Raw Material Suppliers", icon: "storefront" as const },
   { key: "rawMaterialLogs", collectionName: "raw_material_logs", label: "Raw Material Logs", icon: "layers" as const },
@@ -82,7 +84,7 @@ const COLLECTIONS = [
 
 const COLLECTION_CATEGORIES = [
   { name: "Core Business", icon: "business" as const, keys: ["customers", "items", "orders", "payments", "users", "profitTransactions", "profitSummary"] },
-  { name: "Expenses", icon: "receipt-long" as const, keys: ["expenses", "expensePayments", "expenseBudgets", "recurringExpenses"] },
+  { name: "Expenses", icon: "receipt-long" as const, keys: ["expenses", "expensePayments", "expenseBudgets", "recurringExpenses", "customerBonuses", "otherBonuses"] },
   { name: "Workforce", icon: "people" as const, keys: ["workers", "workerAttendance", "workerPayments", "workerBonuses", "contractWorkers", "contractPayments"] },
   { name: "Delivery", icon: "local-shipping" as const, keys: ["deliveryPartners", "deliveryTrips", "deliveryPayments", "deliveryPartnerBonuses", "moneyCollectors"] },
   { name: "Operations", icon: "settings" as const, keys: ["automations", "automationAttendanceLogs", "alarms", "itemStockLogs"] },

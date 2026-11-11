@@ -336,7 +336,7 @@ export const DEFAULT_APPA_ESTIMATE_BILL_SETTINGS: AppaEstimateBillSettings = {
   invocationText: '|| ஸ்ரீ சொக்கநாச்சி அம்மன் துணை ||',
   invocationColor: '#B91C1C',
   invocationFontSize: 14,
-  titleEnglish: 'ESTEEMATE',
+  titleEnglish: 'ESTIMATE',
   titleEnglishColor: '#0F172A',
   titleEnglishFontSize: 28,
   titleTamil: 'மதிப்பீட்டு பில் / ESTIMATE BILL',

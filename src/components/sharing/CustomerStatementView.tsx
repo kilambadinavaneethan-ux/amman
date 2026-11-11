@@ -2,6 +2,7 @@ import React from 'react';
 import { View, Text, StyleSheet } from 'react-native';
 import { Image } from 'expo-image';
 import { MaterialIcons } from '@expo/vector-icons';
+import { UnscaledTextContext } from '../../../app/context/ThemeContext';
 import { CustomerShareData, ShareSettings, InvoiceTemplate, formatCustomerPhonesDisplay } from '../../types/sharing';
 import { getInvoiceLabels } from '../../utils/invoiceLocalization';
 
@@ -108,7 +109,8 @@ const CustomerStatementViewComponent: React.ForwardRefRenderFunction<any, Custom
     const ledgerTotalCredit = allLedger.reduce((sum, l) => sum + (l.paid || 0), 0);
 
     return (
-      <View ref={ref} collapsable={false} style={[styles.container, { backgroundColor: cardBg, borderColor }]}>
+      <UnscaledTextContext.Provider value={true}>
+        <View ref={ref} collapsable={false} style={[styles.container, { backgroundColor: cardBg, borderColor }]}>
         {/* Top Accent Stripe */}
         <View style={[styles.accentStripe, { backgroundColor: accentColor }]} />
 
@@ -571,7 +573,8 @@ const CustomerStatementViewComponent: React.ForwardRefRenderFunction<any, Custom
           </View>
         </View>
       </View>
-    );
+    </UnscaledTextContext.Provider>
+  );
   };
 
 export const CustomerStatementView = React.forwardRef(CustomerStatementViewComponent);

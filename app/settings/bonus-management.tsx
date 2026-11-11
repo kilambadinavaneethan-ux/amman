@@ -1,51 +1,52 @@
-import React, { useState, useEffect, useMemo, useContext, useCallback } from "react";
-import {
-  View,
-  Text,
-  StyleSheet,
-  ScrollView,
-  Pressable,
-  TextInput,
-  Modal,
-  Alert,
-  ActivityIndicator,
-  RefreshControl,
-  Share,
-} from "react-native";
 import { MaterialIcons } from "@expo/vector-icons";
 import { useRouter } from "expo-router";
+import { useCallback, useContext, useEffect, useMemo, useState } from "react";
+import {
+  ActivityIndicator,
+  Alert,
+  Modal,
+  Pressable,
+  RefreshControl,
+  ScrollView,
+  Share,
+  StyleSheet,
+  Text,
+  TextInput,
+  View,
+} from "react-native";
 
 // Theme & Navigation
-import { useTheme } from "../context/ThemeContext";
-import { useScrollRestoration } from "../context/ScrollContext";
 import BackButton from "../components/BackButton";
 import EasyCalendarModal from "../components/EasyCalendarModal";
 import ProtectedRoute from "../components/ProtectedRoute";
+import { useScrollRestoration } from "../context/ScrollContext";
+import { useTheme } from "../context/ThemeContext";
 
 // Contexts & Firebase
-import { WorkerContext } from "../context/WorkerContext";
-import { DeliveryPartnerContext } from "../context/DeliveryPartnerContext";
-import { CustomerContext } from "../context/CustomerContext";
-import { UserContext } from "../context/UserContext";
-import { normalizeMarkings, getMarkingConfig } from "../../src/utils/markingUtils";
-import { db, normalizeDateValue } from "../../src/config/firebase";
 import {
-  collection,
-  onSnapshot,
-  query,
-  orderBy,
-  doc,
   addDoc,
-  updateDoc,
+  collection,
   deleteDoc,
+  doc,
+  onSnapshot,
+  orderBy,
+  query,
+  updateDoc,
 } from "firebase/firestore";
+import { db, normalizeDateValue } from "../../src/config/firebase";
+import { getMarkingConfig, normalizeMarkings } from "../../src/utils/markingUtils";
+import { CustomerContext } from "../context/CustomerContext";
+import { DeliveryPartnerContext } from "../context/DeliveryPartnerContext";
+import { UserContext } from "../context/UserContext";
+import { WorkerContext } from "../context/WorkerContext";
 
 interface BonusItem {
   id: string;
-  type: "worker" | "delivery" | "customer";
+  type: "worker" | "delivery" | "customer" | "other";
   recipientId: string;
   recipientName: string;
   recipientPhone?: string;
+  recipientRole?: string;
   markings?: string[];
   amount: number;
   reason: string;
@@ -53,6 +54,49 @@ interface BonusItem {
   createdAt: Date;
   updatedAt?: Date;
   rawData?: any;
+}
+
+const OTHER_ROLES = [
+  { id: "police", label: "Police", icon: "local-police" as const, emoji: "👮" },
+  { id: "lineman", label: "Lineman / EB", icon: "bolt" as const, emoji: "⚡" },
+  { id: "sanitation", label: "Municipal / Sanitation", icon: "cleaning-services" as const, emoji: "🧹" },
+  { id: "security", label: "Security / Watchman", icon: "security" as const, emoji: "🛡️" },
+  { id: "postman", label: "Postman / Courier", icon: "local-post-office" as const, emoji: "📮" },
+  { id: "inspector", label: "Local Authority / Inspector", icon: "account-balance" as const, emoji: "🏛️" },
+  { id: "custom", label: "Custom / Other", icon: "edit" as const, emoji: "✍️" },
+];
+
+const OTHER_REASONS = [
+  "Festival Gift (Diwali / Pongal)",
+  "Goodwill & Public Relations Perk",
+  "Emergency / Priority Service Tip",
+  "Maintenance & Support Tip",
+  "New Year Greeting Perk",
+  "Appreciation Gratuity",
+  "Custom",
+];
+
+function getOtherRoleDetails(role?: string) {
+  const r = (role || "").toLowerCase();
+  if (r.includes("polic") || r.includes("traffic") || r.includes("cop")) {
+    return { label: role || "Police", icon: "local-police" as const, color: "#2563EB", bg: "#EFF6FF", border: "#BFDBFE" };
+  }
+  if (r.includes("line") || r.includes("eb") || r.includes("electric") || r.includes("wireman") || r.includes("power")) {
+    return { label: role || "Lineman / EB", icon: "bolt" as const, color: "#D97706", bg: "#FEF3C7", border: "#FDE68A" };
+  }
+  if (r.includes("sanit") || r.includes("municip") || r.includes("clean") || r.includes("garbage")) {
+    return { label: role || "Municipal / Sanitation", icon: "cleaning-services" as const, color: "#059669", bg: "#ECFDF5", border: "#A7F3D0" };
+  }
+  if (r.includes("secur") || r.includes("guard") || r.includes("watch")) {
+    return { label: role || "Security", icon: "security" as const, color: "#4B5563", bg: "#F3F4F6", border: "#E5E7EB" };
+  }
+  if (r.includes("post") || r.includes("mail") || r.includes("courier")) {
+    return { label: role || "Postman", icon: "local-post-office" as const, color: "#DC2626", bg: "#FEF2F2", border: "#FECACA" };
+  }
+  if (r.includes("inspect") || r.includes("offic") || r.includes("govt") || r.includes("author")) {
+    return { label: role || "Authority", icon: "account-balance" as const, color: "#7C3AED", bg: "#F5F3FF", border: "#DDD6FE" };
+  }
+  return { label: role || "Other", icon: "groups" as const, color: "#9333EA", bg: "#FAF5FF", border: "#E9D5FF" };
 }
 
 const WORKER_REASONS = [
@@ -118,9 +162,11 @@ function BonusManagementContent() {
   const [workerBonusesRaw, setWorkerBonusesRaw] = useState<any[]>([]);
   const [deliveryBonusesRaw, setDeliveryBonusesRaw] = useState<any[]>([]);
   const [customerBonusesRaw, setCustomerBonusesRaw] = useState<any[]>([]);
+  const [otherBonusesRaw, setOtherBonusesRaw] = useState<any[]>([]);
   const [loadingWorkerBonuses, setLoadingWorkerBonuses] = useState(true);
   const [loadingDeliveryBonuses, setLoadingDeliveryBonuses] = useState(true);
   const [loadingCustomerBonuses, setLoadingCustomerBonuses] = useState(true);
+  const [loadingOtherBonuses, setLoadingOtherBonuses] = useState(true);
   const [refreshing, setRefreshing] = useState(false);
 
   // Active Marking Customers filter
@@ -132,7 +178,7 @@ function BonusManagementContent() {
   }, [customers]);
 
   // Filters & Search
-  const [selectedTab, setSelectedTab] = useState<"all" | "worker" | "delivery" | "customer">("all");
+  const [selectedTab, setSelectedTab] = useState<"all" | "worker" | "delivery" | "customer" | "other">("all");
   const [searchQuery, setSearchQuery] = useState("");
   const [selectedPeriod, setSelectedPeriod] = useState<"all" | "today" | "week" | "month" | "custom">("all");
   const [startDate, setStartDate] = useState<Date | null>(null);
@@ -147,9 +193,15 @@ function BonusManagementContent() {
   const [selectedBonus, setSelectedBonus] = useState<BonusItem | null>(null);
 
   // Award Bonus Form State
-  const [awardType, setAwardType] = useState<"worker" | "delivery" | "customer">("worker");
+  const [awardType, setAwardType] = useState<"worker" | "delivery" | "customer" | "other">("worker");
   const [awardRecipientId, setAwardRecipientId] = useState("");
   const [recipientSearchText, setRecipientSearchText] = useState("");
+  // Other recipient fields
+  const [awardOtherName, setAwardOtherName] = useState("");
+  const [awardOtherPhone, setAwardOtherPhone] = useState("");
+  const [awardOtherRolePreset, setAwardOtherRolePreset] = useState("police");
+  const [awardOtherRoleCustom, setAwardOtherRoleCustom] = useState("");
+
   const [awardAmount, setAwardAmount] = useState("");
   const [awardReasonPreset, setAwardReasonPreset] = useState("Festival Bonus");
   const [awardReasonCustom, setAwardReasonCustom] = useState("");
@@ -159,6 +211,9 @@ function BonusManagementContent() {
 
   // Edit Bonus Form State
   const [editAmount, setEditAmount] = useState("");
+  const [editOtherName, setEditOtherName] = useState("");
+  const [editOtherRole, setEditOtherRole] = useState("");
+  const [editOtherPhone, setEditOtherPhone] = useState("");
   const [editReasonPreset, setEditReasonPreset] = useState("");
   const [editReasonCustom, setEditReasonCustom] = useState("");
   const [editNotes, setEditNotes] = useState("");
@@ -230,6 +285,29 @@ function BonusManagementContent() {
       (err) => {
         console.log("Error loading customerBonuses:", err);
         setLoadingCustomerBonuses(false);
+      }
+    );
+    return () => unsub();
+  }, []);
+
+  // Listen to otherBonuses (Police, Lineman, Municipal, Security, etc.)
+  useEffect(() => {
+    setLoadingOtherBonuses(true);
+    const qOther = query(collection(db, "otherBonuses"), orderBy("createdAt", "desc"));
+    const unsub = onSnapshot(
+      qOther,
+      (snapshot) => {
+        const docs = snapshot.docs.map((d) => ({
+          id: d.id,
+          ...d.data(),
+          createdAt: normalizeDateValue(d.data().createdAt),
+        }));
+        setOtherBonusesRaw(docs);
+        setLoadingOtherBonuses(false);
+      },
+      (err) => {
+        console.log("Error loading otherBonuses:", err);
+        setLoadingOtherBonuses(false);
       }
     );
     return () => unsub();
@@ -330,8 +408,42 @@ function BonusManagementContent() {
       });
     });
 
+    // Other (Police, Lineman, Municipal, Security, etc.) bonuses
+    otherBonusesRaw.forEach((item) => {
+      list.push({
+        id: item.id,
+        type: "other",
+        recipientId: item.id,
+        recipientName: item.recipientName || "Recipient",
+        recipientPhone: item.recipientPhone || "",
+        recipientRole: item.recipientRole || "Other",
+        amount: Number(item.amount || 0),
+        reason: item.reason || "Festival Gift / Perk",
+        notes: item.notes || "",
+        createdAt: item.createdAt instanceof Date ? item.createdAt : new Date(item.createdAt || Date.now()),
+        updatedAt: item.updatedAt ? normalizeDateValue(item.updatedAt) : undefined,
+        rawData: item,
+      });
+    });
+
     return list;
-  }, [workerBonusesRaw, deliveryBonusesRaw, customerBonusesRaw, workerMap, partnerMap, customerMap]);
+  }, [workerBonusesRaw, deliveryBonusesRaw, customerBonusesRaw, otherBonusesRaw, workerMap, partnerMap, customerMap]);
+
+  // Unique past 'Other' recipients for autocomplete / suggestions
+  const pastOtherRecipients = useMemo(() => {
+    const map = new Map<string, { name: string; phone?: string; role?: string }>();
+    otherBonusesRaw.forEach((item) => {
+      const name = (item.recipientName || "").trim();
+      if (name && !map.has(name.toLowerCase())) {
+        map.set(name.toLowerCase(), {
+          name,
+          phone: item.recipientPhone || "",
+          role: item.recipientRole || "",
+        });
+      }
+    });
+    return Array.from(map.values());
+  }, [otherBonusesRaw]);
 
   // Filtered recipients for award modal search
   const filteredAwardRecipients = useMemo(() => {
@@ -437,6 +549,7 @@ function BonusManagementContent() {
         if (selectedTab === "worker" && b.type !== "worker") return false;
         if (selectedTab === "delivery" && b.type !== "delivery") return false;
         if (selectedTab === "customer" && b.type !== "customer") return false;
+        if (selectedTab === "other" && b.type !== "other") return false;
 
         // Date period filter
         if (!isDateInFilter(b.createdAt)) return false;
@@ -449,7 +562,8 @@ function BonusManagementContent() {
           const matchNotes = (b.notes || "").toLowerCase().includes(q);
           const matchPhone = (b.recipientPhone || "").toLowerCase().includes(q);
           const matchMarking = (b.markings || []).some((m) => m.toLowerCase().includes(q));
-          if (!matchName && !matchReason && !matchNotes && !matchPhone && !matchMarking) return false;
+          const matchRole = (b.recipientRole || "").toLowerCase().includes(q);
+          if (!matchName && !matchReason && !matchNotes && !matchPhone && !matchMarking && !matchRole) return false;
         }
 
         return true;
@@ -472,6 +586,8 @@ function BonusManagementContent() {
     let countDelivery = 0;
     let totalCustomer = 0;
     let countCustomer = 0;
+    let totalOther = 0;
+    let countOther = 0;
     let filteredTotal = 0;
 
     unifiedBonuses.forEach((b) => {
@@ -485,6 +601,9 @@ function BonusManagementContent() {
       } else if (b.type === "customer") {
         totalCustomer += b.amount;
         countCustomer += 1;
+      } else if (b.type === "other") {
+        totalOther += b.amount;
+        countOther += 1;
       }
     });
 
@@ -501,6 +620,8 @@ function BonusManagementContent() {
       countDelivery,
       totalCustomer,
       countCustomer,
+      totalOther,
+      countOther,
       filteredTotal,
       filteredCount: filteredBonuses.length,
     };
@@ -512,25 +633,33 @@ function BonusManagementContent() {
   }, []);
 
   // Open Award Modal
-  const handleOpenAwardModal = (type?: "worker" | "delivery" | "customer") => {
+  const handleOpenAwardModal = (type?: "worker" | "delivery" | "customer" | "other") => {
     const defaultType =
       type ||
       (selectedTab === "delivery"
         ? "delivery"
         : selectedTab === "customer"
-        ? "customer"
-        : "worker");
+          ? "customer"
+          : selectedTab === "other"
+            ? "other"
+            : "worker");
 
     setAwardType(defaultType);
     setAwardRecipientId("");
     setRecipientSearchText("");
+    setAwardOtherName("");
+    setAwardOtherPhone("");
+    setAwardOtherRolePreset("police");
+    setAwardOtherRoleCustom("");
     setAwardAmount("");
     setAwardReasonPreset(
       defaultType === "worker"
         ? WORKER_REASONS[0]
         : defaultType === "delivery"
-        ? DELIVERY_REASONS[0]
-        : CUSTOMER_REASONS[0]
+          ? DELIVERY_REASONS[0]
+          : defaultType === "customer"
+            ? CUSTOMER_REASONS[0]
+            : OTHER_REASONS[0]
     );
     setAwardReasonCustom("");
     setAwardNotes("");
@@ -545,21 +674,66 @@ function BonusManagementContent() {
       Alert.alert("Invalid Amount", "Please enter a valid bonus amount greater than zero.");
       return;
     }
-    if (!awardRecipientId) {
-      const typeLabel =
-        awardType === "worker"
-          ? "worker"
-          : awardType === "delivery"
-          ? "delivery partner"
-          : "active marking customer";
-      Alert.alert("Recipient Required", `Please select a ${typeLabel}.`);
-      return;
-    }
 
     const finalReason =
       awardReasonPreset === "Custom"
         ? awardReasonCustom.trim() || "Incentive / Bonus"
         : awardReasonPreset;
+
+    // Handle "other" recipient category
+    if (awardType === "other") {
+      const cleanName = awardOtherName.trim();
+      if (!cleanName) {
+        Alert.alert(
+          "Recipient Name Required",
+          "Please enter the recipient's name (e.g. Lineman Selvam, Officer Kumar, Municipal Supervisor)."
+        );
+        return;
+      }
+
+      const roleObj = OTHER_ROLES.find((r) => r.id === awardOtherRolePreset);
+      const finalRole =
+        awardOtherRolePreset === "custom"
+          ? awardOtherRoleCustom.trim() || "Other"
+          : roleObj?.label || "Other";
+
+      setIsSavingAward(true);
+      try {
+        await addDoc(collection(db, "otherBonuses"), {
+          recipientName: cleanName,
+          recipientRole: finalRole,
+          recipientPhone: awardOtherPhone.trim(),
+          amount: amt,
+          reason: finalReason,
+          notes: awardNotes.trim(),
+          createdAt: awardDate,
+          updatedAt: new Date(),
+        });
+
+        setIsAwardModalOpen(false);
+        Alert.alert(
+          "Bonus Awarded ⭐",
+          `Successfully awarded ₹${amt.toLocaleString("en-IN")} to ${cleanName} (${finalRole}).`
+        );
+      } catch (e: any) {
+        console.error("Failed to award other bonus:", e);
+        Alert.alert("Error", e?.message || "Failed to award bonus. Please try again.");
+      } finally {
+        setIsSavingAward(false);
+      }
+      return;
+    }
+
+    if (!awardRecipientId) {
+      const typeLabel =
+        awardType === "worker"
+          ? "worker"
+          : awardType === "delivery"
+            ? "delivery partner"
+            : "active marking customer";
+      Alert.alert("Recipient Required", `Please select a ${typeLabel}.`);
+      return;
+    }
 
     setIsSavingAward(true);
     try {
@@ -605,8 +779,8 @@ function BonusManagementContent() {
         awardType === "worker"
           ? workerMap.get(awardRecipientId)?.name || "Worker"
           : awardType === "delivery"
-          ? partnerMap.get(awardRecipientId)?.name || "Delivery Partner"
-          : customerMap.get(awardRecipientId)?.name || "Customer";
+            ? partnerMap.get(awardRecipientId)?.name || "Delivery Partner"
+            : customerMap.get(awardRecipientId)?.name || "Customer";
 
       Alert.alert(
         "Bonus Awarded ⭐",
@@ -624,12 +798,19 @@ function BonusManagementContent() {
   const handleOpenEdit = (bonus: BonusItem) => {
     setSelectedBonus(bonus);
     setEditAmount(String(bonus.amount));
+    if (bonus.type === "other") {
+      setEditOtherName(bonus.recipientName);
+      setEditOtherRole(bonus.recipientRole || "Other");
+      setEditOtherPhone(bonus.recipientPhone || "");
+    }
     const reasons =
       bonus.type === "worker"
         ? WORKER_REASONS
         : bonus.type === "delivery"
-        ? DELIVERY_REASONS
-        : CUSTOMER_REASONS;
+          ? DELIVERY_REASONS
+          : bonus.type === "customer"
+            ? CUSTOMER_REASONS
+            : OTHER_REASONS;
 
     if (reasons.includes(bonus.reason)) {
       setEditReasonPreset(bonus.reason);
@@ -678,9 +859,21 @@ function BonusManagementContent() {
           newBonusData,
           selectedBonus.rawData
         );
-      } else {
+      } else if (selectedBonus.type === "customer") {
         // Customer bonus edit
         await updateDoc(doc(db, "customerBonuses", selectedBonus.id), {
+          amount: amt,
+          reason: finalReason,
+          notes: editNotes.trim(),
+          createdAt: editDate,
+          updatedAt: new Date(),
+        });
+      } else {
+        // Other bonus edit
+        await updateDoc(doc(db, "otherBonuses", selectedBonus.id), {
+          recipientName: editOtherName.trim() || selectedBonus.recipientName,
+          recipientRole: editOtherRole.trim() || selectedBonus.recipientRole || "Other",
+          recipientPhone: editOtherPhone.trim(),
           amount: amt,
           reason: finalReason,
           notes: editNotes.trim(),
@@ -722,9 +915,12 @@ function BonusManagementContent() {
                 if (!deletePartnerBonus)
                   throw new Error("DeliveryPartnerContext deletePartnerBonus not available.");
                 await deletePartnerBonus(bonus.id, bonus.recipientId, bonus.rawData);
-              } else {
+              } else if (bonus.type === "customer") {
                 // Delete from customerBonuses
                 await deleteDoc(doc(db, "customerBonuses", bonus.id));
+              } else {
+                // Delete from otherBonuses
+                await deleteDoc(doc(db, "otherBonuses", bonus.id));
               }
               setIsDetailModalOpen(false);
               setIsEditModalOpen(false);
@@ -750,8 +946,10 @@ function BonusManagementContent() {
         bonus.type === "worker"
           ? "Worker"
           : bonus.type === "delivery"
-          ? "Delivery Partner"
-          : `Marked Customer (${(bonus.markings || []).join(", ") || "Special"})`;
+            ? "Delivery Partner"
+            : bonus.type === "customer"
+              ? `Marked Customer (${(bonus.markings || []).join(", ") || "Special"})`
+              : `${bonus.recipientRole || "Goodwill"} Recipient`;
 
       const message = [
         `⭐ *BONUS REWARD RECEIPT* ⭐`,
@@ -778,7 +976,7 @@ function BonusManagementContent() {
     }
   };
 
-  const isLoading = loadingWorkerBonuses || loadingDeliveryBonuses || loadingCustomerBonuses;
+  const isLoading = loadingWorkerBonuses || loadingDeliveryBonuses || loadingCustomerBonuses || loadingOtherBonuses;
 
   return (
     <View style={styles.screenWrapper}>
@@ -854,6 +1052,15 @@ function BonusManagementContent() {
             <Text style={styles.statValue}>₹{stats.totalCustomer.toLocaleString("en-IN")}</Text>
             <Text style={styles.statMeta}>{stats.countCustomer} rewards</Text>
           </View>
+
+          <View style={[styles.statCard, { borderLeftColor: "#9333EA", borderLeftWidth: 4 }]}>
+            <View style={styles.statTopRow}>
+              <Text style={styles.statLabel}>Others</Text>
+              <MaterialIcons name="groups" size={18} color="#9333EA" />
+            </View>
+            <Text style={styles.statValue}>₹{stats.totalOther.toLocaleString("en-IN")}</Text>
+            <Text style={styles.statMeta}>{stats.countOther} rewards</Text>
+          </View>
         </ScrollView>
 
         {/* Tab Switcher */}
@@ -888,6 +1095,14 @@ function BonusManagementContent() {
           >
             <Text style={[styles.tabText, selectedTab === "customer" && styles.tabTextActive]}>
               🏷️ Marked Cust. ({customerBonusesRaw.length})
+            </Text>
+          </Pressable>
+          <Pressable
+            style={[styles.tabButton, selectedTab === "other" && styles.tabButtonActive]}
+            onPress={() => setSelectedTab("other")}
+          >
+            <Text style={[styles.tabText, selectedTab === "other" && styles.tabTextActive]}>
+              🤝 Others ({otherBonusesRaw.length})
             </Text>
           </Pressable>
         </ScrollView>
@@ -1016,30 +1231,41 @@ function BonusManagementContent() {
               const isWorker = item.type === "worker";
               const isDelivery = item.type === "delivery";
               const isCust = item.type === "customer";
+              const isOther = item.type === "other";
+
+              const otherRole = isOther ? getOtherRoleDetails(item.recipientRole) : null;
 
               const tagBg = isWorker
                 ? `${colors.accent.primary}18`
                 : isDelivery
-                ? "#8B5CF618"
-                : "#10B98118";
+                  ? "#8B5CF618"
+                  : isCust
+                    ? "#10B98118"
+                    : otherRole?.bg || "#9333EA18";
 
               const tagColor = isWorker
                 ? colors.accent.primary
                 : isDelivery
-                ? "#8B5CF6"
-                : "#10B981";
+                  ? "#8B5CF6"
+                  : isCust
+                    ? "#10B981"
+                    : otherRole?.color || "#9333EA";
 
               const iconName = isWorker
                 ? "engineering"
                 : isDelivery
-                ? "local-shipping"
-                : "loyalty";
+                  ? "local-shipping"
+                  : isCust
+                    ? "loyalty"
+                    : (otherRole?.icon as any) || "groups";
 
               const roleLabel = isWorker
                 ? "Worker"
                 : isDelivery
-                ? "Delivery"
-                : "Marked Cust.";
+                  ? "Delivery"
+                  : isCust
+                    ? "Marked Cust."
+                    : item.recipientRole || "Other";
 
               return (
                 <Pressable
@@ -1174,8 +1400,10 @@ function BonusManagementContent() {
                     {selectedBonus.type === "worker"
                       ? "👷 Factory Worker"
                       : selectedBonus.type === "delivery"
-                      ? "🚚 Delivery Driver"
-                      : `🏷️ Marked Customer (${(selectedBonus.markings || []).join(", ") || "Client"})`}
+                        ? "🚚 Delivery Driver"
+                        : selectedBonus.type === "customer"
+                          ? `🏷️ Marked Customer (${(selectedBonus.markings || []).join(", ") || "Client"})`
+                          : `🤝 Other: ${selectedBonus.recipientRole || "Goodwill Recipient"}`}
                   </Text>
                 </View>
 
@@ -1184,6 +1412,14 @@ function BonusManagementContent() {
                     <Text style={styles.receiptLabel}>Recipient</Text>
                     <Text style={styles.receiptValue}>{selectedBonus.recipientName}</Text>
                   </View>
+                  {selectedBonus.type === "other" && selectedBonus.recipientRole ? (
+                    <View style={styles.receiptRow}>
+                      <Text style={styles.receiptLabel}>Category / Role</Text>
+                      <Text style={[styles.receiptValue, { color: colors.accent.primary, fontWeight: "700" }]}>
+                        {selectedBonus.recipientRole}
+                      </Text>
+                    </View>
+                  ) : null}
                   {selectedBonus.recipientPhone ? (
                     <View style={styles.receiptRow}>
                       <Text style={styles.receiptLabel}>Phone</Text>
@@ -1381,163 +1617,301 @@ function BonusManagementContent() {
                     Marked Cust. ({activeMarkingCustomers.length})
                   </Text>
                 </Pressable>
+
+                <Pressable
+                  style={[
+                    styles.typeToggleBtn,
+                    awardType === "other" && styles.typeToggleBtnActive,
+                  ]}
+                  onPress={() => {
+                    setAwardType("other");
+                    setAwardRecipientId("");
+                    setRecipientSearchText("");
+                    setAwardReasonPreset(OTHER_REASONS[0]);
+                  }}
+                  disabled={isSavingAward}
+                >
+                  <MaterialIcons
+                    name="groups"
+                    size={16}
+                    color={awardType === "other" ? "#ffffff" : colors.text.secondary}
+                  />
+                  <Text
+                    style={[
+                      styles.typeToggleText,
+                      awardType === "other" && styles.typeToggleTextActive,
+                    ]}
+                  >
+                    Others ({otherBonusesRaw.length})
+                  </Text>
+                </Pressable>
               </ScrollView>
 
-              {/* Recipient Selection Header */}
-              <Text style={styles.inputLabel}>
-                Select {awardType === "worker" ? "Worker" : awardType === "delivery" ? "Delivery Partner" : "Marked Customer"} *
-              </Text>
-
-              {/* Selected Recipient Banner (if chosen) */}
-              {selectedRecipientEntity && (
-                <View style={styles.selectedRecipientBanner}>
-                  <View style={styles.selectedRecipientLeft}>
-                    <View style={styles.selectedCheckCircle}>
-                      <MaterialIcons name="check" size={16} color="#ffffff" />
-                    </View>
-                    <View style={{ flex: 1 }}>
-                      <Text style={styles.selectedRecipientName} numberOfLines={1}>
-                        {(selectedRecipientEntity as any).name ||
-                          (selectedRecipientEntity as any).fullName ||
-                          (selectedRecipientEntity as any).partnerName ||
-                          "Selected"}
-                      </Text>
-                      <View style={{ flexDirection: "row", alignItems: "center", gap: 6, marginTop: 2 }}>
-                        {((selectedRecipientEntity as any).phone || (selectedRecipientEntity as any).mobile) ? (
-                          <Text style={styles.selectedRecipientPhone}>
-                            {(selectedRecipientEntity as any).phone || (selectedRecipientEntity as any).mobile}
-                          </Text>
-                        ) : null}
-                        {awardType === "customer" && (
-                          <Text style={styles.selectedRecipientMarkings}>
-                            • {normalizeMarkings(selectedRecipientEntity).join(", ") || "Marked"}
-                          </Text>
-                        )}
-                      </View>
-                    </View>
-                  </View>
-                  <Pressable
-                    style={styles.changeRecipientBtn}
-                    onPress={() => setAwardRecipientId("")}
-                    hitSlop={6}
-                  >
-                    <Text style={styles.changeRecipientText}>Change</Text>
-                  </Pressable>
-                </View>
-              )}
-
-              {/* Recipient Search & Selector Box */}
-              <View style={styles.recipientSelectContainer}>
-                {/* Search Bar */}
-                <View style={styles.recipientSearchBar}>
-                  <MaterialIcons name="search" size={18} color={colors.text.muted} />
-                  <TextInput
-                    style={styles.recipientSearchInput}
-                    placeholder={
-                      awardType === "worker"
-                        ? "Search worker by name or phone..."
-                        : awardType === "delivery"
-                        ? "Search driver by name or phone..."
-                        : "Search by name, phone, or marking tag..."
-                    }
-                    placeholderTextColor={colors.text.muted}
-                    value={recipientSearchText}
-                    onChangeText={setRecipientSearchText}
-                    editable={!isSavingAward}
-                  />
-                  {recipientSearchText.length > 0 && (
-                    <Pressable onPress={() => setRecipientSearchText("")} hitSlop={6}>
-                      <MaterialIcons name="close" size={16} color={colors.text.muted} />
-                    </Pressable>
-                  )}
-                </View>
-
-                {/* Recipient Scrollable List */}
-                <ScrollView
-                  style={styles.recipientResultsScroll}
-                  nestedScrollEnabled={true}
-                  showsVerticalScrollIndicator={true}
-                  contentContainerStyle={styles.recipientResultsContent}
-                >
-                  {filteredAwardRecipients.length === 0 ? (
-                    <View style={styles.noResultsBox}>
-                      <MaterialIcons name="search-off" size={24} color={colors.text.muted} />
-                      <Text style={styles.noResultsText}>
-                        {recipientSearchText
-                          ? `No ${awardType === "worker" ? "workers" : awardType === "delivery" ? "drivers" : "marked customers"} found for "${recipientSearchText}".`
-                          : `No ${awardType === "worker" ? "workers" : awardType === "delivery" ? "delivery partners" : "marked customers"} available.`}
-                      </Text>
-                    </View>
-                  ) : (
-                    filteredAwardRecipients.map((item: any) => {
-                      const isSelected = awardRecipientId === item.id;
-                      const displayName = item.name || item.fullName || item.partnerName || "Unnamed";
-                      const phoneNum = item.phone || item.mobile || "";
-                      const marks = awardType === "customer" ? normalizeMarkings(item) : [];
-
+              {awardType === "other" ? (
+                <View style={styles.otherRecipientBox}>
+                  {/* Category / Role Quick Chips */}
+                  <Text style={styles.inputLabel}>Recipient Category / Role *</Text>
+                  <View style={styles.otherRoleWrap}>
+                    {OTHER_ROLES.map((r) => {
+                      const isSel = awardOtherRolePreset === r.id;
                       return (
                         <Pressable
-                          key={item.id}
+                          key={r.id}
                           style={[
-                            styles.recipientResultItem,
-                            isSelected && styles.recipientResultItemSelected,
+                            styles.otherRoleChip,
+                            isSel && styles.otherRoleChipActive,
                           ]}
-                          onPress={() => setAwardRecipientId(item.id)}
+                          onPress={() => setAwardOtherRolePreset(r.id)}
                           disabled={isSavingAward}
                         >
-                          <View style={styles.resultItemLeft}>
-                            <MaterialIcons
-                              name={
-                                isSelected
-                                  ? "check-circle"
-                                  : awardType === "worker"
-                                  ? "engineering"
-                                  : awardType === "delivery"
-                                  ? "local-shipping"
-                                  : "loyalty"
-                              }
-                              size={18}
-                              color={
-                                isSelected
-                                  ? colors.accent.primary
-                                  : awardType === "customer"
-                                  ? "#10B981"
-                                  : colors.text.secondary
-                              }
-                            />
-                            <View style={{ flex: 1 }}>
-                              <View style={{ flexDirection: "row", alignItems: "center", gap: 6 }}>
-                                <Text
-                                  style={[
-                                    styles.resultItemName,
-                                    isSelected && styles.resultItemNameSelected,
-                                  ]}
-                                  numberOfLines={1}
-                                >
-                                  {displayName}
-                                </Text>
-                                {marks.length > 0 && (
-                                  <View style={styles.resultMarkingTag}>
-                                    <Text style={styles.resultMarkingTagText} numberOfLines={1}>
-                                      {marks[0]}
-                                    </Text>
-                                  </View>
-                                )}
-                              </View>
-                              {phoneNum ? (
-                                <Text style={styles.resultItemPhone}>{phoneNum}</Text>
-                              ) : null}
-                            </View>
-                          </View>
-                          {isSelected && (
-                            <MaterialIcons name="done" size={18} color={colors.accent.primary} />
-                          )}
+                          <MaterialIcons
+                            name={r.icon as any}
+                            size={16}
+                            color={isSel ? "#ffffff" : colors.accent.primary}
+                          />
+                          <Text
+                            style={[
+                              styles.otherRoleChipText,
+                              isSel && styles.otherRoleChipTextActive,
+                            ]}
+                          >
+                            {r.label}
+                          </Text>
                         </Pressable>
                       );
-                    })
+                    })}
+                  </View>
+
+                  {awardOtherRolePreset === "custom" && (
+                    <View style={{ marginTop: 6, marginBottom: 4 }}>
+                      <Text style={styles.inputLabel}>Custom Designation / Role *</Text>
+                      <TextInput
+                        style={styles.textInput}
+                        placeholder="e.g. Fire Service, Panchayat Staff, Sub-station Guard..."
+                        placeholderTextColor={colors.text.muted}
+                        value={awardOtherRoleCustom}
+                        onChangeText={setAwardOtherRoleCustom}
+                        editable={!isSavingAward}
+                      />
+                    </View>
                   )}
-                </ScrollView>
-              </View>
+
+                  {/* Recipient Name Input */}
+                  <Text style={styles.inputLabel}>Recipient Name *</Text>
+                  <TextInput
+                    style={styles.textInput}
+                    placeholder="e.g. Lineman Murugan, SI Ramesh, Watchman Raju..."
+                    placeholderTextColor={colors.text.muted}
+                    value={awardOtherName}
+                    onChangeText={setAwardOtherName}
+                    editable={!isSavingAward}
+                  />
+
+                  {/* Suggestions from Previous Other Contacts */}
+                  {pastOtherRecipients.length > 0 && !awardOtherName && (
+                    <View style={styles.suggestionsContainer}>
+                      <Text style={styles.suggestionsTitle}>Recent / Past Recipients:</Text>
+                      <ScrollView horizontal showsHorizontalScrollIndicator={false} contentContainerStyle={styles.suggestionsRow}>
+                        {pastOtherRecipients.slice(0, 10).map((p) => (
+                          <Pressable
+                            key={p.name}
+                            style={styles.suggestionChip}
+                            onPress={() => {
+                              setAwardOtherName(p.name);
+                              if (p.phone) setAwardOtherPhone(p.phone);
+                              if (p.role) {
+                                const matched = OTHER_ROLES.find(
+                                  (r) => r.label.toLowerCase() === p.role?.toLowerCase()
+                                );
+                                if (matched) {
+                                  setAwardOtherRolePreset(matched.id);
+                                } else {
+                                  setAwardOtherRolePreset("custom");
+                                  setAwardOtherRoleCustom(p.role);
+                                }
+                              }
+                            }}
+                            disabled={isSavingAward}
+                          >
+                            <Text style={styles.suggestionChipName}>{p.name}</Text>
+                            {p.role ? <Text style={styles.suggestionChipRole}>({p.role})</Text> : null}
+                          </Pressable>
+                        ))}
+                      </ScrollView>
+                    </View>
+                  )}
+
+                  {/* Phone Number Input (Optional) */}
+                  <Text style={styles.inputLabel}>Phone Number (Optional)</Text>
+                  <TextInput
+                    style={styles.textInput}
+                    placeholder="e.g. 9876543210"
+                    placeholderTextColor={colors.text.muted}
+                    keyboardType="phone-pad"
+                    value={awardOtherPhone}
+                    onChangeText={setAwardOtherPhone}
+                    editable={!isSavingAward}
+                  />
+                </View>
+              ) : (
+                <>
+                  {/* Recipient Selection Header */}
+                  <Text style={styles.inputLabel}>
+                    Select {awardType === "worker" ? "Worker" : awardType === "delivery" ? "Delivery Partner" : "Marked Customer"} *
+                  </Text>
+
+                  {/* Selected Recipient Banner (if chosen) */}
+                  {selectedRecipientEntity && (
+                    <View style={styles.selectedRecipientBanner}>
+                      <View style={styles.selectedRecipientLeft}>
+                        <View style={styles.selectedCheckCircle}>
+                          <MaterialIcons name="check" size={16} color="#ffffff" />
+                        </View>
+                        <View style={{ flex: 1 }}>
+                          <Text style={styles.selectedRecipientName} numberOfLines={1}>
+                            {(selectedRecipientEntity as any).name ||
+                              (selectedRecipientEntity as any).fullName ||
+                              (selectedRecipientEntity as any).partnerName ||
+                              "Selected"}
+                          </Text>
+                          <View style={{ flexDirection: "row", alignItems: "center", gap: 6, marginTop: 2 }}>
+                            {((selectedRecipientEntity as any).phone || (selectedRecipientEntity as any).mobile) ? (
+                              <Text style={styles.selectedRecipientPhone}>
+                                {(selectedRecipientEntity as any).phone || (selectedRecipientEntity as any).mobile}
+                              </Text>
+                            ) : null}
+                            {awardType === "customer" && (
+                              <Text style={styles.selectedRecipientMarkings}>
+                                • {normalizeMarkings(selectedRecipientEntity).join(", ") || "Marked"}
+                              </Text>
+                            )}
+                          </View>
+                        </View>
+                      </View>
+                      <Pressable
+                        style={styles.changeRecipientBtn}
+                        onPress={() => setAwardRecipientId("")}
+                        hitSlop={6}
+                      >
+                        <Text style={styles.changeRecipientText}>Change</Text>
+                      </Pressable>
+                    </View>
+                  )}
+
+                  {/* Recipient Search & Selector Box */}
+                  <View style={styles.recipientSelectContainer}>
+                    {/* Search Bar */}
+                    <View style={styles.recipientSearchBar}>
+                      <MaterialIcons name="search" size={18} color={colors.text.muted} />
+                      <TextInput
+                        style={styles.recipientSearchInput}
+                        placeholder={
+                          awardType === "worker"
+                            ? "Search worker by name or phone..."
+                            : awardType === "delivery"
+                              ? "Search driver by name or phone..."
+                              : "Search by name, phone, or marking tag..."
+                        }
+                        placeholderTextColor={colors.text.muted}
+                        value={recipientSearchText}
+                        onChangeText={setRecipientSearchText}
+                        editable={!isSavingAward}
+                      />
+                      {recipientSearchText.length > 0 && (
+                        <Pressable onPress={() => setRecipientSearchText("")} hitSlop={6}>
+                          <MaterialIcons name="close" size={16} color={colors.text.muted} />
+                        </Pressable>
+                      )}
+                    </View>
+
+                    {/* Recipient Scrollable List */}
+                    <ScrollView
+                      style={styles.recipientResultsScroll}
+                      nestedScrollEnabled={true}
+                      showsVerticalScrollIndicator={true}
+                      contentContainerStyle={styles.recipientResultsContent}
+                    >
+                      {filteredAwardRecipients.length === 0 ? (
+                        <View style={styles.noResultsBox}>
+                          <MaterialIcons name="search-off" size={24} color={colors.text.muted} />
+                          <Text style={styles.noResultsText}>
+                            {recipientSearchText
+                              ? `No ${awardType === "worker" ? "workers" : awardType === "delivery" ? "drivers" : "marked customers"} found for "${recipientSearchText}".`
+                              : `No ${awardType === "worker" ? "workers" : awardType === "delivery" ? "delivery partners" : "marked customers"} available.`}
+                          </Text>
+                        </View>
+                      ) : (
+                        filteredAwardRecipients.map((item: any) => {
+                          const isSelected = awardRecipientId === item.id;
+                          const displayName = item.name || item.fullName || item.partnerName || "Unnamed";
+                          const phoneNum = item.phone || item.mobile || "";
+                          const marks = awardType === "customer" ? normalizeMarkings(item) : [];
+
+                          return (
+                            <Pressable
+                              key={item.id}
+                              style={[
+                                styles.recipientResultItem,
+                                isSelected && styles.recipientResultItemSelected,
+                              ]}
+                              onPress={() => setAwardRecipientId(item.id)}
+                              disabled={isSavingAward}
+                            >
+                              <View style={styles.resultItemLeft}>
+                                <MaterialIcons
+                                  name={
+                                    isSelected
+                                      ? "check-circle"
+                                      : awardType === "worker"
+                                        ? "engineering"
+                                        : awardType === "delivery"
+                                          ? "local-shipping"
+                                          : "loyalty"
+                                  }
+                                  size={18}
+                                  color={
+                                    isSelected
+                                      ? colors.accent.primary
+                                      : awardType === "customer"
+                                        ? "#10B981"
+                                        : colors.text.secondary
+                                  }
+                                />
+                                <View style={{ flex: 1 }}>
+                                  <View style={{ flexDirection: "row", alignItems: "center", gap: 6 }}>
+                                    <Text
+                                      style={[
+                                        styles.resultItemName,
+                                        isSelected && styles.resultItemNameSelected,
+                                      ]}
+                                      numberOfLines={1}
+                                    >
+                                      {displayName}
+                                    </Text>
+                                    {marks.length > 0 && (
+                                      <View style={styles.resultMarkingTag}>
+                                        <Text style={styles.resultMarkingTagText} numberOfLines={1}>
+                                          {marks[0]}
+                                        </Text>
+                                      </View>
+                                    )}
+                                  </View>
+                                  {phoneNum ? (
+                                    <Text style={styles.resultItemPhone}>{phoneNum}</Text>
+                                  ) : null}
+                                </View>
+                              </View>
+                              {isSelected && (
+                                <MaterialIcons name="done" size={18} color={colors.accent.primary} />
+                              )}
+                            </Pressable>
+                          );
+                        })
+                      )}
+                    </ScrollView>
+                  </View>
+                </>
+              )}
 
               {/* Amount Input */}
               <Text style={styles.inputLabel}>Bonus Amount (₹) *</Text>
@@ -1574,8 +1948,10 @@ function BonusManagementContent() {
                 {(awardType === "worker"
                   ? WORKER_REASONS
                   : awardType === "delivery"
-                  ? DELIVERY_REASONS
-                  : CUSTOMER_REASONS
+                    ? DELIVERY_REASONS
+                    : awardType === "customer"
+                      ? CUSTOMER_REASONS
+                      : OTHER_REASONS
                 ).map((reason) => {
                   const selected = awardReasonPreset === reason;
                   return (
@@ -1699,6 +2075,41 @@ function BonusManagementContent() {
             </View>
 
             <ScrollView showsVerticalScrollIndicator={false} contentContainerStyle={styles.formScroll}>
+              {selectedBonus?.type === "other" && (
+                <>
+                  <Text style={styles.inputLabel}>Recipient Name *</Text>
+                  <TextInput
+                    style={styles.textInput}
+                    placeholder="Recipient Name"
+                    placeholderTextColor={colors.text.muted}
+                    value={editOtherName}
+                    onChangeText={setEditOtherName}
+                    editable={!isSavingEdit}
+                  />
+
+                  <Text style={styles.inputLabel}>Category / Designation *</Text>
+                  <TextInput
+                    style={styles.textInput}
+                    placeholder="e.g. Police, Lineman, Municipal, Security..."
+                    placeholderTextColor={colors.text.muted}
+                    value={editOtherRole}
+                    onChangeText={setEditOtherRole}
+                    editable={!isSavingEdit}
+                  />
+
+                  <Text style={styles.inputLabel}>Phone Number (Optional)</Text>
+                  <TextInput
+                    style={styles.textInput}
+                    placeholder="Phone"
+                    placeholderTextColor={colors.text.muted}
+                    keyboardType="phone-pad"
+                    value={editOtherPhone}
+                    onChangeText={setEditOtherPhone}
+                    editable={!isSavingEdit}
+                  />
+                </>
+              )}
+
               <Text style={styles.inputLabel}>Bonus Amount (₹) *</Text>
               <View style={styles.amountInputRow}>
                 <Text style={styles.currencyPrefix}>₹</Text>
@@ -1718,8 +2129,10 @@ function BonusManagementContent() {
                 {(selectedBonus?.type === "worker"
                   ? WORKER_REASONS
                   : selectedBonus?.type === "delivery"
-                  ? DELIVERY_REASONS
-                  : CUSTOMER_REASONS
+                    ? DELIVERY_REASONS
+                    : selectedBonus?.type === "customer"
+                      ? CUSTOMER_REASONS
+                      : OTHER_REASONS
                 ).map((reason) => {
                   const selected = editReasonPreset === reason;
                   return (
@@ -1817,19 +2230,19 @@ function BonusManagementContent() {
           calendarTarget === "award"
             ? awardDate
             : calendarTarget === "edit"
-            ? editDate
-            : calendarTarget === "start"
-            ? startDate || new Date()
-            : endDate || new Date()
+              ? editDate
+              : calendarTarget === "start"
+                ? startDate || new Date()
+                : endDate || new Date()
         }
         title={
           calendarTarget === "award"
             ? "Select Award Date"
             : calendarTarget === "edit"
-            ? "Edit Bonus Date"
-            : calendarTarget === "start"
-            ? "Select Start Date"
-            : "Select End Date"
+              ? "Edit Bonus Date"
+              : calendarTarget === "start"
+                ? "Select Start Date"
+                : "Select End Date"
         }
         onSelectDate={(d) => {
           if (calendarTarget === "award") setAwardDate(d);
@@ -2826,6 +3239,81 @@ const getStyles = (theme: any) => {
       fontSize: 13,
       fontWeight: "800",
       color: "#ffffff",
+    },
+
+    // Other Recipient Styles
+    otherRecipientBox: {
+      gap: 2,
+    },
+    otherRoleWrap: {
+      flexDirection: "row",
+      flexWrap: "wrap",
+      gap: 6,
+      marginBottom: 6,
+    },
+    otherRoleChip: {
+      flexDirection: "row",
+      alignItems: "center",
+      gap: 4,
+      paddingVertical: 6,
+      paddingHorizontal: 10,
+      borderRadius: radius.md,
+      backgroundColor: colors.bg.primary,
+      borderWidth: 1,
+      borderColor: colors.border.subtle,
+    },
+    otherRoleChipActive: {
+      backgroundColor: colors.accent.primary,
+      borderColor: colors.accent.primary,
+    },
+    otherRoleChipText: {
+      fontSize: 11,
+      fontWeight: "700",
+      color: colors.text.secondary,
+    },
+    otherRoleChipTextActive: {
+      color: "#ffffff",
+    },
+    suggestionsContainer: {
+      marginTop: 4,
+      marginBottom: 6,
+      padding: 8,
+      backgroundColor: colors.bg.primary,
+      borderRadius: radius.sm,
+      borderWidth: 1,
+      borderColor: colors.border.subtle,
+    },
+    suggestionsTitle: {
+      fontSize: 10,
+      fontWeight: "700",
+      color: colors.text.muted,
+      textTransform: "uppercase",
+      marginBottom: 6,
+    },
+    suggestionsRow: {
+      flexDirection: "row",
+      gap: 6,
+    },
+    suggestionChip: {
+      flexDirection: "row",
+      alignItems: "center",
+      gap: 4,
+      backgroundColor: colors.bg.card,
+      paddingVertical: 4,
+      paddingHorizontal: 8,
+      borderRadius: radius.full || 12,
+      borderWidth: 1,
+      borderColor: colors.border.subtle,
+    },
+    suggestionChipName: {
+      fontSize: 11,
+      fontWeight: "700",
+      color: colors.text.primary,
+    },
+    suggestionChipRole: {
+      fontSize: 10,
+      fontWeight: "600",
+      color: colors.text.muted,
     },
   });
 };

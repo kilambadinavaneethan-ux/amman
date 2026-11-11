@@ -108,16 +108,15 @@ export function DeliveryPartnerProvider({ children }) {
         createdAt,
       });
 
-      if (partnerId && amount > 0) {
+      // Bonus is an awarded reward and does not inflate pending delivery wage debt/dues
+      if (partnerId) {
         try {
           const partnerRef = doc(db, "deliveryPartners", partnerId);
           await updateDoc(partnerRef, {
-            totalPayable: increment(amount),
-            totalPending: increment(amount),
             updatedAt: new Date(),
           });
         } catch (syncErr) {
-          console.warn("Failed to sync bonus to partner balance:", syncErr);
+          console.warn("Failed to touch partner updatedAt on bonus log:", syncErr);
         }
       }
 
@@ -131,8 +130,6 @@ export function DeliveryPartnerProvider({ children }) {
   const updatePartnerBonus = async (bonusId, partnerId, newBonusData, oldBonusData) => {
     try {
       const newAmt = Number(newBonusData.amount || 0);
-      const oldAmt = Number(oldBonusData?.amount || 0);
-      const diff = newAmt - oldAmt;
 
       const updateData = {
         amount: newAmt,
@@ -146,16 +143,14 @@ export function DeliveryPartnerProvider({ children }) {
 
       await updateDoc(doc(db, "deliveryPartnerBonuses", bonusId), updateData);
 
-      if (partnerId && diff !== 0) {
+      if (partnerId) {
         try {
           const partnerRef = doc(db, "deliveryPartners", partnerId);
           await updateDoc(partnerRef, {
-            totalPayable: increment(diff),
-            totalPending: increment(diff),
             updatedAt: new Date(),
           });
         } catch (syncErr) {
-          console.warn("Failed to sync bonus diff to partner balance:", syncErr);
+          console.warn("Failed to touch partner updatedAt on bonus update:", syncErr);
         }
       }
 
@@ -168,19 +163,16 @@ export function DeliveryPartnerProvider({ children }) {
 
   const deletePartnerBonus = async (bonusId, partnerId, bonusData) => {
     try {
-      const oldAmt = Number(bonusData?.amount || 0);
       await deleteDoc(doc(db, "deliveryPartnerBonuses", bonusId));
 
-      if (partnerId && oldAmt > 0) {
+      if (partnerId) {
         try {
           const partnerRef = doc(db, "deliveryPartners", partnerId);
           await updateDoc(partnerRef, {
-            totalPayable: increment(-oldAmt),
-            totalPending: increment(-oldAmt),
             updatedAt: new Date(),
           });
         } catch (syncErr) {
-          console.warn("Failed to sync bonus deletion to partner balance:", syncErr);
+          console.warn("Failed to touch partner updatedAt on bonus delete:", syncErr);
         }
       }
 

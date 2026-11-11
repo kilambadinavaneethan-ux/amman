@@ -419,13 +419,13 @@ export default function ExpenseBalances() {
         return sum + total;
       }, 0);
 
-      // 2. Driver Bonuses
+      // 2. Driver Bonuses (tracked separately as awarded reward incentives)
       const bonusEarned = (deliveryBonuses || [])
         .filter((b: any) => String(b.partnerId) === pId)
         .reduce((sum: number, b: any) => sum + Number(b.amount || 0), 0);
 
-      // 3. Total Earned / Payable
-      const totalEarned = tripEarnings + bonusEarned;
+      // 3. Total Freight Earned / Payable (Trip freight charges)
+      const totalEarned = tripEarnings;
 
       // 4. Net Driver Payouts Paid (Payouts - Repayments)
       let grossDisbursed = 0;

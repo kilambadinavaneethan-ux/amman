@@ -73,6 +73,7 @@ export const OUTFLOW_CATEGORIES = [
   'Delivery & Freight',
   'Delivery Partner Bonuses',
   'Customer Commissions & Rebates',
+  'Goodwill & Other Bonuses',
   'Operating Expense',
   'Owner Drawings',
   'Personal Withdrawal',
@@ -402,6 +403,7 @@ export function unifyFundEntries({
   workerBonuses = [],
   deliveryBonuses = [],
   customerBonuses = [],
+  otherBonuses = [],
   fundTransactions = [],
   accounts = DEFAULT_FUND_ACCOUNTS,
   workerMap = new Map(),
@@ -416,6 +418,7 @@ export function unifyFundEntries({
   workerBonuses?: any[];
   deliveryBonuses?: any[];
   customerBonuses?: any[];
+  otherBonuses?: any[];
   fundTransactions?: FundTransaction[];
   accounts?: FundAccount[];
   workerMap?: Map<string, { name: string }>;
@@ -685,6 +688,36 @@ export function unifyFundEntries({
       accountName: acc?.name || method,
       partyName: `${customerName}${markingsText}`,
       notes: cb.notes || '',
+      isManual: false,
+    });
+  });
+
+  // 9b. Goodwill & Other External Bonuses (OUTFLOW)
+  (otherBonuses || []).forEach((ob) => {
+    const amt = Number(ob.amount || 0);
+    if (amt <= 0) return;
+    const date = parseSafeDate(ob.createdAt || ob.date);
+    const method = ob.paymentMethod || 'Cash';
+    const accId = resolveAccountIdFromPaymentMethod(method, accounts);
+    const acc = accountMap.get(accId);
+    const recipientName = ob.recipientName || 'Goodwill Recipient';
+    const roleText = ob.recipientRole ? ` (${ob.recipientRole})` : '';
+
+    stream.push({
+      id: `ob_${ob.id}`,
+      rawId: ob.id,
+      type: 'outflow',
+      sourceType: 'other_bonus' as any,
+      sourceLabel: 'Goodwill / Other Bonus',
+      title: ob.reason ? `${ob.reason}: ${recipientName}${roleText}` : `Bonus: ${recipientName}${roleText}`,
+      category: 'Goodwill & Other Bonuses',
+      amount: amt,
+      paymentMethod: method,
+      date,
+      accountId: accId,
+      accountName: acc?.name || method,
+      partyName: `${recipientName}${roleText}`,
+      notes: ob.notes || '',
       isManual: false,
     });
   });

@@ -110,6 +110,7 @@ export default function FundFlowManagementScreen() {
   const [workerBonuses, setWorkerBonuses] = useState<any[]>([]);
   const [deliveryBonuses, setDeliveryBonuses] = useState<any[]>([]);
   const [customerBonuses, setCustomerBonuses] = useState<any[]>([]);
+  const [otherBonuses, setOtherBonuses] = useState<any[]>([]);
   const [fundAccounts, setFundAccounts] = useState<FundAccount[]>(DEFAULT_FUND_ACCOUNTS);
   const [fundTransactions, setFundTransactions] = useState<FundTransaction[]>([]);
   const [loadingDirect, setLoadingDirect] = useState(true);
@@ -272,12 +273,27 @@ export default function FundFlowManagementScreen() {
       (err) => console.log("customerBonuses error in fund-flow:", err)
     );
 
+    const qOtherBonus = query(collection(db, "otherBonuses"), orderBy("createdAt", "desc"));
+    const unsubOtherBonus = onSnapshot(
+      qOtherBonus,
+      (snap) => {
+        const docs = snap.docs.map((d) => ({
+          id: d.id,
+          ...d.data(),
+          createdAt: normalizeDateValue(d.data().createdAt || d.data().date),
+        }));
+        setOtherBonuses(docs);
+      },
+      (err) => console.log("otherBonuses error in fund-flow:", err)
+    );
+
     return () => {
       unsubWorker();
       unsubDelivery();
       unsubWorkerBonus();
       unsubDeliveryBonus();
       unsubCustomerBonus();
+      unsubOtherBonus();
     };
   }, []);
 
@@ -320,6 +336,7 @@ export default function FundFlowManagementScreen() {
       workerBonuses,
       deliveryBonuses,
       customerBonuses,
+      otherBonuses,
       fundTransactions,
       accounts: fundAccounts,
       workerMap,
@@ -335,6 +352,7 @@ export default function FundFlowManagementScreen() {
     workerBonuses,
     deliveryBonuses,
     customerBonuses,
+    otherBonuses,
     fundTransactions,
     fundAccounts,
     workerMap,

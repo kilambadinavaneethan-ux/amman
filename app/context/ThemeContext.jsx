@@ -50,6 +50,8 @@ const defaultTypographyConfig = {
 // ═══════════════════════════════════════════════════════════════════
 // CONTEXT
 // ═══════════════════════════════════════════════════════════════════
+export const UnscaledTextContext = createContext(false);
+
 export const ThemeContext = createContext({
   themeName: "nordic",
   theme: {
@@ -202,9 +204,10 @@ function patchGlobalTextComponents() {
 
   // Patched Text — useContext only for re-render trigger
   const PatchedText = React.forwardRef(function PatchedText(props, ref) {
-    const { style, children, ...rest } = props;
+    const { style, children, unscaled, ...rest } = props;
     useContext(ThemeContext); // triggers re-render when settings change
-    const finalStyle = computeFontStyle(style);
+    const isUnscaledContext = useContext(UnscaledTextContext);
+    const finalStyle = (isUnscaledContext || unscaled) ? style : computeFontStyle(style);
     return (
       <OriginalText
         ref={ref}
@@ -220,9 +223,10 @@ function patchGlobalTextComponents() {
 
   // Patched TextInput — useContext only for re-render trigger
   const PatchedTextInput = React.forwardRef(function PatchedTextInput(props, ref) {
-    const { style, ...rest } = props;
+    const { style, unscaled, ...rest } = props;
     useContext(ThemeContext); // triggers re-render when settings change
-    const finalStyle = computeFontStyle(style);
+    const isUnscaledContext = useContext(UnscaledTextContext);
+    const finalStyle = (isUnscaledContext || unscaled) ? style : computeFontStyle(style);
     return (
       <OriginalTextInput
         ref={ref}

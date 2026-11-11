@@ -140,8 +140,8 @@ export class DeliveryPartnerShareService {
     const companyName = company?.businessName || company?.fullName || company?.name || 'Our Business';
     const companyPhone = company?.mobile || company?.phone || '';
     
-    // Net delivery earnings minus payouts: Trips + Bonuses - Paid
-    const netDeliveryBal = (s.totalPayable || 0) + (s.totalBonuses || 0) - (s.totalPaid || 0);
+    // Net delivery earnings minus payouts: Trips - Paid (bonuses are awarded perks and not unpaid dues)
+    const netDeliveryBal = (s.totalPayable || 0) - (s.totalPaid || 0);
     const hasOrderDue = Boolean((s.totalOrderDue || 0) > 0 && data.options?.includePurchasedOrders !== false);
     const finalSettlement = s.netPending !== undefined ? s.netPending : (hasOrderDue ? netDeliveryBal - (s.totalOrderDue || 0) : netDeliveryBal);
 

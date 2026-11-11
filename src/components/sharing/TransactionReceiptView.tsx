@@ -1,7 +1,8 @@
+import { Image } from 'expo-image';
 import React from 'react';
 import { StyleSheet, Text, View } from 'react-native';
-import { Image } from 'expo-image';
-import { ShareSettings, TransactionData, InvoiceTemplate, DEFAULT_INVOICE_TEMPLATE, formatCustomerPhonesDisplay } from '../../types/sharing';
+import { UnscaledTextContext } from '../../../app/context/ThemeContext';
+import { DEFAULT_INVOICE_TEMPLATE, formatCustomerPhonesDisplay, InvoiceTemplate, ShareSettings, TransactionData } from '../../types/sharing';
 import { getInvoiceLabels, getLocalizedInvoiceTitle } from '../../utils/invoiceLocalization';
 
 interface Props {
@@ -194,394 +195,396 @@ const TransactionReceiptViewComponent: React.ForwardRefRenderFunction<any, Props
   };
 
   return (
-    <View
-      ref={ref}
-      collapsable={false}
-      style={[
-        styles.container,
-        { backgroundColor: cardBg, borderColor },
-      ]}
-    >
-      {/* Watermark overlay */}
-      {settings?.watermarkEnabled && (
-        <View style={styles.watermarkContainer} pointerEvents="none">
-          <Text style={styles.watermarkText}>{settings.watermarkText || 'CONFIDENTIAL'}</Text>
-        </View>
-      )}
-
-      {/* Top Accent Line */}
-      <View style={[styles.accentBar, { backgroundColor: accentColor }]} />
-
-      {/* Header */}
-      {renderHeader()}
-
-      {/* Meta Row (Date, Due Date, Payment Method) */}
-      {(tpl.showInvoiceDate || tpl.showDueDate || tpl.showPaymentMethod) && (
-        <View style={[styles.metaGrid, { backgroundColor: altRowBg, borderColor }]}>
-          {tpl.showInvoiceDate && (
-            <View style={styles.metaCol}>
-              <Text style={[styles.metaLabel, { color: subTextColor }]}>{labels.invoiceDate}</Text>
-              <Text style={[styles.metaVal, { color: headingColor }]}>{formatDate(transaction.date)}</Text>
-            </View>
-          )}
-          {tpl.showDueDate && transaction.dueDate && (
-            <View style={styles.metaCol}>
-              <Text style={[styles.metaLabel, { color: subTextColor }]}>{labels.dueDate}</Text>
-              <Text style={[styles.metaVal, { color: headingColor }]}>{formatDate(transaction.dueDate)}</Text>
-            </View>
-          )}
-          {tpl.showPaymentMethod && (
-            <View style={styles.metaCol}>
-              <Text style={[styles.metaLabel, { color: subTextColor }]}>{labels.paymentMode}</Text>
-              <Text style={[styles.metaVal, { color: headingColor }]}>{transaction.paymentMethod || 'Cash / Online'}</Text>
-            </View>
-          )}
-        </View>
-      )}
-
-      {/* Customer Info Card */}
-      {tpl.showCustomerSection && (
-        <View style={[styles.customerCard, { backgroundColor: altRowBg, borderColor }]}>
-          <Text style={[styles.customerLabel, { color: accentColor }]}>
-            {(tpl.customerSectionTitle ? (isTamil && tpl.customerSectionTitle === 'Billed To' ? labels.billedTo : tpl.customerSectionTitle) : labels.billedTo).toUpperCase()}
-          </Text>
-          {(() => {
-            const nameStr = customer.name || '';
-            const nameHasAvargal = nameStr.endsWith('அவர்கள்');
-            const mainCustomerName = nameHasAvargal ? nameStr.replace(/\s+அவர்கள்$/, '').trim() : nameStr;
-            const dynamicFontSize = mainCustomerName.length > 25 ? baseSize : (mainCustomerName.length > 18 ? baseSize + 1 : baseSize + 2);
-            return (
-              <Text style={[styles.customerName, { color: headingColor, fontSize: dynamicFontSize }]}>
-                {mainCustomerName}
-                {nameHasAvargal && (
-                  <Text style={{ fontSize: Math.max(10.5, dynamicFontSize - 3.5), fontWeight: '600', color: subTextColor }}>
-                    {' '}அவர்கள்
-                  </Text>
-                )}
-              </Text>
-            );
-          })()}
-          {(() => {
-            const customerPhones = formatCustomerPhonesDisplay(customer.phone, customer.phoneNumbers);
-            if (!tpl.showCustomerPhone || !customerPhones) return null;
-            return (
-              <Text style={[styles.customerSub, { color: subTextColor, fontSize: baseSize - 1 }]}>
-                📞 {customerPhones}
-              </Text>
-            );
-          })()}
-          {tpl.showCustomerAddress && settings?.includeCustomerAddress && customer.address && (
-            <Text style={[styles.customerSub, { color: subTextColor, fontSize: baseSize - 1 }]}>📍 {customer.address}</Text>
-          )}
-          {tpl.showCustomerGst && settings?.includeGst && customer.gstNo && (
-            <Text style={[styles.customerSub, { color: subTextColor, fontSize: baseSize - 1 }]}>GSTIN: {customer.gstNo}</Text>
-          )}
-        </View>
-      )}
-
-      {/* Items Table */}
-      <View style={[styles.tableContainer, { borderColor }]}>
-        <View style={[styles.tableHeader, { backgroundColor: tableHeaderBg }]}>
-          {showIndex && <Text style={[styles.th, styles.colIndex, { color: tableHeaderTextColor }]}>{labels.itemIndex}</Text>}
-          <Text style={[styles.th, styles.colItem, { color: tableHeaderTextColor }]}>{labels.item}</Text>
-          <Text style={[styles.th, styles.colQty, { color: tableHeaderTextColor }]}>{labels.qty}</Text>
-          {showRate && <Text style={[styles.th, styles.colRate, { color: tableHeaderTextColor }]}>{labels.rate}</Text>}
-          <Text style={[styles.th, styles.colAmount, { color: tableHeaderTextColor }]}>{labels.total}</Text>
-        </View>
-
-        {items.length > 0 ? (
-          items.map((item, idx) => {
-            const isEven = idx % 2 === 0;
-            const rowBg = tpl.tableStyle === 'striped' ? (isEven ? cardBg : altRowBg) : cardBg;
-            return (
-              <View
-                key={idx}
-                style={[
-                  styles.tableRow,
-                  {
-                    backgroundColor: rowBg,
-                    borderBottomColor: tpl.tableStyle === 'clean' || tpl.tableStyle === 'minimal' ? 'transparent' : borderColor,
-                    borderBottomWidth: tpl.tableStyle === 'bordered' ? 1 : 0.5,
-                  },
-                ]}
-              >
-                {showIndex && <Text style={[styles.td, styles.colIndex, { color: subTextColor }]}>{idx + 1}</Text>}
-                <Text style={[styles.td, styles.colItem, { color: textColor, fontWeight: '600' }]} numberOfLines={2}>
-                  {item.name}
-                </Text>
-                <Text style={[styles.td, styles.colQty, { color: textColor }]}>
-                  {item.quantity} {showUnit && item.unit ? item.unit : ''}
-                </Text>
-                {showRate && <Text style={[styles.td, styles.colRate, { color: textColor }]}>{formatCurrency(item.unitPrice)}</Text>}
-                <Text style={[styles.td, styles.colAmount, { color: headingColor, fontWeight: '700' }]}>
-                  {formatCurrency(item.totalPrice)}
-                </Text>
-              </View>
-            );
-          })
-        ) : (
-          <View style={[styles.tableRow, { backgroundColor: cardBg }]}>
-            <Text style={[styles.td, { color: subTextColor, textAlign: 'center', width: '100%', paddingVertical: 12 }]}>
-              {labels.transactionSummaryRecord}
-            </Text>
+    <UnscaledTextContext.Provider value={true}>
+      <View
+        ref={ref}
+        collapsable={false}
+        style={[
+          styles.container,
+          { backgroundColor: cardBg, borderColor },
+        ]}
+      >
+        {/* Watermark overlay */}
+        {settings?.watermarkEnabled && (
+          <View style={styles.watermarkContainer} pointerEvents="none">
+            <Text style={styles.watermarkText}>{settings.watermarkText || 'CONFIDENTIAL'}</Text>
           </View>
         )}
-      </View>
 
-      {/* Summary Container */}
-      <View style={styles.summaryContainer}>
-        {/* Payment Info Section: QR Code / Bank Account Details */}
-        <View style={{ flex: 1, paddingRight: 8 }}>
-          {/* QR Code */}
-          {settings?.includeQrCode !== false && tpl?.showQrCode !== false && settings?.paymentDisplayMode !== 'NONE' && settings?.paymentDisplayMode !== 'BANK' ? (
-            <View style={styles.qrSection}>
-              <Image
-                source={{ uri: (tpl.useCustomQrCode && tpl.customQrCodeUri) ? tpl.customQrCodeUri : qrCodeUrl }}
-                style={styles.qrImage}
-                contentFit="contain"
-              />
-              <Text style={[styles.qrCaption, { color: subTextColor }]}>
-                {tpl.useCustomQrCode && tpl.customQrCodeUri ? labels.scanToPayVerify : labels.scanToPay}
-              </Text>
-            </View>
-          ) : null}
+        {/* Top Accent Line */}
+        <View style={[styles.accentBar, { backgroundColor: accentColor }]} />
 
-          {/* Bank Account Details */}
-          {settings?.includeBankDetails !== false && tpl?.showBankDetails !== false && settings?.paymentDisplayMode !== 'NONE' && settings?.paymentDisplayMode !== 'QR' ? (
-            (() => {
-              const bName = settings?.bankName || tpl?.bankName || company?.bankName;
-              const bAcc = settings?.accountNo || tpl?.accountNo || company?.accountNo;
-              const bIfsc = settings?.ifscCode || tpl?.ifscCode || company?.ifscCode;
-              const bHolder = settings?.accountHolderName || tpl?.accountHolderName || company?.name;
+        {/* Header */}
+        {renderHeader()}
 
-              if (!bName && !bAcc) return null;
+        {/* Meta Row (Date, Due Date, Payment Method) */}
+        {(tpl.showInvoiceDate || tpl.showDueDate || tpl.showPaymentMethod) && (
+          <View style={[styles.metaGrid, { backgroundColor: altRowBg, borderColor }]}>
+            {tpl.showInvoiceDate && (
+              <View style={styles.metaCol}>
+                <Text style={[styles.metaLabel, { color: subTextColor }]}>{labels.invoiceDate}</Text>
+                <Text style={[styles.metaVal, { color: headingColor }]}>{formatDate(transaction.date)}</Text>
+              </View>
+            )}
+            {tpl.showDueDate && transaction.dueDate && (
+              <View style={styles.metaCol}>
+                <Text style={[styles.metaLabel, { color: subTextColor }]}>{labels.dueDate}</Text>
+                <Text style={[styles.metaVal, { color: headingColor }]}>{formatDate(transaction.dueDate)}</Text>
+              </View>
+            )}
+            {tpl.showPaymentMethod && (
+              <View style={styles.metaCol}>
+                <Text style={[styles.metaLabel, { color: subTextColor }]}>{labels.paymentMode}</Text>
+                <Text style={[styles.metaVal, { color: headingColor }]}>{transaction.paymentMethod || 'Cash / Online'}</Text>
+              </View>
+            )}
+          </View>
+        )}
 
+        {/* Customer Info Card */}
+        {tpl.showCustomerSection && (
+          <View style={[styles.customerCard, { backgroundColor: altRowBg, borderColor }]}>
+            <Text style={[styles.customerLabel, { color: accentColor }]}>
+              {(tpl.customerSectionTitle ? (isTamil && tpl.customerSectionTitle === 'Billed To' ? labels.billedTo : tpl.customerSectionTitle) : labels.billedTo).toUpperCase()}
+            </Text>
+            {(() => {
+              const nameStr = customer.name || '';
+              const nameHasAvargal = nameStr.endsWith('அவர்கள்');
+              const mainCustomerName = nameHasAvargal ? nameStr.replace(/\s+அவர்கள்$/, '').trim() : nameStr;
+              const dynamicFontSize = mainCustomerName.length > 25 ? baseSize : (mainCustomerName.length > 18 ? baseSize + 1 : baseSize + 2);
+              return (
+                <Text style={[styles.customerName, { color: headingColor, fontSize: dynamicFontSize }]}>
+                  {mainCustomerName}
+                  {nameHasAvargal && (
+                    <Text style={{ fontSize: Math.max(10.5, dynamicFontSize - 3.5), fontWeight: '600', color: subTextColor }}>
+                      {' '}அவர்கள்
+                    </Text>
+                  )}
+                </Text>
+              );
+            })()}
+            {(() => {
+              const customerPhones = formatCustomerPhonesDisplay(customer.phone, customer.phoneNumbers);
+              if (!tpl.showCustomerPhone || !customerPhones) return null;
+              return (
+                <Text style={[styles.customerSub, { color: subTextColor, fontSize: baseSize - 1 }]}>
+                  📞 {customerPhones}
+                </Text>
+              );
+            })()}
+            {tpl.showCustomerAddress && settings?.includeCustomerAddress && customer.address && (
+              <Text style={[styles.customerSub, { color: subTextColor, fontSize: baseSize - 1 }]}>📍 {customer.address}</Text>
+            )}
+            {tpl.showCustomerGst && settings?.includeGst && customer.gstNo && (
+              <Text style={[styles.customerSub, { color: subTextColor, fontSize: baseSize - 1 }]}>GSTIN: {customer.gstNo}</Text>
+            )}
+          </View>
+        )}
+
+        {/* Items Table */}
+        <View style={[styles.tableContainer, { borderColor }]}>
+          <View style={[styles.tableHeader, { backgroundColor: tableHeaderBg }]}>
+            {showIndex && <Text style={[styles.th, styles.colIndex, { color: tableHeaderTextColor }]}>{labels.itemIndex}</Text>}
+            <Text style={[styles.th, styles.colItem, { color: tableHeaderTextColor }]}>{labels.item}</Text>
+            <Text style={[styles.th, styles.colQty, { color: tableHeaderTextColor }]}>{labels.qty}</Text>
+            {showRate && <Text style={[styles.th, styles.colRate, { color: tableHeaderTextColor }]}>{labels.rate}</Text>}
+            <Text style={[styles.th, styles.colAmount, { color: tableHeaderTextColor }]}>{labels.total}</Text>
+          </View>
+
+          {items.length > 0 ? (
+            items.map((item, idx) => {
+              const isEven = idx % 2 === 0;
+              const rowBg = tpl.tableStyle === 'striped' ? (isEven ? cardBg : altRowBg) : cardBg;
               return (
                 <View
-                  style={{
-                    marginTop: (settings?.includeQrCode !== false && tpl?.showQrCode !== false && settings?.paymentDisplayMode !== 'BANK') ? 6 : 0,
-                    padding: 7,
-                    backgroundColor: altRowBg,
-                    borderRadius: 9,
-                    borderWidth: 1,
-                    borderColor,
-                  }}
+                  key={idx}
+                  style={[
+                    styles.tableRow,
+                    {
+                      backgroundColor: rowBg,
+                      borderBottomColor: tpl.tableStyle === 'clean' || tpl.tableStyle === 'minimal' ? 'transparent' : borderColor,
+                      borderBottomWidth: tpl.tableStyle === 'bordered' ? 1 : 0.5,
+                    },
+                  ]}
                 >
-                  <View style={{ flexDirection: 'row', alignItems: 'center', marginBottom: 5, gap: 4 }}>
-                    <View style={{ width: 3, height: 10, borderRadius: 1.5, backgroundColor: accentColor }} />
-                    <Text style={{ fontSize: 8.5, fontWeight: '800', color: accentColor, letterSpacing: 0.3 }} numberOfLines={1}>
-                      {labels.bankPaymentDetails.toUpperCase()}
-                    </Text>
-                  </View>
-
-                  {bName ? (
-                    <View style={{ marginBottom: 3 }}>
-                      <Text style={{ fontSize: 7.5, color: subTextColor, fontWeight: '700' }}>{labels.bankName}</Text>
-                      <Text style={{ fontSize: 9, color: textColor, fontWeight: '700', marginTop: 0.5 }} numberOfLines={1}>
-                        {bName}
-                      </Text>
-                    </View>
-                  ) : null}
-
-                  {bAcc ? (
-                    <View style={{ marginBottom: 3 }}>
-                      <Text style={{ fontSize: 7.5, color: subTextColor, fontWeight: '700' }}>{labels.accountNo}</Text>
-                      <Text style={{ fontSize: 9, color: textColor, fontWeight: '800', letterSpacing: 0.3, marginTop: 0.5 }} numberOfLines={1}>
-                        {bAcc}
-                      </Text>
-                    </View>
-                  ) : null}
-
-                  {bIfsc ? (
-                    <View style={{ marginBottom: 3 }}>
-                      <Text style={{ fontSize: 7.5, color: subTextColor, fontWeight: '700' }}>{labels.ifscCode}</Text>
-                      <Text style={{ fontSize: 9, color: textColor, fontWeight: '700', marginTop: 0.5 }} numberOfLines={1}>
-                        {bIfsc}
-                      </Text>
-                    </View>
-                  ) : null}
-
-                  {bHolder ? (
-                    <View>
-                      <Text style={{ fontSize: 7.5, color: subTextColor, fontWeight: '700' }}>{labels.accountHolder}</Text>
-                      <Text style={{ fontSize: 8.5, color: subTextColor, fontWeight: '600', marginTop: 0.5 }} numberOfLines={1}>
-                        {bHolder}
-                      </Text>
-                    </View>
-                  ) : null}
+                  {showIndex && <Text style={[styles.td, styles.colIndex, { color: subTextColor }]}>{idx + 1}</Text>}
+                  <Text style={[styles.td, styles.colItem, { color: textColor, fontWeight: '600' }]} numberOfLines={2}>
+                    {item.name}
+                  </Text>
+                  <Text style={[styles.td, styles.colQty, { color: textColor }]}>
+                    {item.quantity} {showUnit && item.unit ? item.unit : ''}
+                  </Text>
+                  {showRate && <Text style={[styles.td, styles.colRate, { color: textColor }]}>{formatCurrency(item.unitPrice)}</Text>}
+                  <Text style={[styles.td, styles.colAmount, { color: headingColor, fontWeight: '700' }]}>
+                    {formatCurrency(item.totalPrice)}
+                  </Text>
                 </View>
               );
-            })()
-          ) : null}
-        </View>
-
-        {/* Totals Breakdown */}
-        <View style={styles.totalsSection}>
-          {tpl.showSubtotal && hasExtraCharges && (
-            <View style={styles.totalRow}>
-              <Text style={[styles.totalLabel, { color: subTextColor }]}>{labels.subtotal}</Text>
-              <Text style={[styles.totalValue, { color: textColor }]}>
-                {formatCurrency(transaction.subtotal || transaction.totalAmount)}
-              </Text>
-            </View>
-          )}
-
-          {tpl.showDeliveryCharge !== false && !!transaction.shipmentCharge && (
-            <View style={styles.totalRow}>
-              <Text style={[styles.totalLabel, { color: subTextColor }]}>{labels.deliveryCharge}</Text>
-              <Text style={[styles.totalValue, { color: textColor }]}>+{formatCurrency(transaction.shipmentCharge)}</Text>
-            </View>
-          )}
-
-          {tpl.showLoadingCharge !== false && !!transaction.loadingCharge && (
-            <View style={styles.totalRow}>
-              <Text style={[styles.totalLabel, { color: subTextColor }]}>{labels.loadingCharge}</Text>
-              <Text style={[styles.totalValue, { color: textColor }]}>+{formatCurrency(transaction.loadingCharge)}</Text>
-            </View>
-          )}
-
-          {tpl.showUnloadingCharge !== false && !!transaction.unloadingCharge && (
-            <View style={styles.totalRow}>
-              <Text style={[styles.totalLabel, { color: subTextColor }]}>{labels.unloadingCharge}</Text>
-              <Text style={[styles.totalValue, { color: textColor }]}>+{formatCurrency(transaction.unloadingCharge)}</Text>
-            </View>
-          )}
-
-          {tpl.showExtraCharge !== false && !!transaction.extraAmount && (
-            <View style={styles.totalRow}>
-              <Text style={[styles.totalLabel, { color: subTextColor }]} numberOfLines={1}>
-                {transaction.extraAmountDescription || labels.extraCharge}
-              </Text>
-              <Text style={[styles.totalValue, { color: textColor }]}>+{formatCurrency(transaction.extraAmount)}</Text>
-            </View>
-          )}
-
-          {Array.isArray(transaction.charges) && transaction.charges.map((chg, cIdx) => (
-            chg && chg.amount ? (
-              <View key={cIdx} style={styles.totalRow}>
-                <Text style={[styles.totalLabel, { color: subTextColor }]} numberOfLines={1}>
-                  {chg.name || labels.extraCharge}
-                </Text>
-                <Text style={[styles.totalValue, { color: textColor }]}>+{formatCurrency(chg.amount)}</Text>
-              </View>
-            ) : null
-          ))}
-
-          {tpl.showTax && !!transaction.taxAmount ? (
-            <View style={styles.totalRow}>
-              <Text style={[styles.totalLabel, { color: subTextColor }]}>{labels.taxGst}</Text>
-              <Text style={[styles.totalValue, { color: textColor }]}>+{formatCurrency(transaction.taxAmount)}</Text>
-            </View>
-          ) : null}
-
-          {tpl.showDiscount && !!transaction.discountAmount ? (
-            <View style={styles.totalRow}>
-              <Text style={[styles.totalLabel, { color: '#10B981' }]}>{labels.discount}</Text>
-              <Text style={[styles.totalValue, { color: '#10B981', fontWeight: '700' }]}>-{formatCurrency(transaction.discountAmount)}</Text>
-            </View>
-          ) : null}
-
-          {hasOldBalance ? (
-            <>
-              {hasExtraCharges ? (
-                <View style={styles.totalRow}>
-                  <Text style={[styles.totalLabel, { color: subTextColor, fontWeight: '600' }]}>{labels.currentBillTotal}</Text>
-                  <Text style={[styles.totalValue, { color: textColor, fontWeight: '600' }]}>{formatCurrency(transaction.totalAmount)}</Text>
-                </View>
-              ) : (
-                <View style={styles.totalRow}>
-                  <Text style={[styles.totalLabel, { color: subTextColor }]}>{labels.subtotal}</Text>
-                  <Text style={[styles.totalValue, { color: textColor }]}>{formatCurrency(transaction.totalAmount)}</Text>
-                </View>
-              )}
-              <View style={styles.totalRow}>
-                <Text style={[styles.totalLabel, { color: '#EF4444', fontWeight: '600' }]}>{labels.oldBalanceDue}</Text>
-                <Text style={[styles.totalValue, { color: '#EF4444', fontWeight: '700' }]}>+{formatCurrency(oldBalance)}</Text>
-              </View>
-              <View style={[styles.totalRow, styles.grandTotalRow, { borderTopColor: headingColor }]}>
-                <Text style={[styles.grandTotalLabel, { color: headingColor }]} numberOfLines={1}>{labels.grandTotalInclDues}</Text>
-                <Text style={[styles.grandTotalValue, { color: accentColor }]}>{formatCurrency(grandTotalWithOldDues)}</Text>
-              </View>
-            </>
+            })
           ) : (
-            <View style={[styles.totalRow, styles.grandTotalRow, { borderTopColor: headingColor }]}>
-              <Text style={[styles.grandTotalLabel, { color: headingColor }]}>{labels.totalAmount}</Text>
-              <Text style={[styles.grandTotalValue, { color: accentColor }]}>{formatCurrency(transaction.totalAmount)}</Text>
-            </View>
-          )}
-
-          {tpl.showPaidAmount && (
-            <View style={styles.totalRow}>
-              <Text style={[styles.totalLabel, { color: '#10B981', fontWeight: '600' }]}>{labels.paidAmount}</Text>
-              <Text style={[styles.totalValue, { color: '#10B981', fontWeight: '700' }]}>
-                {formatCurrency(transaction.paidAmount)}
-              </Text>
-            </View>
-          )}
-
-          {tpl.showBalanceDue && (
-            <View style={styles.totalRow}>
-              <Text style={[styles.totalLabel, { color: '#EF4444', fontWeight: '600' }]}>
-                {hasOldBalance ? labels.totalBalanceDue : labels.balanceDue}
-              </Text>
-              <Text style={[styles.totalValue, { color: '#EF4444', fontWeight: '700' }]}>
-                {formatCurrency(hasOldBalance ? netBalanceDue : transaction.pendingAmount)}
+            <View style={[styles.tableRow, { backgroundColor: cardBg }]}>
+              <Text style={[styles.td, { color: subTextColor, textAlign: 'center', width: '100%', paddingVertical: 12 }]}>
+                {labels.transactionSummaryRecord}
               </Text>
             </View>
           )}
         </View>
-      </View>
 
-      {/* Signature & Notes Footer */}
-      <View style={styles.footerRow}>
-        <View style={{ flex: 1, marginRight: 10 }}>
-          {tpl.showNotes && transaction.notes ? (
-            <View style={[styles.notesBox, { backgroundColor: altRowBg, borderColor, marginBottom: 6 }]}>
-              <Text style={[styles.notesText, { color: subTextColor }]}>{labels.notes}: {transaction.notes}</Text>
-            </View>
-          ) : null}
-          {tpl.showTerms && settings?.termsAndConditions ? (
-            <View style={[styles.notesBox, { backgroundColor: altRowBg, borderColor }]}>
-              <Text style={[styles.notesText, { color: subTextColor, fontSize: 8.5 }]}>
-                {labels.termsAndConditions}: {settings.termsAndConditions}
-              </Text>
-            </View>
-          ) : null}
-        </View>
+        {/* Summary Container */}
+        <View style={styles.summaryContainer}>
+          {/* Payment Info Section: QR Code / Bank Account Details */}
+          <View style={{ flex: 1, paddingRight: 8 }}>
+            {/* QR Code */}
+            {settings?.includeQrCode !== false && tpl?.showQrCode !== false && settings?.paymentDisplayMode !== 'NONE' && settings?.paymentDisplayMode !== 'BANK' ? (
+              <View style={styles.qrSection}>
+                <Image
+                  source={{ uri: (tpl.useCustomQrCode && tpl.customQrCodeUri) ? tpl.customQrCodeUri : qrCodeUrl }}
+                  style={styles.qrImage}
+                  contentFit="contain"
+                />
+                <Text style={[styles.qrCaption, { color: subTextColor }]}>
+                  {tpl.useCustomQrCode && tpl.customQrCodeUri ? labels.scanToPayVerify : labels.scanToPay}
+                </Text>
+              </View>
+            ) : null}
 
-        {tpl.showSignature && settings?.includeSignature && (
-          <View style={styles.signatureBox}>
-            {company.signatureUrl ? (
-              <Image source={{ uri: company.signatureUrl }} style={styles.signatureImage} contentFit="contain" />
-            ) : (
-              <View style={{ height: 28 }} />
+            {/* Bank Account Details */}
+            {settings?.includeBankDetails !== false && tpl?.showBankDetails !== false && settings?.paymentDisplayMode !== 'NONE' && settings?.paymentDisplayMode !== 'QR' ? (
+              (() => {
+                const bName = settings?.bankName || tpl?.bankName || company?.bankName;
+                const bAcc = settings?.accountNo || tpl?.accountNo || company?.accountNo;
+                const bIfsc = settings?.ifscCode || tpl?.ifscCode || company?.ifscCode;
+                const bHolder = settings?.accountHolderName || tpl?.accountHolderName || company?.name;
+
+                if (!bName && !bAcc) return null;
+
+                return (
+                  <View
+                    style={{
+                      marginTop: (settings?.includeQrCode !== false && tpl?.showQrCode !== false && settings?.paymentDisplayMode !== 'BANK') ? 6 : 0,
+                      padding: 7,
+                      backgroundColor: altRowBg,
+                      borderRadius: 9,
+                      borderWidth: 1,
+                      borderColor,
+                    }}
+                  >
+                    <View style={{ flexDirection: 'row', alignItems: 'center', marginBottom: 5, gap: 4 }}>
+                      <View style={{ width: 3, height: 10, borderRadius: 1.5, backgroundColor: accentColor }} />
+                      <Text style={{ fontSize: 8.5, fontWeight: '800', color: accentColor, letterSpacing: 0.3 }} numberOfLines={1}>
+                        {labels.bankPaymentDetails.toUpperCase()}
+                      </Text>
+                    </View>
+
+                    {bName ? (
+                      <View style={{ marginBottom: 3 }}>
+                        <Text style={{ fontSize: 7.5, color: subTextColor, fontWeight: '700' }}>{labels.bankName}</Text>
+                        <Text style={{ fontSize: 9, color: textColor, fontWeight: '700', marginTop: 0.5 }} numberOfLines={1}>
+                          {bName}
+                        </Text>
+                      </View>
+                    ) : null}
+
+                    {bAcc ? (
+                      <View style={{ marginBottom: 3 }}>
+                        <Text style={{ fontSize: 7.5, color: subTextColor, fontWeight: '700' }}>{labels.accountNo}</Text>
+                        <Text style={{ fontSize: 9, color: textColor, fontWeight: '800', letterSpacing: 0.3, marginTop: 0.5 }} numberOfLines={1}>
+                          {bAcc}
+                        </Text>
+                      </View>
+                    ) : null}
+
+                    {bIfsc ? (
+                      <View style={{ marginBottom: 3 }}>
+                        <Text style={{ fontSize: 7.5, color: subTextColor, fontWeight: '700' }}>{labels.ifscCode}</Text>
+                        <Text style={{ fontSize: 9, color: textColor, fontWeight: '700', marginTop: 0.5 }} numberOfLines={1}>
+                          {bIfsc}
+                        </Text>
+                      </View>
+                    ) : null}
+
+                    {bHolder ? (
+                      <View>
+                        <Text style={{ fontSize: 7.5, color: subTextColor, fontWeight: '700' }}>{labels.accountHolder}</Text>
+                        <Text style={{ fontSize: 8.5, color: subTextColor, fontWeight: '600', marginTop: 0.5 }} numberOfLines={1}>
+                          {bHolder}
+                        </Text>
+                      </View>
+                    ) : null}
+                  </View>
+                );
+              })()
+            ) : null}
+          </View>
+
+          {/* Totals Breakdown */}
+          <View style={styles.totalsSection}>
+            {tpl.showSubtotal && hasExtraCharges && (
+              <View style={styles.totalRow}>
+                <Text style={[styles.totalLabel, { color: subTextColor }]}>{labels.subtotal}</Text>
+                <Text style={[styles.totalValue, { color: textColor }]}>
+                  {formatCurrency(transaction.subtotal || transaction.totalAmount)}
+                </Text>
+              </View>
             )}
-            <View style={[styles.signatureLine, { backgroundColor: borderColor }]} />
-            <Text style={[styles.signatureLabel, { color: subTextColor }]}>
-              {settings?.signatureTitle || labels.authorizedSignatory}
-            </Text>
+
+            {tpl.showDeliveryCharge !== false && !!transaction.shipmentCharge && (
+              <View style={styles.totalRow}>
+                <Text style={[styles.totalLabel, { color: subTextColor }]}>{labels.deliveryCharge}</Text>
+                <Text style={[styles.totalValue, { color: textColor }]}>+{formatCurrency(transaction.shipmentCharge)}</Text>
+              </View>
+            )}
+
+            {tpl.showLoadingCharge !== false && !!transaction.loadingCharge && (
+              <View style={styles.totalRow}>
+                <Text style={[styles.totalLabel, { color: subTextColor }]}>{labels.loadingCharge}</Text>
+                <Text style={[styles.totalValue, { color: textColor }]}>+{formatCurrency(transaction.loadingCharge)}</Text>
+              </View>
+            )}
+
+            {tpl.showUnloadingCharge !== false && !!transaction.unloadingCharge && (
+              <View style={styles.totalRow}>
+                <Text style={[styles.totalLabel, { color: subTextColor }]}>{labels.unloadingCharge}</Text>
+                <Text style={[styles.totalValue, { color: textColor }]}>+{formatCurrency(transaction.unloadingCharge)}</Text>
+              </View>
+            )}
+
+            {tpl.showExtraCharge !== false && !!transaction.extraAmount && (
+              <View style={styles.totalRow}>
+                <Text style={[styles.totalLabel, { color: subTextColor }]} numberOfLines={1}>
+                  {transaction.extraAmountDescription || labels.extraCharge}
+                </Text>
+                <Text style={[styles.totalValue, { color: textColor }]}>+{formatCurrency(transaction.extraAmount)}</Text>
+              </View>
+            )}
+
+            {Array.isArray(transaction.charges) && transaction.charges.map((chg, cIdx) => (
+              chg && chg.amount ? (
+                <View key={cIdx} style={styles.totalRow}>
+                  <Text style={[styles.totalLabel, { color: subTextColor }]} numberOfLines={1}>
+                    {chg.name || labels.extraCharge}
+                  </Text>
+                  <Text style={[styles.totalValue, { color: textColor }]}>+{formatCurrency(chg.amount)}</Text>
+                </View>
+              ) : null
+            ))}
+
+            {tpl.showTax && !!transaction.taxAmount ? (
+              <View style={styles.totalRow}>
+                <Text style={[styles.totalLabel, { color: subTextColor }]}>{labels.taxGst}</Text>
+                <Text style={[styles.totalValue, { color: textColor }]}>+{formatCurrency(transaction.taxAmount)}</Text>
+              </View>
+            ) : null}
+
+            {tpl.showDiscount && !!transaction.discountAmount ? (
+              <View style={styles.totalRow}>
+                <Text style={[styles.totalLabel, { color: '#10B981' }]}>{labels.discount}</Text>
+                <Text style={[styles.totalValue, { color: '#10B981', fontWeight: '700' }]}>-{formatCurrency(transaction.discountAmount)}</Text>
+              </View>
+            ) : null}
+
+            {hasOldBalance ? (
+              <>
+                {hasExtraCharges ? (
+                  <View style={styles.totalRow}>
+                    <Text style={[styles.totalLabel, { color: subTextColor, fontWeight: '600' }]}>{labels.currentBillTotal}</Text>
+                    <Text style={[styles.totalValue, { color: textColor, fontWeight: '600' }]}>{formatCurrency(transaction.totalAmount)}</Text>
+                  </View>
+                ) : (
+                  <View style={styles.totalRow}>
+                    <Text style={[styles.totalLabel, { color: subTextColor }]}>{labels.subtotal}</Text>
+                    <Text style={[styles.totalValue, { color: textColor }]}>{formatCurrency(transaction.totalAmount)}</Text>
+                  </View>
+                )}
+                <View style={styles.totalRow}>
+                  <Text style={[styles.totalLabel, { color: '#EF4444', fontWeight: '600' }]}>{labels.oldBalanceDue}</Text>
+                  <Text style={[styles.totalValue, { color: '#EF4444', fontWeight: '700' }]}>+{formatCurrency(oldBalance)}</Text>
+                </View>
+                <View style={[styles.totalRow, styles.grandTotalRow, { borderTopColor: headingColor }]}>
+                  <Text style={[styles.grandTotalLabel, { color: headingColor }]} numberOfLines={1}>{labels.grandTotalInclDues}</Text>
+                  <Text style={[styles.grandTotalValue, { color: accentColor }]}>{formatCurrency(grandTotalWithOldDues)}</Text>
+                </View>
+              </>
+            ) : (
+              <View style={[styles.totalRow, styles.grandTotalRow, { borderTopColor: headingColor }]}>
+                <Text style={[styles.grandTotalLabel, { color: headingColor }]}>{labels.totalAmount}</Text>
+                <Text style={[styles.grandTotalValue, { color: accentColor }]}>{formatCurrency(transaction.totalAmount)}</Text>
+              </View>
+            )}
+
+            {tpl.showPaidAmount && (
+              <View style={styles.totalRow}>
+                <Text style={[styles.totalLabel, { color: '#10B981', fontWeight: '600' }]}>{labels.paidAmount}</Text>
+                <Text style={[styles.totalValue, { color: '#10B981', fontWeight: '700' }]}>
+                  {formatCurrency(transaction.paidAmount)}
+                </Text>
+              </View>
+            )}
+
+            {tpl.showBalanceDue && (
+              <View style={styles.totalRow}>
+                <Text style={[styles.totalLabel, { color: '#EF4444', fontWeight: '600' }]}>
+                  {hasOldBalance ? labels.totalBalanceDue : labels.balanceDue}
+                </Text>
+                <Text style={[styles.totalValue, { color: '#EF4444', fontWeight: '700' }]}>
+                  {formatCurrency(hasOldBalance ? netBalanceDue : transaction.pendingAmount)}
+                </Text>
+              </View>
+            )}
+          </View>
+        </View>
+
+        {/* Signature & Notes Footer */}
+        <View style={styles.footerRow}>
+          <View style={{ flex: 1, marginRight: 10 }}>
+            {tpl.showNotes && transaction.notes ? (
+              <View style={[styles.notesBox, { backgroundColor: altRowBg, borderColor, marginBottom: 6 }]}>
+                <Text style={[styles.notesText, { color: subTextColor }]}>{labels.notes}: {transaction.notes}</Text>
+              </View>
+            ) : null}
+            {tpl.showTerms && settings?.termsAndConditions ? (
+              <View style={[styles.notesBox, { backgroundColor: altRowBg, borderColor }]}>
+                <Text style={[styles.notesText, { color: subTextColor, fontSize: 8.5 }]}>
+                  {labels.termsAndConditions}: {settings.termsAndConditions}
+                </Text>
+              </View>
+            ) : null}
+          </View>
+
+          {tpl.showSignature && settings?.includeSignature && (
+            <View style={styles.signatureBox}>
+              {company.signatureUrl ? (
+                <Image source={{ uri: company.signatureUrl }} style={styles.signatureImage} contentFit="contain" />
+              ) : (
+                <View style={{ height: 28 }} />
+              )}
+              <View style={[styles.signatureLine, { backgroundColor: borderColor }]} />
+              <Text style={[styles.signatureLabel, { color: subTextColor }]}>
+                {settings?.signatureTitle || labels.authorizedSignatory}
+              </Text>
+            </View>
+          )}
+        </View>
+
+        {/* Thank you note */}
+        {(tpl.showThankYouNote || tpl.showFooterBranding) && (
+          <View style={[styles.thankYouBox, { borderTopColor: borderColor }]}>
+            {tpl.showThankYouNote && (
+              <Text style={[styles.thankYouText, { color: headingColor }]}>
+                {(isTamil && (!settings?.thankYouNote || settings.thankYouNote.toLowerCase().includes('thank you')))
+                  ? labels.thankYouNote
+                  : (settings?.thankYouNote || labels.thankYouNote)}
+              </Text>
+            )}
+            {tpl.showFooterBranding && (
+              <Text style={[styles.brandingText, { color: subTextColor }]}>
+                {tpl.footerBrandingText || `Generated via ${company.name || 'Business App'}`}
+              </Text>
+            )}
           </View>
         )}
       </View>
-
-      {/* Thank you note */}
-      {(tpl.showThankYouNote || tpl.showFooterBranding) && (
-        <View style={[styles.thankYouBox, { borderTopColor: borderColor }]}>
-          {tpl.showThankYouNote && (
-            <Text style={[styles.thankYouText, { color: headingColor }]}>
-              {(isTamil && (!settings?.thankYouNote || settings.thankYouNote.toLowerCase().includes('thank you')))
-                ? labels.thankYouNote
-                : (settings?.thankYouNote || labels.thankYouNote)}
-            </Text>
-          )}
-          {tpl.showFooterBranding && (
-            <Text style={[styles.brandingText, { color: subTextColor }]}>
-              {tpl.footerBrandingText || `Generated via ${company.name || 'Business App'}`}
-            </Text>
-          )}
-        </View>
-      )}
-    </View>
+    </UnscaledTextContext.Provider>
   );
 };
 

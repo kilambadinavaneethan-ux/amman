@@ -256,6 +256,22 @@ const COLLECTIONS: CollectionConfig[] = [
     icon: "loyalty",
   },
   {
+    key: "customerBonuses",
+    label: "Marked Customer Commissions & Rebates",
+    collectionName: "customerBonuses",
+    description: "Contractor commissions, VIP rebate rewards, and client perks.",
+    category: "Core Business",
+    icon: "loyalty",
+  },
+  {
+    key: "otherBonuses",
+    label: "Goodwill & Other Bonuses",
+    collectionName: "otherBonuses",
+    description: "Festival gifts & perks for Police, Linemen, Municipal staff, Security, and more.",
+    category: "Expenses & Ledger",
+    icon: "card-giftcard",
+  },
+  {
     key: "moneyCollectors",
     label: "Money Collectors",
     collectionName: "moneyCollectors",

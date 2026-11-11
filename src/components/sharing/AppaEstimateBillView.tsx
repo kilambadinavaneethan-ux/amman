@@ -1,14 +1,15 @@
-import React from 'react';
-import { View, Text, StyleSheet } from 'react-native';
 import { Image } from 'expo-image';
+import React from 'react';
+import { StyleSheet, Text, View } from 'react-native';
+import { UnscaledTextContext } from '../../../app/context/ThemeContext';
 import {
-  CustomerShareData,
-  ShareSettings,
-  InvoiceTemplate,
-  formatCustomerPhonesDisplay,
   AppaBillTheme,
   AppaEstimateBillSettings,
+  CustomerShareData,
   DEFAULT_APPA_ESTIMATE_BILL_SETTINGS,
+  InvoiceTemplate,
+  ShareSettings,
+  formatCustomerPhonesDisplay,
 } from '../../types/sharing';
 
 export type { AppaBillTheme };
@@ -218,7 +219,8 @@ export const AppaEstimateBillView = React.forwardRef<any, AppaEstimateBillViewPr
     const companyAddress = company.address || cfg.customAddress?.trim() || '';
 
     const effectiveInvocation = invocationText || cfg.invocationText || '|| ஸ்ரீ சொக்கநாச்சி அம்மன் துணை ||';
-    const titleEnglish = cfg.titleEnglish || 'ESTEEMATE';
+    const rawTitle = (cfg.titleEnglish || '').trim();
+    const titleEnglish = (!rawTitle || rawTitle.toUpperCase() === 'ESTEEMATE') ? 'ESTIMATE' : rawTitle;
     const titleTamil = cfg.titleTamil || 'மதிப்பீட்டு பில் / ESTIMATE BILL';
 
 
@@ -270,474 +272,511 @@ export const AppaEstimateBillView = React.forwardRef<any, AppaEstimateBillViewPr
     const showLogo = (cfg.showCompanyLogo !== false) && Boolean(effectiveLogoUri);
 
     return (
-      <View ref={ref} collapsable={false} style={[styles.container, { backgroundColor: theme.paperBg }]}>
-        {/* Double-Ruled Outer Ledger Border Frame */}
-        <View style={[styles.outerBorder, { borderColor: theme.lineColor, backgroundColor: theme.cardBg }]}>
-          {/* Inner Decorative Corner Frame Line */}
-          <View style={[styles.innerFrame, { borderColor: theme.lineColor }]}>
-            {/* 1. Top Auspicious Divine Invocation & Top-Right Phones */}
-            <View style={styles.topBarRow}>
-              {/* Top-Left Company Logo */}
-              {showLogo && effectiveLogoUri ? (
-                <View style={styles.topLogoContainer}>
-                  <Image
-                    source={{ uri: effectiveLogoUri }}
-                    style={styles.companyLogo}
-                    contentFit="contain"
-                  />
-                </View>
-              ) : null}
-
-              <View style={styles.topInvocationContainer}>
-                <Text
-                  style={[
-                    styles.invocationText,
-                    {
-                      color: cfg.invocationColor || theme.highlightColor,
-                      fontSize: cfg.invocationFontSize || 14,
-                    },
-                  ]}
-                >
-                  {effectiveInvocation}
-                </Text>
-              </View>
-
-              {/* Top-Right Phone Numbers Column */}
-              <View style={styles.topPhonesContainer}>
-                {companyPhones.map((phone, idx) => (
-                  <Text key={idx} style={[styles.phoneText, { color: theme.inkColor, marginTop: idx > 0 ? 2 : 0 }]}>
-                    {idx === 0 ? '📞 ' : ''}{phone}
-                  </Text>
-                ))}
-              </View>
-            </View>
-
-            {/* 2. Business Branding & Address (Centered) */}
-            <View style={styles.companyCenterBlock}>
-              <Text
-                style={[
-                  styles.companyTitle,
-                  {
-                    color: cfg.companyNameColor || theme.inkColor,
-                    fontSize: cfg.companyNameFontSize || 20,
-                  },
-                ]}
-              >
-                {companyName.toUpperCase()}
-              </Text>
-              <Text
-                style={[
-                  styles.companyAddress,
-                  {
-                    color: cfg.companyAddressColor || theme.subTextColor,
-                    fontSize: cfg.companyAddressFontSize || 11.5,
-                  },
-                ]}
-              >
-                {companyAddress}
-              </Text>
-            </View>
-
-            {/* 3. English Title & Tamil Subtitle (Centered) */}
-            <View style={styles.titleRow}>
-              <Text
-                style={[
-                  styles.estimateTitle,
-                  {
-                    color: cfg.titleEnglishColor || theme.inkColor,
-                    fontSize: cfg.titleEnglishFontSize || 28,
-                    lineHeight: (cfg.titleEnglishFontSize || 28) + 4,
-                  },
-                ]}
-              >
-                {titleEnglish}
-              </Text>
-              <Text
-                style={[
-                  styles.estimateSubTitle,
-                  {
-                    color: cfg.titleTamilColor || theme.subTextColor,
-                    fontSize: cfg.titleTamilFontSize || 11,
-                  },
-                ]}
-              >
-                {titleTamil}
-              </Text>
-            </View>
-
-            {/* Bill Date Bar */}
-            <View style={[styles.metaRow, { borderColor: theme.lineColor, backgroundColor: theme.headerBg + '40', justifyContent: 'flex-end' }]}>
-              <View style={{ flexDirection: 'row', alignItems: 'center' }}>
-                <Text style={[styles.metaLabel, { color: theme.inkColor }]}>தேதி: </Text>
-                <Text style={[styles.metaValue, { color: theme.inkColor }]}>
-                  {formatFullDate(new Date())}
-                </Text>
-              </View>
-            </View>
-
-            {/* Customer (Billed To) Section */}
-            <View style={[styles.customerSection, { borderColor: theme.gridLineColor }]}>
-              <View style={{ flexDirection: 'row', flexWrap: 'wrap', alignItems: 'baseline' }}>
-                {(() => {
-                  const nameStr = customerName || '';
-                  const nameHasAvargal = nameStr.endsWith('அவர்கள்');
-                  const mainName = nameHasAvargal ? nameStr.replace(/\s*அவர்கள்$/, '').trim() : nameStr;
-                  const honorificColor = cfg.customerHonorificColor || theme.subTextColor;
-                  const honorificSize = cfg.customerHonorificFontSize || 12;
-
-                  return (
-                    <Text style={[styles.customerName, { color: theme.inkColor }]}>
-                      {mainName}
-                      {nameHasAvargal && (
-                        <Text
-                          style={{
-                            fontSize: honorificSize,
-                            fontWeight: '700',
-                            color: honorificColor,
-                          }}
-                        >
-                          {' '}அவர்கள்
-                        </Text>
-                      )}
-                    </Text>
-                  );
-                })()}
-              </View>
-              {customerAddress ? (
-                <Text style={[styles.customerAddressText, { color: theme.subTextColor }]}>
-                  📍 {customerAddress}
-                </Text>
-              ) : null}
-              {customerPhones ? (
-                <Text style={[styles.customerPhoneText, { color: theme.subTextColor }]}>
-                  📱 {customerPhones}
-                </Text>
-              ) : null}
-            </View>
-
-            {/* 6-Column Traditional Tamil Ledger Grid */}
-            <View style={[styles.tableContainer, { borderColor: theme.lineColor }]}>
-              {/* Table Header Row */}
-              <View style={[styles.tableHeaderRow, { borderBottomColor: theme.lineColor, backgroundColor: theme.headerBg }]}>
-                <View style={[styles.colIndex, { borderRightColor: theme.lineColor }]}>
-                  <Text style={[styles.tableHeaderText, { color: theme.inkColor }]}>{cfg.columnLabels?.sno || 'வ. எண்'}</Text>
-                  <Text style={[styles.tableHeaderSub, { color: theme.subTextColor }]}>S.No</Text>
-                </View>
-                <View style={[styles.colDate, { borderRightColor: theme.lineColor }]}>
-                  <Text style={[styles.tableHeaderText, { color: theme.inkColor }]}>{cfg.columnLabels?.date || 'தேதி'}</Text>
-                  <Text style={[styles.tableHeaderSub, { color: theme.subTextColor }]}>Date</Text>
-                </View>
-                <View style={[styles.colParticulars, { borderRightColor: theme.lineColor }]}>
-                  <Text style={[styles.tableHeaderText, { color: theme.inkColor }]}>{cfg.columnLabels?.description || 'விபரம் (பொருட்கள் / கூலி விவரம்)'}</Text>
-                  <Text style={[styles.tableHeaderSub, { color: theme.subTextColor }]}>Particulars</Text>
-                </View>
-                <View style={[styles.colDebit, { borderRightColor: theme.lineColor }]}>
-                  <Text style={[styles.tableHeaderText, { color: theme.inkColor }]}>{cfg.columnLabels?.debit || 'பற்று (+)'}</Text>
-                  <Text style={[styles.tableHeaderSub, { color: isDark ? '#94A3B8' : '#64748B' }]}>Debit</Text>
-                </View>
-                <View style={[styles.colCredit, { borderRightColor: theme.lineColor }]}>
-                  <Text style={[styles.tableHeaderText, { color: theme.inkColor }]}>{cfg.columnLabels?.credit || 'வரவு (-)'}</Text>
-                  <Text style={[styles.tableHeaderSub, { color: '#047857' }]}>Credit</Text>
-                </View>
-                <View style={styles.colBalance}>
-                  <Text style={[styles.tableHeaderText, { color: theme.inkColor }]}>{cfg.columnLabels?.balance || 'பாக்கி'}</Text>
-                  <Text style={[styles.tableHeaderSub, { color: theme.highlightColor }]}>Balance</Text>
-                </View>
-              </View>
-
-              {/* Table Body Rows */}
-              {ledger.length === 0 ? (
-                <View style={[styles.tableRow, { borderBottomColor: theme.gridLineColor }]}>
-                  <Text style={[styles.emptyLedgerText, { color: theme.subTextColor }]}>
-                    பதிவுகள் ஏதுமில்லை (No transaction records found)
-                  </Text>
-                </View>
-              ) : (
-                ledger.map((item, index) => {
-                  const isOrder = item.type === 'order';
-                  const isPayment = item.type === 'payment';
-                  const isOpening = item.type === 'opening';
-
-                  const dmy = formatDateDMY(item.date);
-                  const debitVal = isOrder || isOpening ? Number(item.amount || 0) : 0;
-                  const rawPaid = Number(item.paid || 0);
-                  const disc = isPayment ? Number(item.discountAmount || 0) : 0;
-                  const creditVal = (rawPaid >= (item.paymentReceived || 0) + disc && disc > 0)
-                    ? rawPaid
-                    : (rawPaid + disc);
-
-                  return (
-                    <View
-                      key={item.id || index}
-                      style={[
-                        styles.tableRow,
-                        { borderBottomColor: theme.gridLineColor },
-                        index % 2 === 1 && { backgroundColor: theme.headerBg + '25' },
-                      ]}
-                    >
-                      <View style={[styles.colIndex, { borderRightColor: theme.gridLineColor }]}>
-                        <Text style={[styles.rowCellText, { color: theme.inkColor, textAlign: 'center', fontWeight: '700' }]}>
-                          {index + 1}
-                        </Text>
-                      </View>
-                      <View style={[styles.colDate, { borderRightColor: theme.gridLineColor }]}>
-                        <Text style={[styles.rowCellText, { color: theme.inkColor, textAlign: 'center', fontSize: 11 }]}>
-                          {isOpening ? '' : dmy}
-                        </Text>
-                      </View>
-
-                      {/* Particulars Cell with Detailed Items Structure */}
-                      <View style={[styles.colParticulars, { borderRightColor: theme.gridLineColor }]}>
-                        {isOpening ? (
-                          <View style={{ flexDirection: 'row', alignItems: 'center', gap: 4 }}>
-                            <Text style={[styles.rowCellText, { color: theme.highlightColor, fontWeight: '800' }]}>
-                              முந்தைய பாக்கி (Old Balance Due)
-                            </Text>
-                          </View>
-                        ) : isPayment ? (
-                          <View>
-                            <View style={{ flexDirection: 'row', alignItems: 'center', gap: 4 }}>
-                              <Text style={{ fontSize: 11, color: '#047857' }}>
-                                {item.description?.toLowerCase().includes('order') ? '📦' : item.description?.toLowerCase().includes('adjustment') ? '⚖️' : '💳'}
-                              </Text>
-                              <Text style={[styles.rowCellText, { color: '#047857', fontWeight: '800' }]}>
-                                {item.description || 'ரொக்கம் வரவு (Payment)'}
-                              </Text>
-                            </View>
-                            {item.notes ? (
-                              <Text style={{ fontSize: 10, color: theme.subTextColor, fontStyle: 'italic', marginTop: 1 }}>
-                                notes: {item.notes}
-                              </Text>
-                            ) : null}
-                          </View>
-                        ) : (
-                          <View>
-                            {item.items && item.items.length > 0 ? (
-                              item.items.map((it, itIdx) => {
-                                const rate = it.rate || (it.total && it.quantity ? it.total / it.quantity : 0);
-                                return (
-                                  <View key={itIdx} style={styles.particularItemRow}>
-                                    <Text style={[styles.particularItemBullet, { color: theme.inkColor }]}>•</Text>
-                                    <Text style={[styles.particularItemName, { color: theme.inkColor }]}>
-                                      {it.name}
-                                    </Text>
-                                    <Text style={[styles.particularItemQty, { color: theme.subTextColor }]}>
-                                      - {it.quantity}X{rate} =
-                                    </Text>
-                                    <Text style={[styles.particularItemTotal, { color: theme.inkColor }]}>
-                                      {Math.round(it.total).toLocaleString('en-IN')}
-                                    </Text>
-                                  </View>
-                                );
-                              })
-                            ) : (
-                              <Text style={[styles.rowCellText, { color: theme.inkColor, fontWeight: '700' }]}>
-                                {item.description || 'ஆர்டர் விபரம்'}
-                              </Text>
-                            )}
-
-                            {/* Additional Service Charges formatted line by line */}
-                            {(() => {
-                              const extras: string[] = [];
-                              if (item.shipmentCharge) extras.push(`வண்டி வாடகை: ₹${Number(item.shipmentCharge).toLocaleString('en-IN')}`);
-                              if (item.loadingCharge) extras.push(`ஏற்று கூலி: ₹${Number(item.loadingCharge).toLocaleString('en-IN')}`);
-                              if (item.unloadingCharge) extras.push(`இறக்கு கூலி: ₹${Number(item.unloadingCharge).toLocaleString('en-IN')}`);
-                              if (item.extraAmount) extras.push(`கூடுதல்: ₹${Number(item.extraAmount).toLocaleString('en-IN')}`);
-                              if (item.notes) extras.push(`notes: ${item.notes}`);
-                              if (extras.length === 0) return null;
-                              return (
-                                <View style={{ marginTop: 2 }}>
-                                  {extras.map((extra, idx) => (
-                                    <Text key={idx} style={{ fontSize: 10, color: theme.subTextColor, marginTop: 1 }}>
-                                      • {extra}
-                                    </Text>
-                                  ))}
-                                </View>
-                              );
-                            })()}
-                          </View>
-                        )}
-                      </View>
-
-                      {/* Debit (+) Cell */}
-                      <View style={[styles.colDebit, { borderRightColor: theme.gridLineColor }]}>
-                        <Text style={[styles.rowCellText, { color: debitVal ? (isDark ? '#94A3B8' : '#64748B') : theme.subTextColor, textAlign: 'right', fontWeight: debitVal ? '700' : '400' }]}>
-                          {debitVal ? formatCurrency(debitVal) : '-'}
-                        </Text>
-                      </View>
-
-                      {/* Credit (-) Cell */}
-                      <View style={[styles.colCredit, { borderRightColor: theme.gridLineColor }]}>
-                        <Text style={[styles.rowCellText, { color: creditVal ? '#047857' : theme.subTextColor, textAlign: 'right', fontWeight: creditVal ? '800' : '400' }]}>
-                          {creditVal ? formatCurrency(creditVal) : '-'}
-                        </Text>
-                      </View>
-
-                      {/* Running Balance Cell */}
-                      <View style={styles.colBalance}>
-                        <Text style={[styles.rowCellText, { color: (item.balance !== undefined && item.balance !== 0) ? theme.highlightColor : theme.inkColor, textAlign: 'right', fontWeight: '700' }]}>
-                          {item.balance !== undefined ? formatCurrency(item.balance) : '-'}
-                        </Text>
-                      </View>
-                    </View>
-                  );
-                })
-              )}
-
-              {/* Accounting Double-Ruled Total Row */}
-              <View style={[styles.tableTotalRow, { borderTopColor: theme.lineColor, backgroundColor: theme.totalRowBg }]}>
-                <View style={[styles.colSpanParticulars, { borderRightColor: theme.lineColor }]}>
-                  <Text style={[styles.totalTitleText, { color: theme.inkColor, textAlign: 'center' }]}>
-                    மொத்தம் (ACCOUNT TOTALS)
-                  </Text>
-                </View>
-                <View style={[styles.colDebit, { borderRightColor: theme.lineColor }]}>
-                  <Text style={[styles.totalValText, { color: isDark ? '#94A3B8' : '#64748B', textAlign: 'right' }]}>
-                    {formatCurrency(totalDebit)}
-                  </Text>
-                </View>
-                <View style={[styles.colCredit, { borderRightColor: theme.lineColor }]}>
-                  <Text style={[styles.totalValText, { color: '#047857', textAlign: 'right' }]}>
-                    {formatCurrency(totalCredit)}
-                  </Text>
-                </View>
-                <View style={styles.colBalance}>
-                  <Text style={[styles.totalValText, { color: theme.highlightColor, textAlign: 'right' }]}>
-                    {formatCurrency(netDue)}
-                  </Text>
-                </View>
-              </View>
-            </View>
-
-            {/* Traditional Double Line Under Totals */}
-            <View style={[styles.doubleLineBar, { borderColor: theme.lineColor }]} />
-
-            {/* Net Balance Due Highlight Box */}
-            <View
-              style={[
-                styles.netDueRow,
-                {
-                  backgroundColor: netDue > 0 ? theme.badgeDueBg : theme.badgeSettledBg,
-                  borderColor: netDue > 0 ? theme.badgeDueBorder : '#10B981',
-                },
-              ]}
-            >
-              <View>
-                <Text
-                  style={[
-                    styles.netDueLabel,
-                    { color: netDue > 0 ? theme.badgeDueText : theme.badgeSettledText },
-                  ]}
-                >
-                  {netDue > 0
-                    ? 'இறுதி பாக்கி (NET BALANCE DUE):'
-                    : netDue < 0
-                    ? 'முன்பணம் வரவு (CUSTOMER ADVANCE):'
-                    : 'கணக்கு முடிந்தது (ACCOUNT SETTLED):'}
-                </Text>
-              </View>
-              <Text
-                style={[
-                  styles.netDueAmount,
-                  { color: netDue > 0 ? theme.badgeDueText : theme.badgeSettledText },
-                ]}
-              >
-                {formatCurrency(Math.abs(netDue))}
-              </Text>
-            </View>
-
-            {/* Bottom Footer Section: Terms, Optional QR & Authorized Seal/Signature */}
-            <View style={styles.footerSection}>
-              {/* Left Side: Goods Acknowledgment & Optional UPI QR */}
-              <View style={{ flex: 1, paddingRight: 16 }}>
-                {/* Payment Options Row: UPI QR and/or Bank Details */}
-                {(showQr && targetUpi) || (showBank && hasBankInfo) ? (
-                  <View style={styles.paymentRow}>
-                    {showQr && targetUpi ? (
-                      <View style={[styles.qrBlock, { borderColor: theme.lineColor, backgroundColor: theme.headerBg + '30' }]}>
-                        <Image source={{ uri: qrCodeUrl }} style={styles.qrImage} contentFit="contain" />
-                        <View style={{ flex: 1 }}>
-                          <Text style={[styles.qrTitle, { color: theme.inkColor }]}>GPay / PhonePe / UPI</Text>
-                          <Text style={[styles.qrUpiId, { color: theme.subTextColor }]}>{targetUpi}</Text>
-                          <Text style={[styles.qrPrompt, { color: theme.highlightColor }]}>ஸ்கேன் செய்து கட்டவும் ↗</Text>
-                        </View>
-                      </View>
-                    ) : null}
-
-                    {showBank && hasBankInfo ? (
-                      <View style={[styles.bankBlock, { borderColor: theme.lineColor, backgroundColor: theme.headerBg + '30' }]}>
-                        <View style={{ flexDirection: 'row', alignItems: 'center', gap: 4, marginBottom: 2 }}>
-                          <Text style={{ fontSize: 9 }}>🏦</Text>
-                          <Text style={[styles.bankTitle, { color: theme.highlightColor }]}>வங்கி விவரங்கள் (Bank Details)</Text>
-                        </View>
-                        {accountHolderName ? (
-                          <Text style={[styles.bankText, { color: theme.inkColor }]} numberOfLines={1}>
-                            பெயர்: <Text style={{ fontWeight: '800' }}>{accountHolderName}</Text>
-                          </Text>
-                        ) : null}
-                        {bankName ? (
-                          <Text style={[styles.bankText, { color: theme.inkColor }]} numberOfLines={1}>
-                            வங்கி: <Text style={{ fontWeight: '800' }}>{bankName}</Text>
-                          </Text>
-                        ) : null}
-                        {accountNo ? (
-                          <Text style={[styles.bankText, { color: theme.inkColor }]} numberOfLines={1}>
-                            A/C எண்: <Text style={{ fontWeight: '800', letterSpacing: 0.5 }}>{accountNo}</Text>
-                          </Text>
-                        ) : null}
-                        {ifscCode ? (
-                          <Text style={[styles.bankText, { color: theme.inkColor }]} numberOfLines={1}>
-                            IFSC: <Text style={{ fontWeight: '800', letterSpacing: 0.5 }}>{ifscCode}</Text>
-                          </Text>
-                        ) : null}
-                      </View>
-                    ) : null}
+      <UnscaledTextContext.Provider value={true}>
+        <View ref={ref} collapsable={false} style={[styles.container, { backgroundColor: theme.paperBg }]}>
+          {/* Double-Ruled Outer Ledger Border Frame */}
+          <View style={[styles.outerBorder, { borderColor: theme.lineColor, backgroundColor: theme.cardBg }]}>
+            {/* Inner Decorative Corner Frame Line */}
+            <View style={[styles.innerFrame, { borderColor: theme.lineColor }]}>
+              {/* 1. Top Auspicious Divine Invocation & Top-Right Phones */}
+              <View style={styles.topBarRow}>
+                {/* Top-Left Company Logo */}
+                {showLogo && effectiveLogoUri ? (
+                  <View style={styles.topLogoContainer}>
+                    <Image
+                      source={{ uri: effectiveLogoUri }}
+                      style={styles.companyLogo}
+                      contentFit="contain"
+                    />
                   </View>
                 ) : null}
 
-                {cfg.showGoodsAcknowledgment !== false ? (
-                  cfg.footerNotes ? (
-                    cfg.footerNotes.split('\n').filter(Boolean).map((line, idx) => (
-                      <Text key={idx} style={[styles.footerNote, { color: idx === 0 ? theme.inkColor : theme.subTextColor }]}>
-                        {line.trim().startsWith('•') ? line.trim() : `• ${line.trim()}`}
+                <View style={styles.topInvocationContainer}>
+                  <Text
+                    style={[
+                      styles.invocationText,
+                      {
+                        color: cfg.invocationColor || theme.highlightColor,
+                        fontSize: cfg.invocationFontSize || 14,
+                      },
+                    ]}
+                  >
+                    {effectiveInvocation}
+                  </Text>
+                </View>
+
+                {/* Top-Right Phone Numbers Column */}
+                <View style={styles.topPhonesContainer}>
+                  {companyPhones.map((phone, idx) => (
+                    <Text key={idx} style={[styles.phoneText, { color: theme.inkColor, marginTop: idx > 0 ? 2 : 0 }]}>
+                      {idx === 0 ? '📞 ' : ''}{phone}
+                    </Text>
+                  ))}
+                </View>
+              </View>
+
+              {/* 2. Business Branding & Address (Centered) */}
+              <View style={styles.companyCenterBlock}>
+                <Text
+                  style={[
+                    styles.companyTitle,
+                    {
+                      color: cfg.companyNameColor || theme.inkColor,
+                      fontSize: cfg.companyNameFontSize || 20,
+                    },
+                  ]}
+                >
+                  {companyName.toUpperCase()}
+                </Text>
+                <Text
+                  style={[
+                    styles.companyAddress,
+                    {
+                      color: cfg.companyAddressColor || theme.subTextColor,
+                      fontSize: cfg.companyAddressFontSize || 11.5,
+                    },
+                  ]}
+                >
+                  {companyAddress}
+                </Text>
+              </View>
+
+              {/* 3. English Title & Tamil Subtitle (Centered) */}
+              <View style={styles.titleRow}>
+                <Text
+                  style={[
+                    styles.estimateTitle,
+                    {
+                      color: cfg.titleEnglishColor || theme.inkColor,
+                      fontSize: cfg.titleEnglishFontSize || 28,
+                      lineHeight: (cfg.titleEnglishFontSize || 28) + 4,
+                    },
+                  ]}
+                >
+                  {titleEnglish}
+                </Text>
+                <Text
+                  style={[
+                    styles.estimateSubTitle,
+                    {
+                      color: cfg.titleTamilColor || theme.subTextColor,
+                      fontSize: cfg.titleTamilFontSize || 11,
+                    },
+                  ]}
+                >
+                  {titleTamil}
+                </Text>
+              </View>
+
+              {/* Bill Date Bar */}
+              <View style={[styles.metaRow, { borderColor: theme.lineColor, backgroundColor: theme.headerBg + '40', justifyContent: 'flex-end' }]}>
+                <View style={{ flexDirection: 'row', alignItems: 'center' }}>
+                  <Text style={[styles.metaLabel, { color: theme.inkColor }]}>தேதி: </Text>
+                  <Text style={[styles.metaValue, { color: theme.inkColor }]}>
+                    {formatFullDate(new Date())}
+                  </Text>
+                </View>
+              </View>
+
+              {/* Customer (Billed To) Section */}
+              <View style={[styles.customerSection, { borderColor: theme.gridLineColor }]}>
+                <View style={{ flexDirection: 'row', flexWrap: 'wrap', alignItems: 'baseline' }}>
+                  {(() => {
+                    const nameStr = customerName || '';
+                    const nameHasAvargal = nameStr.endsWith('அவர்கள்');
+                    const mainName = nameHasAvargal ? nameStr.replace(/\s*அவர்கள்$/, '').trim() : nameStr;
+                    const honorificColor = cfg.customerHonorificColor || theme.subTextColor;
+                    const honorificSize = cfg.customerHonorificFontSize || 12;
+
+                    return (
+                      <Text style={[styles.customerName, { color: theme.inkColor }]}>
+                        {mainName}
+                        {nameHasAvargal && (
+                          <Text
+                            style={{
+                              fontSize: honorificSize,
+                              fontWeight: '700',
+                              color: honorificColor,
+                            }}
+                          >
+                            {' '}அவர்கள்
+                          </Text>
+                        )}
                       </Text>
-                    ))
-                  ) : (
-                    <>
-                      <Text style={[styles.footerNote, { color: theme.inkColor }]}>
-                        • சரக்குகள் சரியான முறையில் கிடைக்கப்பெற்றது.
-                      </Text>
-                      <Text style={[styles.footerNote, { color: theme.subTextColor }]}>
-                        • தங்களின் மேலான ஆதரவிற்கு மிக்க நன்றி! மீண்டும் வருக!
-                      </Text>
-                    </>
-                  )
+                    );
+                  })()}
+                </View>
+                {customerAddress ? (
+                  <Text style={[styles.customerAddressText, { color: theme.subTextColor }]}>
+                    📍 {customerAddress}
+                  </Text>
+                ) : null}
+                {customerPhones ? (
+                  <Text style={[styles.customerPhoneText, { color: theme.subTextColor }]}>
+                    📱 {customerPhones}
+                  </Text>
                 ) : null}
               </View>
 
-              {/* Right Side: Company Seal & Signature Box */}
-              <View style={styles.sealBox}>
+              {/* 6-Column Traditional Tamil Ledger Grid */}
+              <View style={[styles.tableContainer, { borderColor: theme.lineColor }]}>
+                {/* Table Header Row */}
+                <View style={[styles.tableHeaderRow, { borderBottomColor: theme.lineColor, backgroundColor: theme.headerBg }]}>
+                  <View style={[styles.colIndex, { borderRightColor: theme.lineColor }]}>
+                    <Text style={[styles.tableHeaderText, { color: theme.inkColor }]}>{cfg.columnLabels?.sno || 'வ. எண்'}</Text>
+                    <Text style={[styles.tableHeaderSub, { color: theme.subTextColor }]}>S.No</Text>
+                  </View>
+                  <View style={[styles.colDate, { borderRightColor: theme.lineColor }]}>
+                    <Text style={[styles.tableHeaderText, { color: theme.inkColor }]}>{cfg.columnLabels?.date || 'தேதி'}</Text>
+                    <Text style={[styles.tableHeaderSub, { color: theme.subTextColor }]}>Date</Text>
+                  </View>
+                  <View style={[styles.colParticulars, { borderRightColor: theme.lineColor }]}>
+                    <Text style={[styles.tableHeaderText, { color: theme.inkColor }]}>{cfg.columnLabels?.description || 'விபரம் (பொருட்கள் / கூலி விவரம்)'}</Text>
+                    <Text style={[styles.tableHeaderSub, { color: theme.subTextColor }]}>Particulars</Text>
+                  </View>
+                  <View style={[styles.colDebit, { borderRightColor: theme.lineColor }]}>
+                    <Text style={[styles.tableHeaderText, { color: theme.inkColor }]}>{cfg.columnLabels?.debit || 'பற்று (+)'}</Text>
+                    <Text style={[styles.tableHeaderSub, { color: isDark ? '#94A3B8' : '#64748B' }]}>Debit</Text>
+                  </View>
+                  <View style={[styles.colCredit, { borderRightColor: theme.lineColor }]}>
+                    <Text style={[styles.tableHeaderText, { color: theme.inkColor }]}>{cfg.columnLabels?.credit || 'வரவு (-)'}</Text>
+                    <Text style={[styles.tableHeaderSub, { color: '#047857' }]}>Credit</Text>
+                  </View>
+                  <View style={styles.colBalance}>
+                    <Text style={[styles.tableHeaderText, { color: theme.inkColor }]}>{cfg.columnLabels?.balance || 'பாக்கி'}</Text>
+                    <Text style={[styles.tableHeaderSub, { color: theme.highlightColor }]}>Balance</Text>
+                  </View>
+                </View>
+
+                {/* Table Body Rows */}
+                {ledger.length === 0 ? (
+                  <View style={[styles.tableRow, { borderBottomColor: theme.gridLineColor }]}>
+                    <Text style={[styles.emptyLedgerText, { color: theme.subTextColor }]}>
+                      பதிவுகள் ஏதுமில்லை (No transaction records found)
+                    </Text>
+                  </View>
+                ) : (
+                  ledger.map((item, index) => {
+                    const isOrder = item.type === 'order';
+                    const isPayment = item.type === 'payment';
+                    const isOpening = item.type === 'opening';
+
+                    const dmy = formatDateDMY(item.date);
+                    const debitVal = isOrder || isOpening ? Number(item.amount || 0) : 0;
+                    const rawPaid = Number(item.paid || 0);
+                    const disc = isPayment ? Number(item.discountAmount || 0) : 0;
+                    const creditVal = (rawPaid >= (item.paymentReceived || 0) + disc && disc > 0)
+                      ? rawPaid
+                      : (rawPaid + disc);
+
+                    return (
+                      <View
+                        key={item.id || index}
+                        style={[
+                          styles.tableRow,
+                          { borderBottomColor: theme.gridLineColor },
+                          index % 2 === 1 && { backgroundColor: theme.headerBg + '25' },
+                        ]}
+                      >
+                        <View style={[styles.colIndex, { borderRightColor: theme.gridLineColor }]}>
+                          <Text style={[styles.rowCellText, { color: theme.inkColor, textAlign: 'center', fontWeight: '700' }]}>
+                            {index + 1}
+                          </Text>
+                        </View>
+                        <View style={[styles.colDate, { borderRightColor: theme.gridLineColor }]}>
+                          <Text
+                            numberOfLines={1}
+                            adjustsFontSizeToFit
+                            minimumFontScale={0.8}
+                            style={[styles.rowCellText, { color: theme.inkColor, textAlign: 'center', fontSize: 10.5 }]}
+                          >
+                            {isOpening ? '' : dmy}
+                          </Text>
+                        </View>
+
+                        {/* Particulars Cell with Detailed Items Structure */}
+                        <View style={[styles.colParticulars, { borderRightColor: theme.gridLineColor }]}>
+                          {isOpening ? (
+                            <View style={{ flexDirection: 'row', alignItems: 'center', gap: 4 }}>
+                              <Text style={[styles.rowCellText, { color: theme.highlightColor, fontWeight: '800' }]}>
+                                முந்தைய பாக்கி (Old Balance Due)
+                              </Text>
+                            </View>
+                          ) : isPayment ? (
+                            <View>
+                              <View style={{ flexDirection: 'row', alignItems: 'center', gap: 4 }}>
+                                <Text style={{ fontSize: 11, color: '#047857' }}>
+                                  {item.description?.toLowerCase().includes('order') ? '📦' : item.description?.toLowerCase().includes('adjustment') ? '⚖️' : '💳'}
+                                </Text>
+                                <Text style={[styles.rowCellText, { color: '#047857', fontWeight: '800' }]}>
+                                  {item.description || 'ரொக்கம் வரவு (Payment)'}
+                                </Text>
+                              </View>
+                              {item.notes ? (
+                                <Text style={{ fontSize: 10, color: theme.subTextColor, fontStyle: 'italic', marginTop: 1 }}>
+                                  notes: {item.notes}
+                                </Text>
+                              ) : null}
+                            </View>
+                          ) : (
+                            <View>
+                              {item.items && item.items.length > 0 ? (
+                                item.items.map((it, itIdx) => {
+                                  const rate = it.rate || (it.total && it.quantity ? it.total / it.quantity : 0);
+                                  return (
+                                    <View key={itIdx} style={styles.particularItemRow}>
+                                      <Text style={[styles.particularItemBullet, { color: theme.inkColor }]}>•</Text>
+                                      <Text style={[styles.particularItemName, { color: theme.inkColor }]}>
+                                        {it.name}
+                                      </Text>
+                                      <Text style={[styles.particularItemQty, { color: theme.subTextColor }]}>
+                                        - {it.quantity}X{rate} =
+                                      </Text>
+                                      <Text style={[styles.particularItemTotal, { color: theme.inkColor }]}>
+                                        {Math.round(it.total).toLocaleString('en-IN')}
+                                      </Text>
+                                    </View>
+                                  );
+                                })
+                              ) : (
+                                <Text style={[styles.rowCellText, { color: theme.inkColor, fontWeight: '700' }]}>
+                                  {item.description || 'ஆர்டர் விபரம்'}
+                                </Text>
+                              )}
+
+                              {/* Additional Service Charges formatted line by line */}
+                              {(() => {
+                                const extras: string[] = [];
+                                if (item.shipmentCharge) extras.push(`வண்டி வாடகை: ₹${Number(item.shipmentCharge).toLocaleString('en-IN')}`);
+                                if (item.loadingCharge) extras.push(`ஏற்று கூலி: ₹${Number(item.loadingCharge).toLocaleString('en-IN')}`);
+                                if (item.unloadingCharge) extras.push(`இறக்கு கூலி: ₹${Number(item.unloadingCharge).toLocaleString('en-IN')}`);
+                                if (item.extraAmount) extras.push(`கூடுதல்: ₹${Number(item.extraAmount).toLocaleString('en-IN')}`);
+                                if (item.notes) extras.push(`notes: ${item.notes}`);
+                                if (extras.length === 0) return null;
+                                return (
+                                  <View style={{ marginTop: 2 }}>
+                                    {extras.map((extra, idx) => (
+                                      <Text key={idx} style={{ fontSize: 10, color: theme.subTextColor, marginTop: 1 }}>
+                                        • {extra}
+                                      </Text>
+                                    ))}
+                                  </View>
+                                );
+                              })()}
+                            </View>
+                          )}
+                        </View>
+
+                        {/* Debit (+) Cell */}
+                        <View style={[styles.colDebit, { borderRightColor: theme.gridLineColor }]}>
+                          <Text
+                            numberOfLines={1}
+                            adjustsFontSizeToFit
+                            minimumFontScale={0.75}
+                            style={[styles.rowCellText, { color: debitVal ? (isDark ? '#94A3B8' : '#64748B') : theme.subTextColor, textAlign: 'right', fontWeight: debitVal ? '700' : '400' }]}
+                          >
+                            {debitVal ? formatCurrency(debitVal) : '-'}
+                          </Text>
+                        </View>
+
+                        {/* Credit (-) Cell */}
+                        <View style={[styles.colCredit, { borderRightColor: theme.gridLineColor }]}>
+                          <Text
+                            numberOfLines={1}
+                            adjustsFontSizeToFit
+                            minimumFontScale={0.75}
+                            style={[styles.rowCellText, { color: creditVal ? '#047857' : theme.subTextColor, textAlign: 'right', fontWeight: creditVal ? '800' : '400' }]}
+                          >
+                            {creditVal ? formatCurrency(creditVal) : '-'}
+                          </Text>
+                        </View>
+
+                        {/* Running Balance Cell */}
+                        <View style={styles.colBalance}>
+                          <Text
+                            numberOfLines={1}
+                            adjustsFontSizeToFit
+                            minimumFontScale={0.75}
+                            style={[styles.rowCellText, { color: (item.balance !== undefined && item.balance !== 0) ? theme.highlightColor : theme.inkColor, textAlign: 'right', fontWeight: '700' }]}
+                          >
+                            {item.balance !== undefined ? formatCurrency(item.balance) : '-'}
+                          </Text>
+                        </View>
+                      </View>
+                    );
+                  })
+                )}
+
+                {/* Accounting Double-Ruled Total Row */}
+                <View style={[styles.tableTotalRow, { borderTopColor: theme.lineColor, backgroundColor: theme.totalRowBg }]}>
+                  <View style={[styles.colSpanParticulars, { borderRightColor: theme.lineColor }]}>
+                    <Text style={[styles.totalTitleText, { color: theme.inkColor, textAlign: 'center' }]}>
+                      மொத்தம் (ACCOUNT TOTALS)
+                    </Text>
+                  </View>
+                  <View style={[styles.colDebit, { borderRightColor: theme.lineColor }]}>
+                    <Text
+                      numberOfLines={1}
+                      adjustsFontSizeToFit
+                      minimumFontScale={0.75}
+                      style={[styles.totalValText, { color: isDark ? '#94A3B8' : '#64748B', textAlign: 'right' }]}
+                    >
+                      {formatCurrency(totalDebit)}
+                    </Text>
+                  </View>
+                  <View style={[styles.colCredit, { borderRightColor: theme.lineColor }]}>
+                    <Text
+                      numberOfLines={1}
+                      adjustsFontSizeToFit
+                      minimumFontScale={0.75}
+                      style={[styles.totalValText, { color: '#047857', textAlign: 'right' }]}
+                    >
+                      {formatCurrency(totalCredit)}
+                    </Text>
+                  </View>
+                  <View style={styles.colBalance}>
+                    <Text
+                      numberOfLines={1}
+                      adjustsFontSizeToFit
+                      minimumFontScale={0.75}
+                      style={[styles.totalValText, { color: theme.highlightColor, textAlign: 'right' }]}
+                    >
+                      {formatCurrency(netDue)}
+                    </Text>
+                  </View>
+                </View>
+              </View>
+
+              {/* Traditional Double Line Under Totals */}
+              <View style={[styles.doubleLineBar, { borderColor: theme.lineColor }]} />
+
+              {/* Net Balance Due Highlight Box */}
+              <View
+                style={[
+                  styles.netDueRow,
+                  {
+                    backgroundColor: netDue > 0 ? theme.badgeDueBg : theme.badgeSettledBg,
+                    borderColor: netDue > 0 ? theme.badgeDueBorder : '#10B981',
+                  },
+                ]}
+              >
+                <View>
+                  <Text
+                    style={[
+                      styles.netDueLabel,
+                      { color: netDue > 0 ? theme.badgeDueText : theme.badgeSettledText },
+                    ]}
+                  >
+                    {netDue > 0
+                      ? 'இறுதி பாக்கி (NET BALANCE DUE):'
+                      : netDue < 0
+                        ? 'முன்பணம் வரவு (CUSTOMER ADVANCE):'
+                        : 'கணக்கு முடிந்தது (ACCOUNT SETTLED):'}
+                  </Text>
+                </View>
+                <Text
+                  style={[
+                    styles.netDueAmount,
+                    { color: netDue > 0 ? theme.badgeDueText : theme.badgeSettledText },
+                  ]}
+                >
+                  {formatCurrency(Math.abs(netDue))}
+                </Text>
+              </View>
+
+              {/* Bottom Footer Section: Terms, Optional QR & Authorized Seal/Signature */}
+              <View style={styles.footerSection}>
+                {/* Left Side: Goods Acknowledgment & Optional UPI QR */}
+                <View style={{ flex: 1, paddingRight: 16 }}>
+                  {/* Payment Options Row: UPI QR and/or Bank Details */}
+                  {(showQr && targetUpi) || (showBank && hasBankInfo) ? (
+                    <View style={styles.paymentRow}>
+                      {showQr && targetUpi ? (
+                        <View style={[styles.qrBlock, { borderColor: theme.lineColor, backgroundColor: theme.headerBg + '30' }]}>
+                          <Image source={{ uri: qrCodeUrl }} style={styles.qrImage} contentFit="contain" />
+                          <View style={{ flex: 1 }}>
+                            <Text style={[styles.qrTitle, { color: theme.inkColor }]}>GPay / PhonePe / UPI</Text>
+                            <Text style={[styles.qrUpiId, { color: theme.subTextColor }]}>{targetUpi}</Text>
+                            <Text style={[styles.qrPrompt, { color: theme.highlightColor }]}>ஸ்கேன் செய்து கட்டவும் ↗</Text>
+                          </View>
+                        </View>
+                      ) : null}
+
+                      {showBank && hasBankInfo ? (
+                        <View style={[styles.bankBlock, { borderColor: theme.lineColor, backgroundColor: theme.headerBg + '30' }]}>
+                          <View style={{ flexDirection: 'row', alignItems: 'center', gap: 4, marginBottom: 2 }}>
+                            <Text style={{ fontSize: 9 }}>🏦</Text>
+                            <Text style={[styles.bankTitle, { color: theme.highlightColor }]}>வங்கி விவரங்கள் (Bank Details)</Text>
+                          </View>
+                          {accountHolderName ? (
+                            <Text style={[styles.bankText, { color: theme.inkColor }]} numberOfLines={1}>
+                              பெயர்: <Text style={{ fontWeight: '800' }}>{accountHolderName}</Text>
+                            </Text>
+                          ) : null}
+                          {bankName ? (
+                            <Text style={[styles.bankText, { color: theme.inkColor }]} numberOfLines={1}>
+                              வங்கி: <Text style={{ fontWeight: '800' }}>{bankName}</Text>
+                            </Text>
+                          ) : null}
+                          {accountNo ? (
+                            <Text style={[styles.bankText, { color: theme.inkColor }]} numberOfLines={1}>
+                              A/C எண்: <Text style={{ fontWeight: '800', letterSpacing: 0.5 }}>{accountNo}</Text>
+                            </Text>
+                          ) : null}
+                          {ifscCode ? (
+                            <Text style={[styles.bankText, { color: theme.inkColor }]} numberOfLines={1}>
+                              IFSC: <Text style={{ fontWeight: '800', letterSpacing: 0.5 }}>{ifscCode}</Text>
+                            </Text>
+                          ) : null}
+                        </View>
+                      ) : null}
+                    </View>
+                  ) : null}
+
+                  {cfg.showGoodsAcknowledgment !== false ? (
+                    cfg.footerNotes ? (
+                      cfg.footerNotes.split('\n').filter(Boolean).map((line, idx) => (
+                        <Text key={idx} style={[styles.footerNote, { color: idx === 0 ? theme.inkColor : theme.subTextColor }]}>
+                          {line.trim().startsWith('•') ? line.trim() : `• ${line.trim()}`}
+                        </Text>
+                      ))
+                    ) : (
+                      <>
+                        <Text style={[styles.footerNote, { color: theme.inkColor }]}>
+                          • சரக்குகள் சரியான முறையில் கிடைக்கப்பெற்றது.
+                        </Text>
+                        <Text style={[styles.footerNote, { color: theme.subTextColor }]}>
+                          • தங்களின் மேலான ஆதரவிற்கு மிக்க நன்றி! மீண்டும் வருக!
+                        </Text>
+                      </>
+                    )
+                  ) : null}
+                </View>
+
+                {/* Right Side: Company Seal & Signature Box */}
+                <View style={styles.sealBox}>
 
 
-                {effectiveSignatureUri ? (
-                  <Image
-                    source={{ uri: effectiveSignatureUri }}
-                    style={styles.signatureImage}
-                    contentFit="contain"
-                  />
-                ) : null}
-                <View style={[styles.signatureLine, { borderBottomColor: theme.lineColor }]} />
-                <Text style={[styles.signatureLabel, { color: theme.inkColor }]}>
-                  {cfg.signatoryText || 'அங்கீகரிக்கப்பட்ட கையொப்பம்'}
-                </Text>
-                <Text style={[styles.signatureSub, { color: theme.subTextColor }]}>
-                  Authorized Signatory
-                </Text>
+                  {effectiveSignatureUri ? (
+                    <Image
+                      source={{ uri: effectiveSignatureUri }}
+                      style={styles.signatureImage}
+                      contentFit="contain"
+                    />
+                  ) : null}
+                  <View style={[styles.signatureLine, { borderBottomColor: theme.lineColor }]} />
+                  <Text style={[styles.signatureLabel, { color: theme.inkColor }]}>
+                    {cfg.signatoryText || 'அங்கீகரிக்கப்பட்ட கையொப்பம்'}
+                  </Text>
+                  <Text style={[styles.signatureSub, { color: theme.subTextColor }]}>
+                    Authorized Signatory
+                  </Text>
+                </View>
               </View>
             </View>
           </View>
         </View>
-      </View>
+      </UnscaledTextContext.Provider>
     );
   }
 );
@@ -903,14 +942,14 @@ const styles = StyleSheet.create({
     textAlign: 'center',
   },
   colIndex: {
-    width: 42,
+    width: 36,
     borderRightWidth: 1,
     paddingHorizontal: 2,
     justifyContent: 'center',
     alignItems: 'center',
   },
   colDate: {
-    width: 72,
+    width: 76,
     borderRightWidth: 1,
     paddingHorizontal: 2,
     justifyContent: 'center',
@@ -923,20 +962,20 @@ const styles = StyleSheet.create({
     justifyContent: 'center',
   },
   colDebit: {
-    width: 96,
+    width: 106,
     borderRightWidth: 1,
-    paddingHorizontal: 6,
+    paddingHorizontal: 4,
     justifyContent: 'center',
   },
   colCredit: {
-    width: 96,
+    width: 106,
     borderRightWidth: 1,
-    paddingHorizontal: 6,
+    paddingHorizontal: 4,
     justifyContent: 'center',
   },
   colBalance: {
-    width: 92,
-    paddingHorizontal: 6,
+    width: 108,
+    paddingHorizontal: 4,
     justifyContent: 'center',
   },
   colSpanParticulars: {

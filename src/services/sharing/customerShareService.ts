@@ -54,7 +54,8 @@ export const customerShareService = {
       const custName = data.customer.name.endsWith('அவர்கள்') ? data.customer.name : `${data.customer.name} அவர்கள்`;
       const netDue = data.summary.netBalanceDue;
       const invocation = cfg.invocationText || '|| ஸ்ரீ சொக்கநாச்சி அம்மன் துணை ||';
-      const estTitle = cfg.titleEnglish || 'ESTEEMATE';
+      const rawTitle = (cfg.titleEnglish || '').trim();
+      const estTitle = (!rawTitle || rawTitle.toUpperCase() === 'ESTEEMATE') ? 'ESTIMATE' : rawTitle;
 
       let msg = `🌸 *${invocation}*\n`;
       msg += `📝 *${estTitle}*\n`;
@@ -571,7 +572,8 @@ export const customerShareService = {
     const customerPhones = formatCustomerPhonesDisplay(data.customer.phone, data.customer.phoneNumbers);
 
     const effectiveInvocation = cfg.invocationText || '|| ஸ்ரீ சொக்கநாச்சி அம்மன் துணை ||';
-    const titleEnglish = cfg.titleEnglish || 'ESTEEMATE';
+    const rawTitle = (cfg.titleEnglish || '').trim();
+    const titleEnglish = (!rawTitle || rawTitle.toUpperCase() === 'ESTEEMATE') ? 'ESTIMATE' : rawTitle;
     const titleTamil = cfg.titleTamil || 'மதிப்பீட்டு பில் / ESTIMATE BILL';
 
 
@@ -683,9 +685,9 @@ export const customerShareService = {
           <td style="padding: 7px 4px; text-align: center; border-right: 1px solid ${t.gridLineColor}; font-weight: 700;">${index + 1}</td>
           <td style="padding: 7px 4px; text-align: center; border-right: 1px solid ${t.gridLineColor}; white-space: nowrap; font-size: 11px;">${isOpening ? '' : dmy}</td>
           <td style="padding: 7px 8px; border-right: 1px solid ${t.gridLineColor};">${particulars}</td>
-          <td style="padding: 7px 6px; text-align: right; border-right: 1px solid ${t.gridLineColor}; color: ${debitVal ? '#64748B' : t.subTextColor}; font-weight: ${debitVal ? '700' : '400'};">${debitVal ? formatCurrency(debitVal) : '-'}</td>
-          <td style="padding: 7px 6px; text-align: right; border-right: 1px solid ${t.gridLineColor}; color: ${creditVal ? '#047857' : t.subTextColor}; font-weight: ${creditVal ? '800' : '400'};">${creditVal ? formatCurrency(creditVal) : '-'}</td>
-          <td style="padding: 7px 6px; text-align: right; color: ${item.balance ? t.highlightColor : t.inkColor}; font-weight: 700;">${item.balance !== undefined ? formatCurrency(item.balance) : '-'}</td>
+          <td style="padding: 7px 6px; text-align: right; border-right: 1px solid ${t.gridLineColor}; color: ${debitVal ? '#64748B' : t.subTextColor}; font-weight: ${debitVal ? '700' : '400'}; white-space: nowrap;">${debitVal ? formatCurrency(debitVal) : '-'}</td>
+          <td style="padding: 7px 6px; text-align: right; border-right: 1px solid ${t.gridLineColor}; color: ${creditVal ? '#047857' : t.subTextColor}; font-weight: ${creditVal ? '800' : '400'}; white-space: nowrap;">${creditVal ? formatCurrency(creditVal) : '-'}</td>
+          <td style="padding: 7px 6px; text-align: right; color: ${item.balance ? t.highlightColor : t.inkColor}; font-weight: 700; white-space: nowrap;">${item.balance !== undefined ? formatCurrency(item.balance) : '-'}</td>
         </tr>
       `;
     }).join('');
@@ -695,7 +697,7 @@ export const customerShareService = {
       <html>
       <head>
         <meta charset="utf-8" />
-        <title>ESTEEMATE - ${customerName}</title>
+        <title>ESTIMATE - ${customerName}</title>
         <style>
           @page { size: A4; margin: 12mm; }
           body { font-family: 'Helvetica Neue', Helvetica, Arial, sans-serif; color: ${t.inkColor}; margin: 0; padding: 10px; background: #FFFFFF; }
@@ -771,21 +773,21 @@ export const customerShareService = {
             <table>
               <thead>
                 <tr>
-                  <th style="width: 40px;">${cfg.columnLabels?.sno || 'வ. எண்'}<br/><span style="font-size: 9px; font-weight: normal;">S.No</span></th>
-                  <th style="width: 70px;">${cfg.columnLabels?.date || 'தேதி'}<br/><span style="font-size: 9px; font-weight: normal;">Date</span></th>
+                  <th style="width: 36px;">${cfg.columnLabels?.sno || 'வ. எண்'}<br/><span style="font-size: 9px; font-weight: normal;">S.No</span></th>
+                  <th style="width: 76px;">${cfg.columnLabels?.date || 'தேதி'}<br/><span style="font-size: 9px; font-weight: normal;">Date</span></th>
                   <th>${cfg.columnLabels?.description || 'விபரம் (பொருட்கள் / கூலி விவரம்)'}<br/><span style="font-size: 9px; font-weight: normal;">Particulars</span></th>
-                  <th style="width: 85px;">${cfg.columnLabels?.debit || 'பற்று (+)'}<br/><span style="font-size: 9px; font-weight: normal; color: #64748B;">Debit</span></th>
-                  <th style="width: 85px;">${cfg.columnLabels?.credit || 'வரவு (-)'}<br/><span style="font-size: 9px; font-weight: normal; color: #047857;">Credit</span></th>
-                  <th style="width: 80px;">${cfg.columnLabels?.balance || 'பாக்கி'}<br/><span style="font-size: 9px; font-weight: normal; color: ${t.highlightColor};">Balance</span></th>
+                  <th style="width: 106px;">${cfg.columnLabels?.debit || 'பற்று (+)'}<br/><span style="font-size: 9px; font-weight: normal; color: #64748B;">Debit</span></th>
+                  <th style="width: 106px;">${cfg.columnLabels?.credit || 'வரவு (-)'}<br/><span style="font-size: 9px; font-weight: normal; color: #047857;">Credit</span></th>
+                  <th style="width: 108px;">${cfg.columnLabels?.balance || 'பாக்கி'}<br/><span style="font-size: 9px; font-weight: normal; color: ${t.highlightColor};">Balance</span></th>
                 </tr>
               </thead>
               <tbody>
                 ${rowsHtml}
                 <tr class="total-row">
                   <td colspan="3" style="text-align: center;">மொத்தம் (ACCOUNT TOTALS)</td>
-                  <td style="text-align: right; color: #64748B; font-weight: 800;">${formatCurrency(totalDebit)}</td>
-                  <td style="text-align: right; color: #047857;">${formatCurrency(totalCredit)}</td>
-                  <td style="text-align: right; color: ${t.highlightColor}; font-weight: 900;">${formatCurrency(netDue)}</td>
+                  <td style="text-align: right; color: #64748B; font-weight: 800; white-space: nowrap;">${formatCurrency(totalDebit)}</td>
+                  <td style="text-align: right; color: #047857; white-space: nowrap;">${formatCurrency(totalCredit)}</td>
+                  <td style="text-align: right; color: ${t.highlightColor}; font-weight: 900; white-space: nowrap;">${formatCurrency(netDue)}</td>
                 </tr>
               </tbody>
             </table>
