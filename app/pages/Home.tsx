@@ -1,6 +1,6 @@
 import { MaterialIcons } from "@expo/vector-icons";
 import { useRouter } from "expo-router";
-import React, { useContext, useMemo, useState, useEffect, useRef } from "react";
+import React, { useCallback, useContext, useMemo, useState, useEffect, useRef } from "react";
 import {
     ActivityIndicator,
     Alert,
@@ -51,7 +51,7 @@ import AnimatedPage from "../components/AnimatedPage";
 import EasyCalendarModal from "../components/EasyCalendarModal";
 
 import { useTheme } from "../context/ThemeContext";
-import { useScrollRestoration } from "../context/ScrollContext";
+import { useScrollRestoration, useSessionDailyReportDate } from "../context/ScrollContext";
 import { useResponsive } from "../../utils/responsive";
 
 export default function Home() {
@@ -68,6 +68,7 @@ export default function Home() {
   } = useResponsive();
   const styles = useMemo(() => getStyles(theme), [theme]);
   const { scrollViewRef, handleScroll, handleContentSizeChange } = useScrollRestoration("/");
+  const { getDailyReportDate, setDailyReportDate } = useSessionDailyReportDate();
   const _deferReady = useDeferredInit();
 
   // Executive greeting wave animation
@@ -777,8 +778,19 @@ export default function Home() {
   const [isAttendanceCalendarModalOpen, setIsAttendanceCalendarModalOpen] = useState(false);
   const [customAttendanceDateInput, setCustomAttendanceDateInput] = useState("");
 
-  // Daily Report Calendar Date Selection states
-  const [selectedReportDate, setSelectedReportDate] = useState<Date>(new Date());
+  // Daily Report Calendar Date Selection states (kept in memory for current app session only)
+  const [selectedReportDate, setSelectedReportDateState] = useState<Date>(
+    () => getDailyReportDate() || new Date()
+  );
+  const updateSelectedReportDate = useCallback(
+    (nextDate: Date) => {
+      const cloned = new Date(nextDate);
+      if (isNaN(cloned.getTime())) return;
+      setSelectedReportDateState(cloned);
+      setDailyReportDate(cloned);
+    },
+    [setDailyReportDate]
+  );
   const [isCalendarModalOpen, setIsCalendarModalOpen] = useState(false);
   const [customDateInput, setCustomDateInput] = useState("");
   const [dailyReportFilter, setDailyReportFilter] = useState<"all" | "completed" | "pending" | "other">("all");
@@ -1609,7 +1621,7 @@ export default function Home() {
   const shiftReportDate = (days: number) => {
     const d = new Date(selectedReportDate);
     d.setDate(d.getDate() + days);
-    setSelectedReportDate(d);
+    updateSelectedReportDate(d);
   };
 
   const availableReportDates = useMemo(() => {
@@ -6335,7 +6347,7 @@ export default function Home() {
                       isSelected && styles.quickDatePillActive,
                     ]}
                     onPress={() => {
-                      setSelectedReportDate(target);
+                      updateSelectedReportDate(target);
                       setIsCalendarModalOpen(false);
                     }}
                   >
@@ -6368,7 +6380,7 @@ export default function Home() {
                       const d = Number(parts[2]);
                       const parsed = new Date(y, m, d);
                       if (!isNaN(parsed.getTime())) {
-                        setSelectedReportDate(parsed);
+                        updateSelectedReportDate(parsed);
                         setIsCalendarModalOpen(false);
                         setCustomDateInput("");
                         return;
@@ -6400,7 +6412,7 @@ export default function Home() {
                       isSelected && styles.calendarDateRowActive,
                     ]}
                     onPress={() => {
-                      setSelectedReportDate(itemDate);
+                      updateSelectedReportDate(itemDate);
                       setIsCalendarModalOpen(false);
                     }}
                   >

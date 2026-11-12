@@ -4,15 +4,21 @@ import { usePathname } from "expo-router";
 interface ScrollContextType {
   getScrollPosition: (key: string) => number;
   setScrollPosition: (key: string, y: number) => void;
+  getDailyReportDate: () => Date | null;
+  setDailyReportDate: (date: Date | null) => void;
 }
 
 const ScrollContext = createContext<ScrollContextType>({
   getScrollPosition: () => 0,
   setScrollPosition: () => {},
+  getDailyReportDate: () => null,
+  setDailyReportDate: () => {},
 });
 
 export const ScrollProvider: React.FC<{ children: React.ReactNode }> = ({ children }) => {
   const positionsRef = useRef<Record<string, number>>({});
+  // Session-only in-memory date: survives in-app route switches and resets to today when app closes
+  const dailyReportDateRef = useRef<number | null>(null);
 
   const getScrollPosition = useCallback((key: string) => {
     return positionsRef.current[key] || 0;
@@ -24,9 +30,29 @@ export const ScrollProvider: React.FC<{ children: React.ReactNode }> = ({ childr
     }
   }, []);
 
+  const getDailyReportDate = useCallback((): Date | null => {
+    return dailyReportDateRef.current !== null ? new Date(dailyReportDateRef.current) : null;
+  }, []);
+
+  const setDailyReportDate = useCallback((date: Date | null) => {
+    if (date === null) {
+      dailyReportDateRef.current = null;
+      return;
+    }
+    const ts = date instanceof Date ? date.getTime() : NaN;
+    if (Number.isFinite(ts)) {
+      dailyReportDateRef.current = ts;
+    }
+  }, []);
+
   const contextValue = useMemo(
-    () => ({ getScrollPosition, setScrollPosition }),
-    [getScrollPosition, setScrollPosition]
+    () => ({
+      getScrollPosition,
+      setScrollPosition,
+      getDailyReportDate,
+      setDailyReportDate,
+    }),
+    [getScrollPosition, setScrollPosition, getDailyReportDate, setDailyReportDate]
   );
 
   return (
@@ -145,6 +171,14 @@ export const useScrollRestoration = (customKey?: string) => {
     handleContentSizeChange,
     savedY: getScrollPosition(key),
   };
+};
+
+/**
+ * Provides access to session-scoped in-memory Daily Report date persistence across navigation.
+ */
+export const useSessionDailyReportDate = () => {
+  const { getDailyReportDate, setDailyReportDate } = useContext(ScrollContext);
+  return { getDailyReportDate, setDailyReportDate };
 };
 
 export default function ScrollContextRoutePlaceholder() {
