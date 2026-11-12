@@ -9,8 +9,11 @@ import {
   TextInput,
   ActivityIndicator,
   Alert,
-  Dimensions,
+  KeyboardAvoidingView,
+  Platform,
+  useWindowDimensions,
 } from 'react-native';
+import { useSafeAreaInsets } from 'react-native-safe-area-context';
 import { MaterialIcons } from '@expo/vector-icons';
 import { captureRef } from 'react-native-view-shot';
 import * as Sharing from 'expo-sharing';
@@ -40,6 +43,10 @@ export function CustomerShareBottomSheet({
   company = {},
   isDark = false,
 }: CustomerShareBottomSheetProps) {
+  const { width: windowWidth } = useWindowDimensions();
+  const insets = useSafeAreaInsets();
+  const [appaPreviewHeight, setAppaPreviewHeight] = useState<number>(0);
+  const appaPreviewScale = Math.min(1, Math.max(0.36, (Math.min(windowWidth, 560) - 44) / 720));
   const [activeTab, setActiveTab] = useState<TabType>('IMAGE');
   const [statementType, setStatementType] = useState<'standard' | 'appa_estimate'>('appa_estimate');
   const [appaTheme, setAppaTheme] = useState<AppaBillTheme>('classic');
@@ -388,7 +395,43 @@ export function CustomerShareBottomSheet({
 
   return (
     <Modal visible={visible} animationType="slide" transparent onRequestClose={onClose}>
-      <View style={styles.modalOverlay}>
+      <KeyboardAvoidingView
+        behavior={Platform.OS === 'ios' ? 'padding' : 'height'}
+        style={styles.modalOverlay}
+      >
+        {/* Dedicated off-screen fixed-width capture container (keeps exports consistent across all devices) */}
+        <View
+          collapsable={false}
+          pointerEvents="none"
+          style={[
+            styles.offscreenCaptureContainer,
+            { width: statementType === 'appa_estimate' ? 720 : 420 },
+          ]}
+        >
+          <View ref={viewShotRef} collapsable={false}>
+            {statementType === 'appa_estimate' ? (
+              <AppaEstimateBillView
+                data={processedData}
+                company={company}
+                settings={settings}
+                template={template}
+                isDark={isDark}
+                billTheme={appaTheme}
+                billNo={billNo}
+                appaBillSettings={customAppaSettings}
+              />
+            ) : (
+              <CustomerStatementView
+                data={processedData}
+                company={company}
+                settings={settings}
+                template={template}
+                isDark={isDark}
+              />
+            )}
+          </View>
+        </View>
+
         <View style={[styles.sheetContainer, { backgroundColor: cardBg, borderColor }]}>
           {/* Sheet Handle & Header */}
           <View style={styles.sheetHeader}>
@@ -935,7 +978,11 @@ export function CustomerShareBottomSheet({
           </View>
 
           {/* Content Area */}
-          <ScrollView style={styles.contentScroll} contentContainerStyle={{ padding: 16 }}>
+          <ScrollView
+            style={styles.contentScroll}
+            keyboardShouldPersistTaps="handled"
+            contentContainerStyle={{ padding: 16, paddingBottom: Math.max(insets.bottom + 16, 24) }}
+          >
             {/* ────────── TAB 1: TEXT / WHATSAPP ────────── */}
             {activeTab === 'TEXT' && (
               <View>
@@ -993,38 +1040,57 @@ export function CustomerShareBottomSheet({
                   </Text>
                   {statementType === 'appa_estimate' && (
                     <Text style={{ fontSize: 10, color: subTextColor, fontStyle: 'italic' }}>
-                      👈 Swipe to preview slip 👉
+                      Scaled to fit screen (exports at 720px)
                     </Text>
                   )}
                 </View>
-                
+
                 {statementType === 'appa_estimate' ? (
-                  <ScrollView
-                    horizontal
-                    showsHorizontalScrollIndicator={true}
-                    contentContainerStyle={{ paddingVertical: 4, paddingHorizontal: 2 }}
+                  <View
+                    style={{
+                      width: Math.round(720 * appaPreviewScale),
+                      height: appaPreviewHeight ? Math.round(appaPreviewHeight * appaPreviewScale) : undefined,
+                      overflow: 'hidden',
+                      alignItems: 'center',
+                      justifyContent: 'center',
+                      alignSelf: 'center',
+                      marginVertical: 4,
+                    }}
                   >
-                    <AppaEstimateBillView
-                      ref={viewShotRef}
+                    <View
+                      style={{
+                        width: 720,
+                        transform: [{ scale: appaPreviewScale }],
+                      }}
+                      onLayout={(e) => {
+                        const h = Math.round(e.nativeEvent.layout.height);
+                        if (h > 0 && h !== appaPreviewHeight) {
+                          setAppaPreviewHeight(h);
+                        }
+                      }}
+                    >
+                      <AppaEstimateBillView
+                        data={processedData}
+                        company={company}
+                        settings={settings}
+                        template={template}
+                        isDark={isDark}
+                        billTheme={appaTheme}
+                        billNo={billNo}
+                        appaBillSettings={customAppaSettings}
+                      />
+                    </View>
+                  </View>
+                ) : (
+                  <View style={{ width: '100%', maxWidth: 420, alignSelf: 'center' }}>
+                    <CustomerStatementView
                       data={processedData}
                       company={company}
                       settings={settings}
                       template={template}
                       isDark={isDark}
-                      billTheme={appaTheme}
-                      billNo={billNo}
-                      appaBillSettings={customAppaSettings}
                     />
-                  </ScrollView>
-                ) : (
-                  <CustomerStatementView
-                    ref={viewShotRef}
-                    data={processedData}
-                    company={company}
-                    settings={settings}
-                    template={template}
-                    isDark={isDark}
-                  />
+                  </View>
                 )}
 
                 <View style={[styles.actionBtnRow, { marginTop: 16 }]}>
@@ -1083,7 +1149,7 @@ export function CustomerShareBottomSheet({
             )}
           </ScrollView>
         </View>
-      </View>
+      </KeyboardAvoidingView>
 
       <ShareSettingsModal
         visible={settingsModalVisible}
@@ -1104,7 +1170,10 @@ export function CustomerShareBottomSheet({
         animationType="slide"
         onRequestClose={() => setAppaEditModalVisible(false)}
       >
-        <View style={styles.modalOverlay}>
+        <KeyboardAvoidingView
+          behavior={Platform.OS === 'ios' ? 'padding' : 'height'}
+          style={styles.modalOverlay}
+        >
           <View style={[styles.editModalContainer, { backgroundColor: cardBg, borderColor, width: '92%', maxWidth: 480, maxHeight: '88%' }]}>
             {/* Header */}
             <View style={[styles.editModalHeader, { borderBottomColor: borderColor }]}>
@@ -1124,7 +1193,7 @@ export function CustomerShareBottomSheet({
               </Pressable>
             </View>
 
-            <ScrollView style={{ paddingVertical: 10 }} showsVerticalScrollIndicator={false}>
+            <ScrollView style={{ paddingVertical: 10 }} showsVerticalScrollIndicator={false} keyboardShouldPersistTaps="handled">
               {/* Bill No */}
               <View style={{ marginBottom: 12 }}>
                 <Text style={[styles.inputLabel, { color: subTextColor }]}>Bill Number (நெ. / பில் எண்)</Text>
@@ -1342,7 +1411,7 @@ export function CustomerShareBottomSheet({
               </Pressable>
             </View>
           </View>
-        </View>
+        </KeyboardAvoidingView>
       </Modal>
     </Modal>
   );
@@ -1355,11 +1424,21 @@ const styles = StyleSheet.create({
     justifyContent: 'flex-end',
   },
   sheetContainer: {
+    width: '100%',
+    maxWidth: 560,
+    alignSelf: 'center',
     borderTopLeftRadius: 20,
     borderTopRightRadius: 20,
     borderWidth: 1,
     maxHeight: '90%',
     flexShrink: 1,
+  },
+  offscreenCaptureContainer: {
+    position: 'absolute',
+    left: -4000,
+    top: 0,
+    opacity: 1,
+    zIndex: -999,
   },
   sheetHeader: {
     alignItems: 'center',

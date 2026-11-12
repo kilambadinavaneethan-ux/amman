@@ -9,7 +9,7 @@ import {
   Modal,
   ActivityIndicator,
   Alert,
-  Dimensions,
+  KeyboardAvoidingView,
   Share as RNShare,
   Platform,
   Switch,
@@ -18,6 +18,7 @@ import Animated, { FadeInDown, FadeInRight } from 'react-native-reanimated';
 import { useRouter } from 'expo-router';
 import { MaterialIcons } from '@expo/vector-icons';
 import { useTheme } from '../context/ThemeContext';
+import { useResponsive } from '../../utils/responsive';
 import { OrderContext } from '../context/OrderContext';
 import { CustomerContext } from '../context/CustomerContext';
 import { ItemContext } from '../context/ItemContext';
@@ -81,6 +82,7 @@ const GRANULARITY_OPTIONS: { id: TrendGranularity; label: string; icon: keyof ty
 export default function SalesReportScreen() {
   const { theme } = useTheme();
   const { colors, spacing, radius, shadows } = theme;
+  const { kavBehavior } = useResponsive();
   const styles = useMemo(() => getStyles(theme), [theme]);
   const router = useRouter();
 
@@ -1137,8 +1139,8 @@ export default function SalesReportScreen() {
         </ScrollView>
 
         {/* Custom Date Range Modal */}
-        <Modal visible={customModalVisible} transparent animationType="fade">
-          <View style={styles.modalBg}>
+        <Modal visible={customModalVisible} transparent animationType="fade" onRequestClose={() => setCustomModalVisible(false)}>
+          <KeyboardAvoidingView behavior={kavBehavior} style={styles.modalBg}>
             <View style={styles.modalContent}>
               <View style={styles.modalHeader}>
                 <Text style={styles.modalTitle}>Custom Date Range</Text>
@@ -1210,12 +1212,12 @@ export default function SalesReportScreen() {
                 <Text style={styles.modalPrimaryBtnText}>Apply Filter</Text>
               </Pressable>
             </View>
-          </View>
+          </KeyboardAvoidingView>
         </Modal>
 
         {/* Set Target Modal */}
-        <Modal visible={targetModalVisible} transparent animationType="fade">
-          <View style={styles.modalBg}>
+        <Modal visible={targetModalVisible} transparent animationType="fade" onRequestClose={() => setTargetModalVisible(false)}>
+          <KeyboardAvoidingView behavior={kavBehavior} style={styles.modalBg}>
             <View style={styles.modalContent}>
               <View style={styles.modalHeader}>
                 <View style={{ flexDirection: 'row', alignItems: 'center', gap: 8 }}>
@@ -1283,12 +1285,12 @@ export default function SalesReportScreen() {
                 <Text style={styles.modalPrimaryBtnText}>Save Target Goal</Text>
               </Pressable>
             </View>
-          </View>
+          </KeyboardAvoidingView>
         </Modal>
 
         {/* Report Preferences Modal */}
-        <Modal visible={settingsModalVisible} transparent animationType="fade">
-          <View style={styles.modalBg}>
+        <Modal visible={settingsModalVisible} transparent animationType="fade" onRequestClose={() => setSettingsModalVisible(false)}>
+          <KeyboardAvoidingView behavior={kavBehavior} style={styles.modalBg}>
             <View style={styles.modalContent}>
               <View style={styles.modalHeader}>
                 <Text style={styles.modalTitle}>Report Preferences</Text>
@@ -1327,13 +1329,13 @@ export default function SalesReportScreen() {
                 <Text style={styles.modalPrimaryBtnText}>Save Settings</Text>
               </Pressable>
             </View>
-          </View>
+          </KeyboardAvoidingView>
         </Modal>
 
         {/* Order Drill-Down Detail Modal */}
-        <Modal visible={!!selectedOrder} transparent animationType="fade">
-          <View style={styles.modalBg}>
-            <View style={[styles.modalContent, { maxHeight: '85%' }]}>
+        <Modal visible={!!selectedOrder} transparent animationType="fade" onRequestClose={() => setSelectedOrder(null)}>
+          <KeyboardAvoidingView behavior={kavBehavior} style={styles.modalBg}>
+            <View style={[styles.modalContent, { maxHeight: '88%' }]}>
               {selectedOrder && (
                 <ScrollView showsVerticalScrollIndicator={false}>
                   <View style={styles.modalHeader}>
@@ -1420,7 +1422,7 @@ export default function SalesReportScreen() {
                 </ScrollView>
               )}
             </View>
-          </View>
+          </KeyboardAvoidingView>
         </Modal>
 
         {/* Products Sales Summary Modal from Timeline Tap */}
@@ -1430,7 +1432,7 @@ export default function SalesReportScreen() {
           animationType="fade"
           onRequestClose={() => setProductsSummaryModalVisible(false)}
         >
-          <View style={styles.modalBg}>
+          <KeyboardAvoidingView behavior={kavBehavior} style={styles.modalBg}>
             <View style={[styles.modalContent, styles.productSummaryModalContent]}>
               {/* Modal Header */}
               <View style={styles.modalHeader}>
@@ -1688,7 +1690,7 @@ export default function SalesReportScreen() {
                 </Pressable>
               </View>
             </View>
-          </View>
+          </KeyboardAvoidingView>
         </Modal>
 
         {/* Transaction Share Bottom Sheet */}
@@ -2732,8 +2734,9 @@ const getStyles = (theme: any) => {
       padding: spacing.lg,
     },
     modalContent: {
-      width: '100%',
-      maxWidth: 420,
+      width: '92%',
+      maxWidth: 440,
+      maxHeight: '88%',
       backgroundColor: colors.bg.card,
       borderRadius: radius.xl,
       padding: spacing.xl,

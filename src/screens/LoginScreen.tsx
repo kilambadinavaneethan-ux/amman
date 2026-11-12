@@ -18,6 +18,7 @@ import { MaterialIcons } from "@expo/vector-icons";
 import AsyncStorage from "@react-native-async-storage/async-storage";
 import { login, loginWithGoogle, loginAnonymously } from "../services/authService";
 import { colors, radius, spacing, shadows } from "../theme/theme";
+import { useResponsive } from "../../utils/responsive";
 import AuthInput from "../components/AuthInput";
 import AuthButton from "../components/AuthButton";
 import GoogleButton from "../components/GoogleButton";
@@ -35,6 +36,7 @@ function isGoogleSigninAvailable(): boolean {
 export default function LoginScreen() {
   const router = useRouter();
   const insets = useSafeAreaInsets();
+  const { kavBehavior, isSmallDevice, ms } = useResponsive();
 
   // Input states
   const [email, setEmail] = useState("");
@@ -164,13 +166,14 @@ export default function LoginScreen() {
 
   return (
     <KeyboardAvoidingView
-      behavior={Platform.OS === "ios" ? "padding" : undefined}
+      behavior={kavBehavior}
       style={{ flex: 1, backgroundColor: colors.bg.primary }}
     >
       <ScrollView
         contentContainerStyle={[
           styles.container,
           {
+            paddingHorizontal: isSmallDevice ? spacing.md : spacing.lg,
             paddingTop: Math.max(insets.top + 16, 24),
             paddingBottom: Math.max(insets.bottom + 16, 24),
           },
@@ -178,7 +181,13 @@ export default function LoginScreen() {
         keyboardShouldPersistTaps="handled"
         showsVerticalScrollIndicator={false}
       >
-        <Animated.View style={[styles.card, { opacity: fadeAnim, transform: [{ translateY: slideAnim }] }]}>
+        <Animated.View
+          style={[
+            styles.card,
+            { padding: isSmallDevice ? spacing.lg : ms(spacing.xl, 0.4) },
+            { opacity: fadeAnim, transform: [{ translateY: slideAnim }] },
+          ]}
+        >
         
         {/* Brand Header */}
         <View style={styles.brandContainer}>
@@ -266,33 +275,44 @@ export default function LoginScreen() {
       </Animated.View>
 
       {/* Simulated Sandbox Accounts Modal */}
-      <Modal visible={showGoogleMock} transparent animationType="slide">
-        <View style={styles.modalBg}>
+      <Modal
+        visible={showGoogleMock}
+        transparent
+        animationType="slide"
+        onRequestClose={() => setShowGoogleMock(false)}
+      >
+        <KeyboardAvoidingView behavior={kavBehavior} style={styles.modalBg}>
           <View style={styles.modalContent}>
-            <Text style={styles.modalTitle}>Choose an account</Text>
-            <Text style={styles.modalSubtitle}>to continue to Business Suite sandbox</Text>
-            
-            <Pressable 
-              style={styles.mockAccountRow} 
-              onPress={() => handleSelectMockAccount("demo.owner@example.com", "Demo Owner")}
+            <ScrollView
+              showsVerticalScrollIndicator={false}
+              keyboardShouldPersistTaps="handled"
+              bounces={false}
             >
-              <View style={styles.mockAvatar}>
-                <Text style={styles.mockAvatarText}>DO</Text>
-              </View>
-              <View style={styles.mockDetails}>
-                <Text style={styles.mockName}>Demo Owner</Text>
-                <Text style={styles.mockEmail}>demo.owner@example.com</Text>
-              </View>
-            </Pressable>
+              <Text style={styles.modalTitle}>Choose an account</Text>
+              <Text style={styles.modalSubtitle}>to continue to Business Suite sandbox</Text>
 
-            <Pressable 
-              style={styles.modalCloseBtn}
-              onPress={() => setShowGoogleMock(false)}
-            >
-              <Text style={styles.modalCloseText}>Cancel</Text>
-            </Pressable>
+              <Pressable
+                style={styles.mockAccountRow}
+                onPress={() => handleSelectMockAccount("demo.owner@example.com", "Demo Owner")}
+              >
+                <View style={styles.mockAvatar}>
+                  <Text style={styles.mockAvatarText}>DO</Text>
+                </View>
+                <View style={styles.mockDetails}>
+                  <Text style={styles.mockName} numberOfLines={1}>Demo Owner</Text>
+                  <Text style={styles.mockEmail} numberOfLines={1}>demo.owner@example.com</Text>
+                </View>
+              </Pressable>
+
+              <Pressable
+                style={styles.modalCloseBtn}
+                onPress={() => setShowGoogleMock(false)}
+              >
+                <Text style={styles.modalCloseText}>Cancel</Text>
+              </Pressable>
+            </ScrollView>
           </View>
-        </View>
+        </KeyboardAvoidingView>
       </Modal>
 
     </ScrollView>
@@ -357,8 +377,10 @@ const styles = StyleSheet.create({
   },
   row: {
     flexDirection: "row",
+    flexWrap: "wrap",
     justifyContent: "space-between",
     alignItems: "center",
+    gap: 8,
     marginTop: spacing.xs,
     marginBottom: spacing.lg,
   },
@@ -415,6 +437,7 @@ const styles = StyleSheet.create({
   },
   footerContainer: {
     flexDirection: "row",
+    flexWrap: "wrap",
     justifyContent: "center",
     alignItems: "center",
     marginTop: spacing.xl,
@@ -434,14 +457,15 @@ const styles = StyleSheet.create({
     backgroundColor: colors.bg.overlay,
     justifyContent: "center",
     alignItems: "center",
-    padding: spacing.xl,
+    padding: spacing.lg,
   },
   modalContent: {
     backgroundColor: colors.bg.card,
     borderRadius: radius.xl,
     padding: spacing.xl,
-    width: "100%",
-    maxWidth: 360,
+    width: "92%",
+    maxWidth: 480,
+    maxHeight: "88%",
     borderWidth: 1,
     borderColor: colors.border.subtle,
     ...shadows.elevated,
@@ -482,6 +506,8 @@ const styles = StyleSheet.create({
     fontSize: 14,
   },
   mockDetails: {
+    flex: 1,
+    flexShrink: 1,
     marginLeft: spacing.md,
   },
   mockName: {

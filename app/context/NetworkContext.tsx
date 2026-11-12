@@ -1,9 +1,25 @@
-import React, { createContext, useContext, useState, useEffect, useRef, useMemo } from "react";
+import React, {
+  createContext,
+  useContext,
+  useState,
+  useEffect,
+  useRef,
+  useMemo,
+  type ReactNode,
+} from "react";
 import NetInfo from "@react-native-community/netinfo";
 import { waitForPendingWrites } from "firebase/firestore";
 import { db } from "../../src/config/firebase";
 
-const NetworkContext = createContext({
+export interface NetworkContextType {
+  isOnline: boolean;
+  networkType: string;
+  wasOffline: boolean;
+  hasPendingWrites: boolean;
+  isSyncing: boolean;
+}
+
+export const NetworkContext = createContext<NetworkContextType>({
   isOnline: true,
   networkType: "unknown",
   wasOffline: false,
@@ -11,14 +27,14 @@ const NetworkContext = createContext({
   isSyncing: false,
 });
 
-export function NetworkProvider({ children }) {
-  const [isOnline, setIsOnline] = useState(true);
-  const [networkType, setNetworkType] = useState("unknown");
-  const [wasOffline, setWasOffline] = useState(false);
-  const [hasPendingWrites, setHasPendingWrites] = useState(false);
-  const [isSyncing, setIsSyncing] = useState(false);
-  const wasOfflineTimer = useRef(null);
-  const prevOnlineRef = useRef(true);
+export function NetworkProvider({ children }: { children: ReactNode }) {
+  const [isOnline, setIsOnline] = useState<boolean>(true);
+  const [networkType, setNetworkType] = useState<string>("unknown");
+  const [wasOffline, setWasOffline] = useState<boolean>(false);
+  const [hasPendingWrites, setHasPendingWrites] = useState<boolean>(false);
+  const [isSyncing, setIsSyncing] = useState<boolean>(false);
+  const wasOfflineTimer = useRef<ReturnType<typeof setTimeout> | null>(null);
+  const prevOnlineRef = useRef<boolean>(true);
 
   useEffect(() => {
     let isMounted = true;
@@ -63,13 +79,15 @@ export function NetworkProvider({ children }) {
     });
 
     // Fetch initial state
-    NetInfo.fetch().then((state) => {
-      if (!isMounted) return;
-      const connected = !!(state.isConnected && state.isInternetReachable !== false);
-      setIsOnline(connected);
-      setNetworkType(state.type || "unknown");
-      prevOnlineRef.current = connected;
-    }).catch(() => {});
+    NetInfo.fetch()
+      .then((state) => {
+        if (!isMounted) return;
+        const connected = !!(state.isConnected && state.isInternetReachable !== false);
+        setIsOnline(connected);
+        setNetworkType(state.type || "unknown");
+        prevOnlineRef.current = connected;
+      })
+      .catch(() => {});
 
     return () => {
       isMounted = false;
@@ -78,9 +96,9 @@ export function NetworkProvider({ children }) {
     };
   }, []);
 
-  const contextValue = useMemo(
+  const contextValue = useMemo<NetworkContextType>(
     () => ({ isOnline, networkType, wasOffline, hasPendingWrites, isSyncing }),
-    [isOnline, networkType, wasOffline, hasPendingWrites, isSyncing]
+    [isOnline, networkType, wasOffline, hasPendingWrites, isSyncing],
   );
 
   return (
@@ -90,8 +108,9 @@ export function NetworkProvider({ children }) {
   );
 }
 
-export function useNetwork() {
+export function useNetwork(): NetworkContextType {
   return useContext(NetworkContext);
 }
 
 export default NetworkContext;
+

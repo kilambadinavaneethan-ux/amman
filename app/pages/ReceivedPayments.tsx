@@ -3,6 +3,8 @@ import {
   View,
   Text,
   StyleSheet,
+  FlatList,
+  ListRenderItem,
   ScrollView,
   Pressable,
   TextInput,
@@ -26,7 +28,14 @@ import BackButton from "../components/BackButton";
 import EasyCalendarModal from "../components/EasyCalendarModal";
 import { useTheme } from "../context/ThemeContext";
 import { useScrollRestoration } from "../context/ScrollContext";
+import { useResponsive } from "../../utils/responsive";
 import { sharePaymentReceipt } from "../../src/services/sharing/shareService";
+import { roundCurrency } from "../../utils/currency";
+import {
+  buildIncomingPaymentsList,
+  computePaymentMethodBreakdown,
+  computeReceivedPaymentsMetrics,
+} from "../../utils/ledgerCalculations";
 
 const PAYMENT_METHODS = ["All", "Cash", "UPI", "Bank Transfer", "Cheque", "Card", "Other"];
 const TRANSACTION_TYPES = [
@@ -37,9 +46,178 @@ const TRANSACTION_TYPES = [
   { id: "advance_refund", label: "Advance Refunds" },
 ];
 
+const formatPaymentDate = (date: any) => {
+  if (!date) return "";
+  const d = date instanceof Date ? date : new Date(date);
+  return d.toLocaleDateString("en-IN", { day: "2-digit", month: "short", year: "numeric" });
+};
+
+const formatPaymentTime = (date: any) => {
+  if (!date) return "";
+  const d = date instanceof Date ? date : new Date(date);
+  return d.toLocaleTimeString("en-IN", { hour: "2-digit", minute: "2-digit" });
+};
+
+const resolveMethodIcon = (method: string): any => {
+  switch (method) {
+    case "Cash":
+      return "payments";
+    case "UPI":
+      return "phone-android";
+    case "Bank Transfer":
+      return "account-balance";
+    case "Card":
+      return "credit-card";
+    case "Cheque":
+      return "receipt-long";
+    case "Other":
+      return "more-horiz";
+    default:
+      return "payments";
+  }
+};
+
+const resolveMethodColor = (method: string, mutedColor: string) => {
+  switch (method) {
+    case "Cash":
+      return "#16a34a";
+    case "UPI":
+      return "#7c3aed";
+    case "Bank Transfer":
+      return "#0284c7";
+    case "Card":
+      return "#e11d48";
+    case "Cheque":
+      return "#d97706";
+    case "Other":
+      return "#64748b";
+    default:
+      return mutedColor;
+  }
+};
+
+interface ReceivedPaymentRowProps {
+  payment: any;
+  styles: any;
+  colors: any;
+  onSelect: (payment: any) => void;
+}
+
+const ReceivedPaymentRow = React.memo(function ReceivedPaymentRow({
+  payment,
+  styles,
+  colors,
+  onSelect,
+}: ReceivedPaymentRowProps) {
+  const date = payment.createdAt instanceof Date ? payment.createdAt : new Date(payment.createdAt);
+  const method = payment.paymentMethod || "Cash";
+  const methodColor = resolveMethodColor(method, colors.text.muted);
+  const isRefund = payment.isRefund;
+  const isOrderPay = payment.sourceType === "order_receipt" || payment.sourceType === "order_payment";
+  const isAdvCredit = payment.isAdvanceCredit;
+
+  return (
+    <Pressable
+      style={({ pressed }) => [styles.paymentCard, pressed && styles.paymentCardPressed]}
+      onPress={() => onSelect(payment)}
+    >
+      <View style={styles.paymentCardLeft}>
+        <View
+          style={[
+            styles.paymentMethodBadge,
+            { backgroundColor: isRefund ? "#FEF3C7" : `${methodColor}18` },
+          ]}
+        >
+          <MaterialIcons
+            name={isRefund ? "assignment-return" : resolveMethodIcon(method)}
+            size={22}
+            color={isRefund ? "#D97706" : methodColor}
+          />
+        </View>
+      </View>
+
+      <View style={styles.paymentCardCenter}>
+        <View style={styles.paymentCardTitleRow}>
+          <Text style={styles.paymentCustomerName} numberOfLines={1}>
+            {payment.customerName || "Unknown Customer"}
+          </Text>
+        </View>
+        <Text style={styles.paymentMeta}>
+          {formatPaymentDate(date)} • {formatPaymentTime(date)}
+        </Text>
+
+        <View style={styles.paymentCardBadgesRow}>
+          {isRefund ? (
+            <View style={[styles.sourceBadge, styles.sourceBadgeRefund]}>
+              <MaterialIcons name="assignment-return" size={11} color="#D97706" />
+              <Text style={[styles.sourceBadgeText, styles.sourceBadgeRefundText]}>
+                Advance Refund
+              </Text>
+            </View>
+          ) : isAdvCredit ? (
+            <View style={[styles.sourceBadge, styles.sourceBadgeAdvCredit]}>
+              <MaterialIcons name="stars" size={11} color="#059669" />
+              <Text style={[styles.sourceBadgeText, styles.sourceBadgeAdvCreditText]}>
+                Advance Credit
+              </Text>
+            </View>
+          ) : (
+            <View style={[styles.sourceBadge, { backgroundColor: isOrderPay ? `${colors.accent.info}18` : `${colors.accent.success}18` }]}>
+              <MaterialIcons
+                name={isOrderPay ? "shopping-bag" : "receipt"}
+                size={11}
+                color={isOrderPay ? colors.accent.info : colors.accent.success}
+              />
+              <Text style={[styles.sourceBadgeText, { color: isOrderPay ? colors.accent.info : colors.accent.success }]}>
+                {isOrderPay ? "Order Payment" : "Direct Receipt"}
+              </Text>
+            </View>
+          )}
+
+          {payment.collectorName ? (
+            <View style={styles.collectorBadge}>
+              <MaterialIcons name="person" size={11} color="#8b5cf6" />
+              <Text style={styles.collectorBadgeText}>{payment.collectorName}</Text>
+            </View>
+          ) : null}
+        </View>
+
+        {payment.notes ? (
+          <Text style={styles.paymentNotes} numberOfLines={1}>
+            {payment.notes}
+          </Text>
+        ) : null}
+      </View>
+
+      <View style={styles.paymentCardRight}>
+        <Text
+          style={[
+            styles.paymentAmount,
+            isRefund ? styles.refundAmountText : { color: colors.accent.success },
+          ]}
+        >
+          {isRefund ? "-₹" : "+₹"}
+          {Number(payment.amountReceived || payment.amount || 0).toLocaleString("en-IN")}
+        </Text>
+        <View
+          style={[
+            styles.methodTag,
+            { backgroundColor: isRefund ? "#FEF3C7" : `${methodColor}15` },
+          ]}
+        >
+          <Text style={[styles.methodTagText, { color: isRefund ? "#D97706" : methodColor }]}>
+            {method}
+          </Text>
+        </View>
+      </View>
+    </Pressable>
+  );
+});
+
 export default function ReceivedPayments() {
   const { theme } = useTheme();
   const { colors, spacing, radius, shadows } = theme;
+  const { kavBehavior, scrollBottomPadding, compactBadgeTextProps, currencyKpiTextProps, insets } = useResponsive();
   const styles = useMemo(() => getStyles(theme), [theme]);
   const { scrollViewRef, handleScroll, handleContentSizeChange } = useScrollRestoration("/received-payments");
   const router = useRouter();
@@ -127,130 +305,10 @@ export default function ReceivedPayments() {
   }, []);
 
   // Combine Direct Receipts (PaymentContext) & Order Payments (OrderContext) & Advance Refunds
-  const allIncomingPayments = useMemo(() => {
-    const list: any[] = [];
-
-    // 1. Direct receipts from PaymentContext
-    if (payments && Array.isArray(payments)) {
-      payments.forEach((p: any) => {
-        const isRefund = p.type === "advance_refund" || (p.refundAmount && p.refundAmount > 0);
-        const amt = isRefund
-          ? Number(p.refundAmount || Math.abs(p.amountReceived || 0))
-          : Number(p.amountReceived || p.amount || 0);
-
-        if (amt === 0 && !isRefund && !p.discountAmount) return;
-
-        let date = p.createdAt;
-        if (!(date instanceof Date)) {
-          if (date && typeof date === "object" && typeof date.toDate === "function") {
-            date = date.toDate();
-          } else if (date) {
-            date = new Date(date);
-          } else {
-            date = new Date();
-          }
-        }
-
-        const isAdvanceCredit = Number(p.advanceAmount || 0) > 0 || Number(p.pendingAfter || 0) < 0;
-
-        list.push({
-          id: p.id,
-          customerId: p.customerId || null,
-          customerName: p.customerName || "Unknown Customer",
-          amountReceived: amt,
-          discountAmount: Number(p.discountAmount || 0),
-          paymentMethod: p.paymentMethod || p.paymentMode || p.paymentType || "Cash",
-          createdAt: date,
-          collectorId: p.collectorId || null,
-          collectorName: p.collectorName || null,
-          notes: p.notes || "",
-          orderId: p.orderId || null,
-          pendingBefore: p.pendingBefore,
-          pendingAfter: p.pendingAfter,
-          advanceAmount: Number(p.advanceAmount || 0),
-          isRefund: isRefund,
-          isAdvanceCredit: isAdvanceCredit,
-          sourceType: isRefund
-            ? "advance_refund"
-            : p.orderId
-            ? "order_receipt"
-            : isAdvanceCredit
-            ? "advance_credit"
-            : "direct_receipt",
-          sourceLabel: isRefund
-            ? "Advance Refund"
-            : p.orderId
-            ? "Order Payment"
-            : isAdvanceCredit
-            ? "Advance Credit"
-            : "Direct Receipt",
-          isDirectPayment: true,
-          original: p,
-        });
-      });
-    }
-
-    // Map orderId -> total amount logged in payments collection
-    const loggedOrderPaymentTotals: Record<string, number> = {};
-    list.forEach((p) => {
-      if (p.orderId) {
-        loggedOrderPaymentTotals[p.orderId] = (loggedOrderPaymentTotals[p.orderId] || 0) + p.amountReceived;
-      }
-    });
-
-    // 2. Order advance/payments from OrderContext
-    if (orders && Array.isArray(orders)) {
-      orders.forEach((ord: any) => {
-        if (ord.isCancelled || ord.status === "cancelled") return;
-        const totalPaidOnOrder = Number(ord.paidAmount || 0);
-        if (totalPaidOnOrder <= 0) return;
-
-        const loggedAmt = loggedOrderPaymentTotals[ord.id] || 0;
-        const unloggedAmt = totalPaidOnOrder - loggedAmt;
-
-        if (unloggedAmt > 0) {
-          let orderDate = ord.createdAt || ord.orderedDate;
-          if (!(orderDate instanceof Date)) {
-            if (orderDate && typeof orderDate === "object" && typeof orderDate.toDate === "function") {
-              orderDate = orderDate.toDate();
-            } else if (orderDate) {
-              orderDate = new Date(orderDate);
-            } else {
-              orderDate = new Date();
-            }
-          }
-
-          const orderNum = (ord.id || "").slice(-6).toUpperCase();
-          const itemText = ord.itemName ? ` (${ord.itemName})` : "";
-          const notesText = `Advance/Payment for Order #${orderNum}${itemText}`;
-          const isAdv = Number(ord.advanceAmount || ord.excessAdvance || 0) > 0;
-
-          list.push({
-            id: `order-pay-${ord.id}`,
-            customerId: ord.customerId || null,
-            customerName: ord.customerName || "Unknown Customer",
-            amountReceived: unloggedAmt,
-            discountAmount: Number(ord.discountAmount || 0),
-            paymentMethod: ord.paymentMethod || ord.paymentMode || ord.paymentType || "Cash",
-            createdAt: orderDate,
-            collectorId: ord.collectorId || null,
-            collectorName: ord.collectorName || null,
-            notes: notesText,
-            orderId: ord.id,
-            advanceAmount: Number(ord.advanceAmount || ord.excessAdvance || 0),
-            isRefund: false,
-            isAdvanceCredit: isAdv,
-            sourceType: isAdv ? "advance_credit" : "order_payment",
-            sourceLabel: "Order Payment",
-            isDirectPayment: false,
-            original: ord,
-          });
-        }
-      });
-    }
-
-    return list;
-  }, [payments, orders]);
+  const allIncomingPayments = useMemo(
+    () => buildIncomingPaymentsList(payments, orders),
+    [payments, orders]
+  );
 
   // Filter payments
   const filteredPayments = useMemo(() => {
@@ -417,77 +475,18 @@ export default function ReceivedPayments() {
   };
 
   // Summary Metrics
-  const metrics = useMemo(() => {
-    let receivedSum = 0;
-    let refundSum = 0;
-    let advanceCreditSum = 0;
+  const metrics = useMemo(
+    () => computeReceivedPaymentsMetrics(filteredPayments, allIncomingPayments),
+    [filteredPayments, allIncomingPayments]
+  );
 
-    filteredPayments.forEach((p: any) => {
-      if (p.isRefund) {
-        refundSum += p.amountReceived;
-      } else {
-        receivedSum += p.amountReceived;
-        if (p.isAdvanceCredit) {
-          advanceCreditSum += (p.advanceAmount || 0);
-        }
-      }
-    });
+  const methodBreakdown = useMemo(
+    () => computePaymentMethodBreakdown(filteredPayments),
+    [filteredPayments]
+  );
 
-    const todayStr = new Date().toDateString();
-    const todayReceived = (allIncomingPayments || [])
-      .filter((p: any) => {
-        if (p.isRefund) return false;
-        const d = p.createdAt instanceof Date ? p.createdAt : new Date(p.createdAt);
-        return d.toDateString() === todayStr;
-      })
-      .reduce((sum: number, p: any) => sum + Number(p.amountReceived || 0), 0);
-
-    const now = new Date();
-    const monthReceived = (allIncomingPayments || [])
-      .filter((p: any) => {
-        if (p.isRefund) return false;
-        const d = p.createdAt instanceof Date ? p.createdAt : new Date(p.createdAt);
-        return d.getMonth() === now.getMonth() && d.getFullYear() === now.getFullYear();
-      })
-      .reduce((sum: number, p: any) => sum + Number(p.amountReceived || 0), 0);
-
-    return {
-      totalReceived: receivedSum,
-      totalRefunds: refundSum,
-      netCollected: receivedSum - refundSum,
-      todayReceived,
-      monthReceived,
-      advanceCreditSum,
-    };
-  }, [filteredPayments, allIncomingPayments]);
-
-  const methodBreakdown = useMemo(() => {
-    const map: Record<string, { total: number; count: number }> = {};
-    let nonRefundTotal = 0;
-
-    filteredPayments.forEach((p: any) => {
-      if (p.isRefund) return;
-      const method = p.paymentMethod || "Cash";
-      if (!map[method]) map[method] = { total: 0, count: 0 };
-      map[method].total += Number(p.amountReceived || 0);
-      map[method].count += 1;
-      nonRefundTotal += Number(p.amountReceived || 0);
-    });
-
-    return { map, nonRefundTotal };
-  }, [filteredPayments]);
-
-  const formatDate = (date: any) => {
-    if (!date) return "";
-    const d = date instanceof Date ? date : new Date(date);
-    return d.toLocaleDateString("en-IN", { day: "2-digit", month: "short", year: "numeric" });
-  };
-
-  const formatTime = (date: any) => {
-    if (!date) return "";
-    const d = date instanceof Date ? date : new Date(date);
-    return d.toLocaleTimeString("en-IN", { hour: "2-digit", minute: "2-digit" });
-  };
+  const formatDate = formatPaymentDate;
+  const formatTime = formatPaymentTime;
 
   // Open & Handle "+ Record Payment"
   const openAddPaymentModal = () => {
@@ -507,8 +506,8 @@ export default function ReceivedPayments() {
       Alert.alert("Missing Customer", "Please select a customer to log payment for.");
       return;
     }
-    const amtNum = parseFloat(newPayAmount) || 0;
-    const discNum = parseFloat(newPayDiscount) || 0;
+    const amtNum = roundCurrency(parseFloat(newPayAmount) || 0);
+    const discNum = roundCurrency(parseFloat(newPayDiscount) || 0);
     if (amtNum <= 0 && discNum <= 0) {
       Alert.alert("Invalid Amount", "Please enter a payment amount or a balance discount.");
       return;
@@ -559,8 +558,8 @@ export default function ReceivedPayments() {
 
   const handleSaveEditPayment = async () => {
     if (!editPaymentId || isSavingEditPayment) return;
-    const amtNum = parseFloat(editPayAmount) || 0;
-    const discNum = parseFloat(editPayDiscount) || 0;
+    const amtNum = roundCurrency(parseFloat(editPayAmount) || 0);
+    const discNum = roundCurrency(parseFloat(editPayDiscount) || 0);
     if (amtNum <= 0 && discNum <= 0) {
       Alert.alert("Invalid Amount", "Please enter a payment amount or discount.");
       return;
@@ -680,43 +679,31 @@ export default function ReceivedPayments() {
     }
   };
 
-  const getMethodIcon = (method: string): any => {
-    switch (method) {
-      case "Cash":
-        return "payments";
-      case "UPI":
-        return "phone-android";
-      case "Bank Transfer":
-        return "account-balance";
-      case "Card":
-        return "credit-card";
-      case "Cheque":
-        return "receipt-long";
-      case "Other":
-        return "more-horiz";
-      default:
-        return "payments";
-    }
-  };
+  const getMethodIcon = resolveMethodIcon;
 
-  const getMethodColor = (method: string) => {
-    switch (method) {
-      case "Cash":
-        return "#16a34a";
-      case "UPI":
-        return "#7c3aed";
-      case "Bank Transfer":
-        return "#0284c7";
-      case "Card":
-        return "#e11d48";
-      case "Cheque":
-        return "#d97706";
-      case "Other":
-        return "#64748b";
-      default:
-        return colors.text.muted;
-    }
-  };
+  const getMethodColor = useCallback(
+    (method: string) => resolveMethodColor(method, colors.text.muted),
+    [colors.text.muted]
+  );
+
+  const handleSelectPayment = useCallback((payment: any) => {
+    setSelectedPayment(payment);
+    setDetailModalVisible(true);
+  }, []);
+
+  const paymentKeyExtractor = useCallback((payment: any) => payment.id, []);
+
+  const renderPaymentItem: ListRenderItem<any> = useCallback(
+    ({ item }) => (
+      <ReceivedPaymentRow
+        payment={item}
+        styles={styles}
+        colors={colors}
+        onSelect={handleSelectPayment}
+      />
+    ),
+    [styles, colors, handleSelectPayment]
+  );
 
   if (loading) {
     return (
@@ -729,19 +716,8 @@ export default function ReceivedPayments() {
     );
   }
 
-  return (
-    <AnimatedPage style={{ flex: 1 }}>
-      <ScrollView
-        ref={scrollViewRef}
-        contentContainerStyle={styles.scrollContainer}
-        showsVerticalScrollIndicator={false}
-        scrollEventThrottle={32}
-        onScroll={handleScroll}
-        onContentSizeChange={handleContentSizeChange}
-        refreshControl={
-          <RefreshControl refreshing={refreshing} onRefresh={onRefresh} tintColor={colors.accent.primary} />
-        }
-      >
+  const paymentsListHeader = (
+    <>
         {/* Modern Header */}
         <View style={styles.header}>
           <BackButton label="Settings" onPress={() => router.push("/settings" as any)} />
@@ -778,14 +754,14 @@ export default function ReceivedPayments() {
         <View style={styles.summaryGrid}>
           <View style={[styles.summaryCard, { borderLeftColor: colors.accent.success }]}>
             <View style={{ flexDirection: "row", justifyContent: "space-between", alignItems: "center" }}>
-              <Text style={styles.summaryLabel}>Total Collections</Text>
+              <Text style={styles.summaryLabel} {...compactBadgeTextProps}>Total Collections</Text>
               <MaterialIcons name="account-balance-wallet" size={18} color={colors.accent.success} />
             </View>
-            <Text style={[styles.summaryValue, { color: colors.accent.success }]}>
+            <Text style={[styles.summaryValue, { color: colors.accent.success }]} {...currencyKpiTextProps}>
               ₹{metrics.totalReceived.toLocaleString("en-IN")}
             </Text>
             {metrics.totalRefunds > 0 && (
-              <Text style={{ fontSize: 10, color: "#D97706", fontWeight: "700", marginTop: 2 }}>
+              <Text style={{ fontSize: 10, color: "#D97706", fontWeight: "700", marginTop: 2 }} {...compactBadgeTextProps}>
                 (Net: ₹{metrics.netCollected.toLocaleString("en-IN")})
               </Text>
             )}
@@ -793,10 +769,10 @@ export default function ReceivedPayments() {
 
           <View style={[styles.summaryCard, { borderLeftColor: colors.accent.primary }]}>
             <View style={{ flexDirection: "row", justifyContent: "space-between", alignItems: "center" }}>
-              <Text style={styles.summaryLabel}>Today's Collections</Text>
+              <Text style={styles.summaryLabel} {...compactBadgeTextProps}>Today's Collections</Text>
               <MaterialIcons name="today" size={18} color={colors.accent.primary} />
             </View>
-            <Text style={[styles.summaryValue, { color: colors.accent.primary }]}>
+            <Text style={[styles.summaryValue, { color: colors.accent.primary }]} {...currencyKpiTextProps}>
               ₹{metrics.todayReceived.toLocaleString("en-IN")}
             </Text>
             <Text style={{ fontSize: 10, color: colors.text.muted, marginTop: 2 }}>Real-time today</Text>
@@ -804,10 +780,10 @@ export default function ReceivedPayments() {
 
           <View style={[styles.summaryCard, { borderLeftColor: colors.accent.info }]}>
             <View style={{ flexDirection: "row", justifyContent: "space-between", alignItems: "center" }}>
-              <Text style={styles.summaryLabel}>This Month</Text>
+              <Text style={styles.summaryLabel} {...compactBadgeTextProps}>This Month</Text>
               <MaterialIcons name="date-range" size={18} color={colors.accent.info} />
             </View>
-            <Text style={[styles.summaryValue, { color: colors.accent.info }]}>
+            <Text style={[styles.summaryValue, { color: colors.accent.info }]} {...currencyKpiTextProps}>
               ₹{metrics.monthReceived.toLocaleString("en-IN")}
             </Text>
             <Text style={{ fontSize: 10, color: colors.text.muted, marginTop: 2 }}>Month to date</Text>
@@ -816,10 +792,10 @@ export default function ReceivedPayments() {
           {metrics.totalRefunds > 0 ? (
             <View style={[styles.summaryCard, { borderLeftColor: "#D97706" }]}>
               <View style={{ flexDirection: "row", justifyContent: "space-between", alignItems: "center" }}>
-                <Text style={styles.summaryLabel}>Advance Refunds</Text>
+                <Text style={styles.summaryLabel} {...compactBadgeTextProps}>Advance Refunds</Text>
                 <MaterialIcons name="assignment-return" size={18} color="#D97706" />
               </View>
-              <Text style={[styles.summaryValue, { color: "#D97706" }]}>
+              <Text style={[styles.summaryValue, { color: "#D97706" }]} {...currencyKpiTextProps}>
                 -₹{metrics.totalRefunds.toLocaleString("en-IN")}
               </Text>
               <Text style={{ fontSize: 10, color: "#D97706", marginTop: 2 }}>Pushed back to clients</Text>
@@ -827,10 +803,10 @@ export default function ReceivedPayments() {
           ) : (
             <View style={[styles.summaryCard, { borderLeftColor: "#10B981" }]}>
               <View style={{ flexDirection: "row", justifyContent: "space-between", alignItems: "center" }}>
-                <Text style={styles.summaryLabel}>Transactions</Text>
+                <Text style={styles.summaryLabel} {...compactBadgeTextProps}>Transactions</Text>
                 <MaterialIcons name="receipt-long" size={18} color="#10B981" />
               </View>
-              <Text style={[styles.summaryValue, { color: colors.text.primary }]}>
+              <Text style={[styles.summaryValue, { color: colors.text.primary }]} {...currencyKpiTextProps}>
                 {filteredPayments.length}
               </Text>
               <Text style={{ fontSize: 10, color: colors.text.muted, marginTop: 2 }}>Matching filters</Text>
@@ -1073,145 +1049,53 @@ export default function ReceivedPayments() {
             Sorted: {sortBy === "newest" ? "Newest First" : sortBy === "oldest" ? "Oldest First" : sortBy === "amount_desc" ? "Amount: High to Low" : "Amount: Low to High"}
           </Text>
         </View>
+    </>
+  );
 
-        {/* Payment List */}
-        {filteredPayments.length === 0 ? (
-          <View style={styles.emptyState}>
-            <MaterialIcons name="receipt-long" size={48} color={colors.border.medium} />
-            <Text style={styles.emptyTitle}>No Receipts Found</Text>
-            <Text style={styles.emptyDesc}>
-              {activeFiltersCount > 0 || searchQuery
-                ? "No received payments match your active filters or search query."
-                : "When you receive payments from clients, they will appear here."}
-            </Text>
-            {activeFiltersCount > 0 ? (
-              <Pressable style={styles.resetCtaBtn} onPress={resetAllFilters}>
-                <Text style={styles.resetCtaBtnText}>Reset All Filters</Text>
-              </Pressable>
-            ) : (
-              <Pressable style={styles.resetCtaBtn} onPress={openAddPaymentModal}>
-                <Text style={styles.resetCtaBtnText}>+ Record First Payment</Text>
-              </Pressable>
-            )}
-          </View>
-        ) : (
-          <View style={styles.paymentList}>
-            {filteredPayments.map((payment: any) => {
-              const date = payment.createdAt instanceof Date ? payment.createdAt : new Date(payment.createdAt);
-              const method = payment.paymentMethod || "Cash";
-              const methodColor = getMethodColor(method);
-              const isRefund = payment.isRefund;
-              const isOrderPay = payment.sourceType === "order_receipt" || payment.sourceType === "order_payment";
-              const isAdvCredit = payment.isAdvanceCredit;
+  const paymentsListEmpty = (
+    <View style={styles.emptyState}>
+      <MaterialIcons name="receipt-long" size={48} color={colors.border.medium} />
+      <Text style={styles.emptyTitle}>No Receipts Found</Text>
+      <Text style={styles.emptyDesc}>
+        {activeFiltersCount > 0 || searchQuery
+          ? "No received payments match your active filters or search query."
+          : "When you receive payments from clients, they will appear here."}
+      </Text>
+      {activeFiltersCount > 0 ? (
+        <Pressable style={styles.resetCtaBtn} onPress={resetAllFilters}>
+          <Text style={styles.resetCtaBtnText}>Reset All Filters</Text>
+        </Pressable>
+      ) : (
+        <Pressable style={styles.resetCtaBtn} onPress={openAddPaymentModal}>
+          <Text style={styles.resetCtaBtnText}>+ Record First Payment</Text>
+        </Pressable>
+      )}
+    </View>
+  );
 
-              return (
-                <Pressable
-                  key={payment.id}
-                  style={({ pressed }) => [styles.paymentCard, pressed && styles.paymentCardPressed]}
-                  onPress={() => {
-                    setSelectedPayment(payment);
-                    setDetailModalVisible(true);
-                  }}
-                >
-                  <View style={styles.paymentCardLeft}>
-                    <View
-                      style={[
-                        styles.paymentMethodBadge,
-                        { backgroundColor: isRefund ? "#FEF3C7" : `${methodColor}18` },
-                      ]}
-                    >
-                      <MaterialIcons
-                        name={isRefund ? "assignment-return" : getMethodIcon(method)}
-                        size={22}
-                        color={isRefund ? "#D97706" : methodColor}
-                      />
-                    </View>
-                  </View>
-
-                  <View style={styles.paymentCardCenter}>
-                    <View style={{ flexDirection: "row", alignItems: "center", gap: 6, flexWrap: "wrap" }}>
-                      <Text style={styles.paymentCustomerName} numberOfLines={1}>
-                        {payment.customerName || "Unknown Customer"}
-                      </Text>
-                    </View>
-                    <Text style={styles.paymentMeta}>
-                      {formatDate(date)} • {formatTime(date)}
-                    </Text>
-
-                    <View style={{ flexDirection: "row", gap: 5, marginTop: 4, flexWrap: "wrap" }}>
-                      {/* Source & Type Tag */}
-                      {isRefund ? (
-                        <View style={[styles.sourceBadge, { backgroundColor: "#FEF3C7", borderColor: "#FCD34D", borderWidth: 1 }]}>
-                          <MaterialIcons name="assignment-return" size={11} color="#D97706" />
-                          <Text style={[styles.sourceBadgeText, { color: "#B45309", fontWeight: "700" }]}>
-                            Advance Refund
-                          </Text>
-                        </View>
-                      ) : isAdvCredit ? (
-                        <View style={[styles.sourceBadge, { backgroundColor: "#ECFDF5", borderColor: "#A7F3D0", borderWidth: 1 }]}>
-                          <MaterialIcons name="stars" size={11} color="#059669" />
-                          <Text style={[styles.sourceBadgeText, { color: "#065F46", fontWeight: "700" }]}>
-                            Advance Credit
-                          </Text>
-                        </View>
-                      ) : (
-                        <View style={[styles.sourceBadge, { backgroundColor: isOrderPay ? `${colors.accent.info}18` : `${colors.accent.success}18` }]}>
-                          <MaterialIcons
-                            name={isOrderPay ? "shopping-bag" : "receipt"}
-                            size={11}
-                            color={isOrderPay ? colors.accent.info : colors.accent.success}
-                          />
-                          <Text style={[styles.sourceBadgeText, { color: isOrderPay ? colors.accent.info : colors.accent.success }]}>
-                            {isOrderPay ? "Order Payment" : "Direct Receipt"}
-                          </Text>
-                        </View>
-                      )}
-
-                      {/* Collector Badge */}
-                      {payment.collectorName ? (
-                        <View style={styles.collectorBadge}>
-                          <MaterialIcons name="person" size={11} color="#8b5cf6" />
-                          <Text style={styles.collectorBadgeText}>{payment.collectorName}</Text>
-                        </View>
-                      ) : null}
-                    </View>
-
-                    {payment.notes ? (
-                      <Text style={styles.paymentNotes} numberOfLines={1}>
-                        {payment.notes}
-                      </Text>
-                    ) : null}
-                  </View>
-
-                  <View style={styles.paymentCardRight}>
-                    <Text
-                      style={[
-                        styles.paymentAmount,
-                        isRefund ? { color: "#D97706" } : { color: colors.accent.success },
-                      ]}
-                    >
-                      {isRefund ? "-₹" : "+₹"}
-                      {Number(payment.amountReceived || payment.amount || 0).toLocaleString("en-IN")}
-                    </Text>
-                    <View
-                      style={[
-                        styles.methodTag,
-                        { backgroundColor: isRefund ? "#FEF3C7" : `${methodColor}15` },
-                      ]}
-                    >
-                      <Text style={[styles.methodTagText, { color: isRefund ? "#D97706" : methodColor }]}>
-                        {method}
-                      </Text>
-                    </View>
-                  </View>
-                </Pressable>
-              );
-            })}
-          </View>
-        )}
-
-        <View style={{ height: 40 }} />
-      </ScrollView>
+  return (
+    <AnimatedPage style={{ flex: 1 }}>
+      <FlatList
+        ref={scrollViewRef}
+        contentContainerStyle={[styles.scrollContainer, { paddingBottom: scrollBottomPadding }]}
+        data={filteredPayments}
+        keyExtractor={paymentKeyExtractor}
+        renderItem={renderPaymentItem}
+        ListHeaderComponent={paymentsListHeader}
+        ListEmptyComponent={paymentsListEmpty}
+        ListFooterComponent={<View style={styles.listBottomSpacer} />}
+        showsVerticalScrollIndicator={false}
+        scrollEventThrottle={32}
+        onScroll={handleScroll}
+        onContentSizeChange={handleContentSizeChange}
+        initialNumToRender={12}
+        maxToRenderPerBatch={12}
+        windowSize={5}
+        removeClippedSubviews={true}
+        refreshControl={
+          <RefreshControl refreshing={refreshing} onRefresh={onRefresh} tintColor={colors.accent.primary} />
+        }
+      />
 
       {/* ========== DIGITAL RECEIPT & DETAILS MODAL ========== */}
       <Modal
@@ -1761,9 +1645,9 @@ export default function ReceivedPayments() {
         transparent={true}
         onRequestClose={() => setIsFilterModalOpen(false)}
       >
-        <View style={styles.modalBackdrop}>
+        <KeyboardAvoidingView behavior={kavBehavior} style={styles.modalBackdrop}>
           <Pressable style={styles.modalFlexSpacer} onPress={() => setIsFilterModalOpen(false)} />
-          <View style={[styles.modalContent, { maxHeight: "88%" }]}>
+          <View style={[styles.modalContent, { maxHeight: "88%", paddingBottom: Math.max(insets.bottom + 12, 20) }]}>
             <View style={styles.modalHeader}>
               <View style={{ flexDirection: "row", alignItems: "center", gap: 8 }}>
                 <MaterialIcons name="tune" size={22} color={colors.accent.primary} />
@@ -1884,7 +1768,7 @@ export default function ReceivedPayments() {
               </View>
             </ScrollView>
           </View>
-        </View>
+        </KeyboardAvoidingView>
       </Modal>
 
       {/* Date Pickers */}
@@ -2011,7 +1895,8 @@ const getStyles = (theme: any) => {
     },
     summaryCard: {
       flex: 1,
-      minWidth: "47%",
+      flexGrow: 1,
+      minWidth: 135,
       backgroundColor: colors.bg.card,
       borderRadius: 14,
       padding: 12,
@@ -2207,6 +2092,7 @@ const getStyles = (theme: any) => {
       backgroundColor: colors.bg.card,
       borderRadius: 14,
       padding: 12,
+      marginBottom: 10,
       borderWidth: 1,
       borderColor: colors.border.subtle,
       shadowColor: "#000",
@@ -2214,6 +2100,42 @@ const getStyles = (theme: any) => {
       shadowRadius: 6,
       elevation: 1.5,
       alignItems: "center",
+    },
+    paymentCardTitleRow: {
+      flexDirection: "row",
+      alignItems: "center",
+      gap: 6,
+      flexWrap: "wrap",
+    },
+    paymentCardBadgesRow: {
+      flexDirection: "row",
+      gap: 5,
+      marginTop: 4,
+      flexWrap: "wrap",
+    },
+    sourceBadgeRefund: {
+      backgroundColor: "#FEF3C7",
+      borderColor: "#FCD34D",
+      borderWidth: 1,
+    },
+    sourceBadgeRefundText: {
+      color: "#B45309",
+      fontWeight: "700",
+    },
+    sourceBadgeAdvCredit: {
+      backgroundColor: "#ECFDF5",
+      borderColor: "#A7F3D0",
+      borderWidth: 1,
+    },
+    sourceBadgeAdvCreditText: {
+      color: "#065F46",
+      fontWeight: "700",
+    },
+    refundAmountText: {
+      color: "#D97706",
+    },
+    listBottomSpacer: {
+      height: 40,
     },
     paymentCardPressed: {
       opacity: 0.85,
@@ -2336,6 +2258,9 @@ const getStyles = (theme: any) => {
       flex: 1,
     },
     modalContent: {
+      width: "100%",
+      maxWidth: 560,
+      alignSelf: "center",
       backgroundColor: colors.bg.card,
       borderTopLeftRadius: 24,
       borderTopRightRadius: 24,

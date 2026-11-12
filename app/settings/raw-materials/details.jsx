@@ -1,35 +1,94 @@
-import React, { useContext, useState, useMemo, useEffect } from "react";
-import { View, Text, StyleSheet, ScrollView, Pressable, ActivityIndicator, Modal, TextInput } from "react-native";
-import { useRouter, useLocalSearchParams } from "expo-router";
 import { MaterialIcons } from "@expo/vector-icons";
+import { useLocalSearchParams, useRouter } from "expo-router";
 import { collection, onSnapshot } from "firebase/firestore";
+import React, { useCallback, useContext, useEffect, useMemo, useState } from "react";
+import { ActivityIndicator, FlatList, KeyboardAvoidingView, Modal, Pressable, ScrollView, StyleSheet, Text, TextInput, View } from "react-native";
 import { db, normalizeDateValue } from "../../../src/config/firebase";
-import { ItemContext } from "../../context/ItemContext";
-import { RawMaterialContext } from "../../context/RawMaterialContext";
-import { UserContext } from "../../context/UserContext";
-import { RawMaterialSupplierContext } from "../../context/RawMaterialSupplierContext";
-import ProtectedRoute from "../../components/ProtectedRoute";
+import { roundCurrency } from "../../../utils/currency";
+import {
+  buildPresentedDatesSet,
+  computeMaterialAveragePurchaseDays,
+  computeMaterialLastPurchaseInterval,
+} from "../../../utils/rawMaterialIntervals";
+import { useResponsive } from "../../../utils/responsive";
 import BackButton from "../../components/BackButton";
 import EasyCalendarModal from "../../components/EasyCalendarModal";
+import ProtectedRoute from "../../components/ProtectedRoute";
+import { ItemContext } from "../../context/ItemContext";
+import { RawMaterialContext } from "../../context/RawMaterialContext";
+import { RawMaterialSupplierContext } from "../../context/RawMaterialSupplierContext";
 import { useTheme } from "../../context/ThemeContext";
+import { UserContext } from "../../context/UserContext";
 
-const formatDateKey = (dateVal) => {
-  if (!dateVal) return "";
-  const d = normalizeDateValue(dateVal);
-  if (!d || isNaN(d.getTime())) return "";
-  const yyyy = d.getFullYear();
-  const mm = String(d.getMonth() + 1).padStart(2, "0");
-  const dd = String(d.getDate()).padStart(2, "0");
-  return `${yyyy}-${mm}-${dd}`;
-};
+const MaterialAuditLogRow = React.memo(function MaterialAuditLogRow({
+  log,
+  unitSuffix,
+  currencySymbol,
+  styles,
+  colors,
+  onEdit,
+  onDelete,
+}) {
+  const isPurchase = log.type === "purchase";
+  const logDateStr = log.date ? log.date.toLocaleDateString() : "N/A";
+  const logTimeStr = log.date ? log.date.toLocaleTimeString([], { hour: "2-digit", minute: "2-digit" }) : "";
+
+  return (
+    <View style={styles.logItem}>
+      <View style={styles.logItemLeft}>
+        <View style={[styles.logIndicatorCircle, isPurchase ? styles.logPurchaseCircleBg : styles.logConsumeCircleBg]}>
+          <MaterialIcons
+            name={isPurchase ? "arrow-upward" : "arrow-downward"}
+            size={16}
+            color={isPurchase ? "#059669" : "#dc2626"}
+          />
+        </View>
+        <View style={styles.logContentFlex}>
+          <View style={styles.logTitleRow}>
+            <Text style={styles.logItemTitle}>
+              {isPurchase ? "Purchase Intake" : "Used in Production"}
+            </Text>
+            <Text style={[styles.logQtyText, { color: isPurchase ? "#059669" : "#dc2626" }]}>
+              {isPurchase ? "+" : "-"}{log.quantity} {unitSuffix}
+            </Text>
+          </View>
+          <Text style={styles.logItemDate}>{logDateStr} • {logTimeStr}</Text>
+          {isPurchase && log.costPerUnit ? (
+            <Text style={styles.logItemCostText}>
+              Rate: {currencySymbol}{Number(log.costPerUnit).toFixed(2)} • Total: {currencySymbol}{Number(log.totalCost || 0).toFixed(2)}
+            </Text>
+          ) : null}
+          {log.notes ? (
+            <Text style={styles.logItemNotes}>{log.notes}</Text>
+          ) : null}
+        </View>
+      </View>
+      <View style={styles.logActionButtonsRow}>
+        <Pressable
+          style={({ pressed }) => [styles.deleteLogBtn, pressed && styles.buttonPressed]}
+          onPress={() => onEdit(log)}
+        >
+          <MaterialIcons name="edit" size={18} color={colors.text.muted} />
+        </Pressable>
+        <Pressable
+          style={({ pressed }) => [styles.deleteLogBtn, pressed && styles.buttonPressed]}
+          onPress={() => onDelete(log.id)}
+        >
+          <MaterialIcons name="delete" size={18} color={colors.text.muted} />
+        </Pressable>
+      </View>
+    </View>
+  );
+});
 
 function RawMaterialDetailsScreen() {
   const { theme } = useTheme();
   const { colors, spacing, radius, shadows } = theme;
+  const { insets, kavBehavior, hp, scrollBottomPadding, currencyKpiTextProps } = useResponsive();
   const styles = useMemo(() => getStyles(theme), [theme]);
   const router = useRouter();
   const { id } = useLocalSearchParams();
-  
+
   const { items, deleteItem } = useContext(ItemContext);
   const { logs, addTransaction, deleteTransaction, updateTransaction } = useContext(RawMaterialContext);
   const { profile } = useContext(UserContext);
@@ -84,26 +143,18 @@ function RawMaterialDetailsScreen() {
   }, []);
 
   // Set of calendar dates (YYYY-MM-DD) where at least one worker was present (excluding absent-only days)
-  const presentedDates = useMemo(() => {
-    const dates = new Set();
-    (workerAttendance || []).forEach((att) => {
-      if (att.status && att.status !== "absent") {
-        const key = formatDateKey(att.createdAt || att.date);
-        if (key) {
-          dates.add(key);
-        }
-      }
-    });
-    return dates;
-  }, [workerAttendance]);
+  const presentedDates = useMemo(
+    () => buildPresentedDatesSet(workerAttendance),
+    [workerAttendance]
+  );
 
   // Find material details
-  const material = items.find((itm) => itm.id === id);
+  const material = useMemo(() => (items || []).find((itm) => itm.id === id), [items, id]);
 
   // Filter logs for this specific material
   const materialLogs = useMemo(() => {
     if (!material?.id) return [];
-    return logs.filter((log) => log.materialId === material.id);
+    return (logs || []).filter((log) => log.materialId === material.id);
   }, [logs, material?.id]);
 
   const currentStock = Number(material?.openingStock !== undefined ? material.openingStock : (material?.stock || 0));
@@ -129,234 +180,79 @@ function RawMaterialDetailsScreen() {
 
   // Calculate total stock purchased/bought valuation
   const totalStockBoughtValuation = useMemo(() => {
-    return materialLogs
-      .filter((log) => log.type === "purchase")
-      .reduce((sum, log) => {
-        const cost = log.totalCost !== undefined 
-          ? Number(log.totalCost) 
-          : (Number(log.quantity || 0) * Number(log.costPerUnit || material?.costPrice || 0));
-        return sum + cost;
-      }, 0);
+    return roundCurrency(
+      materialLogs
+        .filter((log) => log.type === "purchase")
+        .reduce((sum, log) => {
+          const cost =
+            log.totalCost !== undefined
+              ? Number(log.totalCost)
+              : Number(log.quantity || 0) * Number(log.costPerUnit || material?.costPrice || 0);
+          return sum + cost;
+        }, 0)
+    );
   }, [materialLogs, material?.costPrice]);
 
+
   // Calculate average purchase days (interval in days between consecutive purchases, counting only worker presented days)
-  const averagePurchaseDays = useMemo(() => {
-    const purchaseLogs = materialLogs.filter((log) => log.type === "purchase");
-    if (!purchaseLogs || purchaseLogs.length === 0) {
-      return {
-        formatted: "N/A",
-        unit: "",
-        subtext: "No purchases logged",
-        daysNumber: null,
-      };
-    }
-
-    const timestamps = purchaseLogs
-      .map((log) => {
-        const raw = log.date || log.createdAt;
-        if (!raw) return null;
-        if (raw instanceof Date) return raw.getTime();
-        if (raw.toDate && typeof raw.toDate === "function") return raw.toDate().getTime();
-        const d = new Date(raw);
-        return isNaN(d.getTime()) ? null : d.getTime();
-      })
-      .filter((ts) => ts !== null)
-      .sort((a, b) => a - b);
-
-    if (timestamps.length === 0) {
-      return {
-        formatted: "N/A",
-        unit: "",
-        subtext: "No purchase dates",
-        daysNumber: null,
-      };
-    }
-
-    const hasAttendanceData = (workerAttendance || []).length > 0;
-
-    if (timestamps.length === 1) {
-      if (hasAttendanceData) {
-        let presentedSince = 0;
-        const curr = new Date(timestamps[0]);
-        curr.setHours(0, 0, 0, 0);
-        const today = new Date();
-        today.setHours(0, 0, 0, 0);
-        while (curr < today) {
-          const key = formatDateKey(curr);
-          if (presentedDates.has(key)) {
-            presentedSince++;
-          }
-          curr.setDate(curr.getDate() + 1);
-        }
-        return {
-          formatted: "1",
-          unit: "Purchase",
-          subtext: presentedSince === 0
-            ? "Bought today"
-            : presentedSince === 1
-            ? "1 working day ago"
-            : `${presentedSince} working days ago`,
-          daysNumber: null,
-        };
-      }
-
-      const daysSince = Math.max(0, Math.floor((Date.now() - timestamps[0]) / (1000 * 60 * 60 * 24)));
-      return {
-        formatted: "1",
-        unit: "Purchase",
-        subtext: daysSince === 0 ? "Bought today" : daysSince === 1 ? "Bought 1 day ago" : `Bought ${daysSince}d ago`,
-        daysNumber: null,
-      };
-    }
-
-    const firstPurchase = timestamps[0];
-    const lastPurchase = timestamps[timestamps.length - 1];
-    const intervalsCount = timestamps.length - 1;
-
-    let avgDays = 0;
-    let totalPresentedDays = 0;
-
-    if (hasAttendanceData) {
-      // Loop calendar days from first purchase to last purchase, counting only presented days
-      const startDate = new Date(firstPurchase);
-      startDate.setHours(0, 0, 0, 0);
-      const endDate = new Date(lastPurchase);
-      endDate.setHours(0, 0, 0, 0);
-
-      const curr = new Date(startDate);
-      while (curr < endDate) {
-        const key = formatDateKey(curr);
-        if (presentedDates.has(key)) {
-          totalPresentedDays++;
-        }
-        curr.setDate(curr.getDate() + 1);
-      }
-      avgDays = totalPresentedDays / intervalsCount;
-    } else {
-      // Graceful fallback to calendar days if attendance was never logged
-      const totalSpanDays = (lastPurchase - firstPurchase) / (1000 * 60 * 60 * 24);
-      avgDays = totalSpanDays / intervalsCount;
-    }
-
-    let displayVal = "";
-    let unitVal = "Days";
-    if (avgDays === 0) {
-      displayVal = "0";
-      unitVal = "Days";
-    } else if (avgDays < 1) {
-      displayVal = avgDays.toFixed(1);
-      unitVal = "Day";
-    } else if (avgDays < 10) {
-      displayVal = avgDays.toFixed(1);
-      unitVal = "Days";
-    } else {
-      displayVal = `${Math.round(avgDays)}`;
-      unitVal = "Days";
-    }
-
-    const subtext = hasAttendanceData
-      ? `Avg across ${timestamps.length} purchases (${totalPresentedDays} working ${totalPresentedDays === 1 ? "day" : "days"})`
-      : `Avg across ${timestamps.length} purchases`;
-
-    return {
-      formatted: displayVal,
-      unit: unitVal,
-      subtext,
-      daysNumber: avgDays,
-    };
-  }, [materialLogs, workerAttendance, presentedDates]);
+  const averagePurchaseDays = useMemo(
+    () => computeMaterialAveragePurchaseDays(materialLogs, workerAttendance, presentedDates),
+    [materialLogs, workerAttendance, presentedDates]
+  );
 
   // Calculate days between previous purchase and latest (current) purchase, counting only worker presented days
-  const lastPurchaseInterval = useMemo(() => {
-    const purchaseLogs = materialLogs.filter((log) => log.type === "purchase");
-    if (!purchaseLogs || purchaseLogs.length === 0) {
-      return {
-        formatted: "N/A",
-        unit: "",
-        subtext: "No purchases logged",
-        daysNumber: null,
-      };
+  const lastPurchaseInterval = useMemo(
+    () => computeMaterialLastPurchaseInterval(materialLogs, workerAttendance, presentedDates),
+    [materialLogs, workerAttendance, presentedDates]
+  );
+
+  const handleOpenEditLog = useCallback((log) => {
+    setEditingLog(log);
+    setTxQty(String(log.quantity));
+    setTxNotes(log.notes || "");
+    setErrorMsg("");
+    setTxDate(
+      log.date
+        ? log.date instanceof Date
+          ? log.date
+          : log.date?.toDate
+            ? log.date.toDate()
+            : new Date(log.date)
+        : new Date()
+    );
+
+    if (log.type === "purchase") {
+      setTxCost(String(log.costPerUnit || ""));
+      setSelectedSupplierId(log.supplierId || "");
+      setTxAmountPaid(String(log.amountPaid !== undefined ? log.amountPaid : ""));
+      setShowSupplierDropdown(false);
+      setPurchaseModal(true);
+    } else if (log.type === "consumption") {
+      setConsumptionModal(true);
     }
+  }, []);
 
-    const timestamps = purchaseLogs
-      .map((log) => {
-        const raw = log.date || log.createdAt;
-        if (!raw) return null;
-        if (raw instanceof Date) return raw.getTime();
-        if (raw.toDate && typeof raw.toDate === "function") return raw.toDate().getTime();
-        const d = new Date(raw);
-        return isNaN(d.getTime()) ? null : d.getTime();
-      })
-      .filter((ts) => ts !== null)
-      .sort((a, b) => a - b);
+  const handleOpenDeleteLog = useCallback((logId) => {
+    setActiveLogId(logId);
+    setDeleteLogModal(true);
+  }, []);
 
-    if (timestamps.length === 0) {
-      return {
-        formatted: "N/A",
-        unit: "",
-        subtext: "No purchase dates",
-        daysNumber: null,
-      };
-    }
+  const keyExtractor = useCallback((log) => log.id, []);
 
-    if (timestamps.length === 1) {
-      return {
-        formatted: "1",
-        unit: "Purchase",
-        subtext: "Only 1 purchase logged",
-        daysNumber: null,
-      };
-    }
-
-    const hasAttendanceData = (workerAttendance || []).length > 0;
-    const prevPurchase = timestamps[timestamps.length - 2];
-    const latestPurchase = timestamps[timestamps.length - 1];
-
-    let intervalDays = 0;
-
-    if (hasAttendanceData) {
-      const startDate = new Date(prevPurchase);
-      startDate.setHours(0, 0, 0, 0);
-      const endDate = new Date(latestPurchase);
-      endDate.setHours(0, 0, 0, 0);
-
-      const curr = new Date(startDate);
-      while (curr < endDate) {
-        const key = formatDateKey(curr);
-        if (presentedDates.has(key)) {
-          intervalDays++;
-        }
-        curr.setDate(curr.getDate() + 1);
-      }
-    } else {
-      // Fallback to calendar days if attendance was never logged
-      intervalDays = Math.max(0, Math.round((latestPurchase - prevPurchase) / (1000 * 60 * 60 * 24)));
-    }
-
-    let displayVal = "";
-    let unitVal = "Days";
-    if (intervalDays === 0) {
-      displayVal = "0";
-      unitVal = "Days";
-    } else if (intervalDays === 1) {
-      displayVal = "1";
-      unitVal = "Day";
-    } else {
-      displayVal = `${intervalDays}`;
-      unitVal = "Days";
-    }
-
-    const subtext = hasAttendanceData
-      ? `Between last 2 purchases (${intervalDays} working ${intervalDays === 1 ? "day" : "days"})`
-      : `Between last 2 purchases`;
-
-    return {
-      formatted: displayVal,
-      unit: unitVal,
-      subtext,
-      daysNumber: intervalDays,
-    };
-  }, [materialLogs, workerAttendance, presentedDates]);
+  const renderLogItem = useCallback(
+    ({ item: log }) => (
+      <MaterialAuditLogRow
+        log={log}
+        unitSuffix={unitSuffix}
+        currencySymbol={currencySymbol}
+        styles={styles}
+        colors={colors}
+        onEdit={handleOpenEditLog}
+        onDelete={handleOpenDeleteLog}
+      />
+    ),
+    [unitSuffix, currencySymbol, styles, colors, handleOpenEditLog, handleOpenDeleteLog]
+  );
 
   const handleDeleteMaterial = async () => {
     if (!material?.id) return;
@@ -401,7 +297,7 @@ function RawMaterialDetailsScreen() {
   let status = "Healthy";
   let statusColor = "#10b981";
   let statusBg = "#ecfdf5";
-  
+
   if (currentStock === 0) {
     status = "Out of Stock";
     statusColor = "#ef4444";
@@ -422,27 +318,27 @@ function RawMaterialDetailsScreen() {
         lastPurchase.costPerUnit !== undefined && lastPurchase.costPerUnit !== null
           ? String(lastPurchase.costPerUnit)
           : lastPurchase.rate !== undefined && lastPurchase.rate !== null
-          ? String(lastPurchase.rate)
-          : ""
+            ? String(lastPurchase.rate)
+            : ""
       );
     } else {
       setTxQty("");
       setTxCost("");
     }
     setTxNotes("");
-    
+
     // Find default supplier who supplies this raw material
     const lastSupplier = lastPurchase?.supplierId
       ? suppliers.find(s => s.id === lastPurchase.supplierId && s.status !== "inactive")
       : null;
 
-    const defaultSupplier = lastSupplier || suppliers.find(s => 
-      s.status !== "inactive" && 
-      s.suppliedMaterials && 
+    const defaultSupplier = lastSupplier || suppliers.find(s =>
+      s.status !== "inactive" &&
+      s.suppliedMaterials &&
       s.suppliedMaterials.includes(material.id)
     );
     setSelectedSupplierId(defaultSupplier ? defaultSupplier.id : "");
-    
+
     setTxAmountPaid("");
     setShowSupplierDropdown(false);
     setErrorMsg("");
@@ -471,32 +367,6 @@ function RawMaterialDetailsScreen() {
   const handleCloseConsumption = () => {
     setConsumptionModal(false);
     setEditingLog(null);
-  };
-
-  const handleOpenEditLog = (log) => {
-    setEditingLog(log);
-    setTxQty(String(log.quantity));
-    setTxNotes(log.notes || "");
-    setErrorMsg("");
-    setTxDate(
-      log.date
-        ? log.date instanceof Date
-          ? log.date
-          : log.date?.toDate
-          ? log.date.toDate()
-          : new Date(log.date)
-        : new Date()
-    );
-    
-    if (log.type === "purchase") {
-      setTxCost(String(log.costPerUnit || ""));
-      setSelectedSupplierId(log.supplierId || "");
-      setTxAmountPaid(String(log.amountPaid !== undefined ? log.amountPaid : ""));
-      setShowSupplierDropdown(false);
-      setPurchaseModal(true);
-    } else if (log.type === "consumption") {
-      setConsumptionModal(true);
-    }
   };
 
   const handleSavePurchase = async () => {
@@ -620,11 +490,6 @@ function RawMaterialDetailsScreen() {
     }
   };
 
-  const handleOpenDeleteLog = (logId) => {
-    setActiveLogId(logId);
-    setDeleteLogModal(true);
-  };
-
   const handleDeleteLog = async () => {
     setDeletingLog(true);
     try {
@@ -641,8 +506,18 @@ function RawMaterialDetailsScreen() {
     }
   };
 
-  return (
-    <ScrollView contentContainerStyle={styles.container}>
+  const listEmptyComponent = (
+    <View style={styles.emptyLogsCard}>
+      <MaterialIcons name="history" size={32} color={colors.text.muted} />
+      <Text style={styles.emptyLogsTitle}>No Actions Logged</Text>
+      <Text style={styles.emptyLogsDesc}>
+        Purchases and consumptions will be listed here.
+      </Text>
+    </View>
+  );
+
+  const listHeader = (
+    <>
       {/* Navigation Header */}
       <View style={styles.header}>
         <BackButton
@@ -698,7 +573,7 @@ function RawMaterialDetailsScreen() {
 
           <View style={styles.gridCell}>
             <Text style={styles.gridLabel}>Material Unit Cost</Text>
-            <Text style={styles.gridValue}>
+            <Text style={styles.gridValue} {...currencyKpiTextProps}>
               {currencySymbol}{Number(material.costPrice || 0).toFixed(2)}
             </Text>
           </View>
@@ -712,7 +587,7 @@ function RawMaterialDetailsScreen() {
 
           <View style={styles.gridCell}>
             <Text style={styles.gridLabel}>Inventory Valuation</Text>
-            <Text style={styles.gridValue}>
+            <Text style={styles.gridValue} {...currencyKpiTextProps}>
               {currencySymbol}{(currentStock * Number(material.costPrice || 0)).toLocaleString(undefined, { minimumFractionDigits: 2, maximumFractionDigits: 2 })}
             </Text>
           </View>
@@ -726,7 +601,7 @@ function RawMaterialDetailsScreen() {
 
           <View style={styles.gridCell}>
             <Text style={styles.gridLabel}>Total Stock Buyed Valuation</Text>
-            <Text style={styles.gridValue}>
+            <Text style={styles.gridValue} {...currencyKpiTextProps}>
               {currencySymbol}{totalStockBoughtValuation.toLocaleString(undefined, { minimumFractionDigits: 2, maximumFractionDigits: 2 })}
             </Text>
           </View>
@@ -834,74 +709,35 @@ function RawMaterialDetailsScreen() {
 
       {/* Audit History Logs List */}
       <Text style={styles.sectionTitle}>Stock Movement Audit logs</Text>
-      <View style={styles.logsContainer}>
-        {materialLogs.length === 0 ? (
-          <View style={styles.emptyLogsCard}>
-            <MaterialIcons name="history" size={32} color={colors.text.muted} />
-            <Text style={styles.emptyLogsTitle}>No Actions Logged</Text>
-            <Text style={styles.emptyLogsDesc}>
-              Purchases and consumptions will be listed here.
-            </Text>
-          </View>
-        ) : (
-          materialLogs.map((log) => {
-            const isPurchase = log.type === "purchase";
-            const logDateStr = log.date ? log.date.toLocaleDateString() : "N/A";
-            const logTimeStr = log.date ? log.date.toLocaleTimeString([], { hour: "2-digit", minute: "2-digit" }) : "";
-            
-            return (
-              <View key={log.id} style={styles.logItem}>
-                <View style={styles.logItemLeft}>
-                  <View style={[styles.logIndicatorCircle, { backgroundColor: isPurchase ? "#ecfdf5" : "#fee2e2" }]}>
-                    <MaterialIcons
-                      name={isPurchase ? "arrow-upward" : "arrow-downward"}
-                      size={16}
-                      color={isPurchase ? "#059669" : "#dc2626"}
-                    />
-                  </View>
-                  <View style={{ flex: 1 }}>
-                    <View style={{ flexDirection: "row", alignItems: "center", gap: 6 }}>
-                      <Text style={styles.logItemTitle}>
-                        {isPurchase ? "Purchase Intake" : "Used in Production"}
-                      </Text>
-                      <Text style={[styles.logQtyText, { color: isPurchase ? "#059669" : "#dc2626" }]}>
-                        {isPurchase ? "+" : "-"}{log.quantity} {unitSuffix}
-                      </Text>
-                    </View>
-                    <Text style={styles.logItemDate}>{logDateStr} • {logTimeStr}</Text>
-                    {isPurchase && log.costPerUnit ? (
-                      <Text style={styles.logItemCostText}>
-                        Rate: {currencySymbol}{Number(log.costPerUnit).toFixed(2)} • Total: {currencySymbol}{Number(log.totalCost || 0).toFixed(2)}
-                      </Text>
-                    ) : null}
-                    {log.notes ? (
-                      <Text style={styles.logItemNotes}>{log.notes}</Text>
-                    ) : null}
-                  </View>
-                </View>
-                <View style={{ flexDirection: "row", alignItems: "center", gap: 4 }}>
-                  <Pressable
-                    style={({ pressed }) => [styles.deleteLogBtn, pressed && styles.buttonPressed]}
-                    onPress={() => handleOpenEditLog(log)}
-                  >
-                    <MaterialIcons name="edit" size={18} color={colors.text.muted} />
-                  </Pressable>
-                  <Pressable
-                    style={({ pressed }) => [styles.deleteLogBtn, pressed && styles.buttonPressed]}
-                    onPress={() => handleOpenDeleteLog(log.id)}
-                  >
-                    <MaterialIcons name="delete" size={18} color={colors.text.muted} />
-                  </Pressable>
-                </View>
-              </View>
-            );
-          })
-        )}
-      </View>
+    </>
+  );
+
+  return (
+    <View style={styles.screenWrapper}>
+      <FlatList
+        data={materialLogs}
+        keyExtractor={keyExtractor}
+        renderItem={renderLogItem}
+        ListHeaderComponent={listHeader}
+        ListEmptyComponent={listEmptyComponent}
+        contentContainerStyle={[
+          styles.container,
+          { paddingTop: Math.max(insets.top + 8, 16), paddingBottom: scrollBottomPadding },
+        ]}
+        initialNumToRender={10}
+        maxToRenderPerBatch={10}
+        windowSize={5}
+        removeClippedSubviews={true}
+      />
 
       {/* Modal 1: Delete Material Confirmation */}
-      <Modal visible={deleteMaterialModal} transparent animationType="fade">
-        <View style={styles.modalBg}>
+      <Modal
+        visible={deleteMaterialModal}
+        transparent
+        animationType="fade"
+        onRequestClose={() => !deletingMaterial && setDeleteMaterialModal(false)}
+      >
+        <KeyboardAvoidingView behavior={kavBehavior} style={styles.modalBg}>
           <View style={styles.modalContent}>
             <MaterialIcons name="warning" size={40} color={colors.accent.danger} style={{ marginBottom: 12 }} />
             <Text style={styles.modalTitle}>Delete Raw Material?</Text>
@@ -929,12 +765,17 @@ function RawMaterialDetailsScreen() {
               </Pressable>
             </View>
           </View>
-        </View>
+        </KeyboardAvoidingView>
       </Modal>
 
       {/* Modal 2: Log Purchase (Stock In) */}
-      <Modal visible={purchaseModal} transparent animationType="slide">
-        <View style={styles.modalBg}>
+      <Modal
+        visible={purchaseModal}
+        transparent
+        animationType="slide"
+        onRequestClose={() => !loggingTx && handleClosePurchase()}
+      >
+        <KeyboardAvoidingView behavior={kavBehavior} style={styles.modalBg}>
           <View style={[styles.modalContent, styles.logModalContent]}>
             <View style={styles.logModalHeader}>
               <Text style={styles.logModalTitle}>{editingLog ? "Edit Purchase (Stock In)" : "Log Purchase (Stock In)"}</Text>
@@ -950,7 +791,7 @@ function RawMaterialDetailsScreen() {
               </View>
             ) : null}
 
-            <ScrollView contentContainerStyle={{ paddingBottom: 10 }} showsVerticalScrollIndicator={false} keyboardShouldPersistTaps="handled">
+            <ScrollView style={{ maxHeight: Math.round(hp(64)) }} contentContainerStyle={{ paddingBottom: 10 }} showsVerticalScrollIndicator={false} keyboardShouldPersistTaps="handled">
               <Text style={styles.modalInputLabel}>Transaction Date</Text>
               <Pressable
                 style={styles.dateSelector}
@@ -991,8 +832,8 @@ function RawMaterialDetailsScreen() {
 
               {/* Supplier Dropdown Selector */}
               <Text style={styles.modalInputLabel}>Link Supplier</Text>
-              <Pressable 
-                style={styles.dropdownSelector} 
+              <Pressable
+                style={styles.dropdownSelector}
                 onPress={() => !loggingTx && setShowSupplierDropdown(!showSupplierDropdown)}
               >
                 <Text style={styles.dropdownSelectorText}>
@@ -1004,8 +845,8 @@ function RawMaterialDetailsScreen() {
               {showSupplierDropdown && (
                 <View style={styles.dropdownListContainer}>
                   <ScrollView style={styles.dropdownList} nestedScrollEnabled={true} keyboardShouldPersistTaps="handled">
-                    <Pressable 
-                      style={styles.dropdownListItem} 
+                    <Pressable
+                      style={styles.dropdownListItem}
                       onPress={() => {
                         setSelectedSupplierId("");
                         setShowSupplierDropdown(false);
@@ -1014,9 +855,9 @@ function RawMaterialDetailsScreen() {
                       <Text style={styles.dropdownListItemText}>None (No Supplier)</Text>
                     </Pressable>
                     {suppliers.filter(s => s.status !== "inactive").map((s) => (
-                      <Pressable 
+                      <Pressable
                         key={s.id}
-                        style={styles.dropdownListItem} 
+                        style={styles.dropdownListItem}
                         onPress={() => {
                           setSelectedSupplierId(s.id);
                           setShowSupplierDropdown(false);
@@ -1084,12 +925,17 @@ function RawMaterialDetailsScreen() {
               </Pressable>
             </ScrollView>
           </View>
-        </View>
+        </KeyboardAvoidingView>
       </Modal>
 
       {/* Modal 3: Log Consumption (Stock Out) */}
-      <Modal visible={consumptionModal} transparent animationType="slide">
-        <View style={styles.modalBg}>
+      <Modal
+        visible={consumptionModal}
+        transparent
+        animationType="slide"
+        onRequestClose={() => !loggingTx && handleCloseConsumption()}
+      >
+        <KeyboardAvoidingView behavior={kavBehavior} style={styles.modalBg}>
           <View style={[styles.modalContent, styles.logModalContent]}>
             <View style={styles.logModalHeader}>
               <Text style={styles.logModalTitle}>{editingLog ? "Edit Stock Out (Consumption)" : "Log Stock Out (Consumption)"}</Text>
@@ -1098,70 +944,78 @@ function RawMaterialDetailsScreen() {
               </Pressable>
             </View>
 
-            {errorMsg ? (
-              <View style={styles.modalError}>
-                <MaterialIcons name="error-outline" size={16} color={colors.accent.danger} />
-                <Text style={styles.modalErrorText}>{errorMsg}</Text>
-              </View>
-            ) : null}
+            <ScrollView style={{ maxHeight: Math.round(hp(64)) }} contentContainerStyle={{ paddingBottom: 10 }} showsVerticalScrollIndicator={false} keyboardShouldPersistTaps="handled">
 
-            <Text style={styles.modalInputLabel}>Transaction Date</Text>
-            <Pressable
-              style={styles.dateSelector}
-              onPress={() => !loggingTx && setIsCalendarOpen(true)}
-            >
-              <MaterialIcons name="calendar-today" size={18} color={colors.accent.primary} style={{ marginRight: 8 }} />
-              <Text style={styles.dateSelectorText}>
-                {txDate.toLocaleDateString("en-IN", {
-                  day: "numeric",
-                  month: "short",
-                  year: "numeric",
-                })}
-              </Text>
-              <MaterialIcons name="edit-calendar" size={16} color={colors.text.muted} style={{ marginLeft: "auto" }} />
-            </Pressable>
+              {errorMsg ? (
+                <View style={styles.modalError}>
+                  <MaterialIcons name="error-outline" size={16} color={colors.accent.danger} />
+                  <Text style={styles.modalErrorText}>{errorMsg}</Text>
+                </View>
+              ) : null}
 
-            <Text style={styles.modalInputLabel}>Quantity to Consume ({unitSuffix}) *</Text>
-            <TextInput
-              style={styles.modalTextInput}
-              value={txQty}
-              onChangeText={setTxQty}
-              placeholder={`Available: ${currentStock + (editingLog ? Number(editingLog.quantity) : 0)}`}
-              placeholderTextColor={colors.text.muted}
-              keyboardType="numeric"
-              editable={!loggingTx}
-            />
+              <Text style={styles.modalInputLabel}>Transaction Date</Text>
+              <Pressable
+                style={styles.dateSelector}
+                onPress={() => !loggingTx && setIsCalendarOpen(true)}
+              >
+                <MaterialIcons name="calendar-today" size={18} color={colors.accent.primary} style={{ marginRight: 8 }} />
+                <Text style={styles.dateSelectorText}>
+                  {txDate.toLocaleDateString("en-IN", {
+                    day: "numeric",
+                    month: "short",
+                    year: "numeric",
+                  })}
+                </Text>
+                <MaterialIcons name="edit-calendar" size={16} color={colors.text.muted} style={{ marginLeft: "auto" }} />
+              </Pressable>
 
-            <Text style={styles.modalInputLabel}>Production Notes / Job ID</Text>
-            <TextInput
-              style={[styles.modalTextInput, styles.modalTextArea]}
-              value={txNotes}
-              onChangeText={setTxNotes}
-              placeholder="e.g. Batch block production, Shift A"
-              placeholderTextColor={colors.text.muted}
-              multiline
-              numberOfLines={2}
-              editable={!loggingTx}
-            />
+              <Text style={styles.modalInputLabel}>Quantity to Consume ({unitSuffix}) *</Text>
+              <TextInput
+                style={styles.modalTextInput}
+                value={txQty}
+                onChangeText={setTxQty}
+                placeholder={`Available: ${currentStock + (editingLog ? Number(editingLog.quantity) : 0)}`}
+                placeholderTextColor={colors.text.muted}
+                keyboardType="numeric"
+                editable={!loggingTx}
+              />
 
-            <Pressable
-              style={({ pressed }) => [styles.submitLogBtn, styles.submitOutBtn, pressed && styles.buttonPressed, loggingTx && styles.disabledBtn]}
-              onPress={handleSaveConsumption}
-              disabled={loggingTx}
-            >
-              {loggingTx ? (
-                <ActivityIndicator size="small" color={colors.bg.card} />
-              ) : (
-                <Text style={styles.submitLogBtnText}>{editingLog ? "Save Changes" : "Log Stock Out"}</Text>
-              )}
-            </Pressable>
+              <Text style={styles.modalInputLabel}>Production Notes / Job ID</Text>
+              <TextInput
+                style={[styles.modalTextInput, styles.modalTextArea]}
+                value={txNotes}
+                onChangeText={setTxNotes}
+                placeholder="e.g. Batch block production, Shift A"
+                placeholderTextColor={colors.text.muted}
+                multiline
+                numberOfLines={2}
+                editable={!loggingTx}
+              />
+
+              <Pressable
+                style={({ pressed }) => [styles.submitLogBtn, styles.submitOutBtn, pressed && styles.buttonPressed, loggingTx && styles.disabledBtn]}
+                onPress={handleSaveConsumption}
+                disabled={loggingTx}
+              >
+                {loggingTx ? (
+                  <ActivityIndicator size="small" color={colors.bg.card} />
+                ) : (
+                  <Text style={styles.submitLogBtnText}>{editingLog ? "Save Changes" : "Log Stock Out"}</Text>
+                )}
+              </Pressable>
+            </ScrollView>
           </View>
-        </View>
+        </KeyboardAvoidingView>
       </Modal>
 
       {/* Modal 4: Delete/Rollback Log Entry */}
-      <Modal visible={deleteLogModal} transparent animationType="fade">
-        <View style={styles.modalBg}>
+      <Modal
+        visible={deleteLogModal}
+        transparent
+        animationType="fade"
+        onRequestClose={() => !deletingLog && setDeleteLogModal(false)}
+      >
+        <KeyboardAvoidingView behavior={kavBehavior} style={styles.modalBg}>
           <View style={styles.modalContent}>
             <MaterialIcons name="warning" size={40} color="#e11d48" style={{ marginBottom: 12 }} />
             <Text style={styles.modalTitle}>Delete Log Entry?</Text>
@@ -1189,7 +1043,7 @@ function RawMaterialDetailsScreen() {
               </Pressable>
             </View>
           </View>
-        </View>
+        </KeyboardAvoidingView>
       </Modal>
 
       {/* Date Picker Modal */}
@@ -1203,7 +1057,7 @@ function RawMaterialDetailsScreen() {
         onClose={() => setIsCalendarOpen(false)}
         title="Select Transaction Date"
       />
-    </ScrollView>
+    </View>
   );
 }
 
@@ -1218,582 +1072,610 @@ export default function DetailsRoute() {
 const getStyles = (theme) => {
   const { colors, spacing, radius, shadows } = theme;
   return StyleSheet.create({
-  container: {
-    padding: 16,
-    backgroundColor: colors.bg.card,
-    flexGrow: 1,
-  },
-  errorContainer: {
-    flex: 1,
-    justifyContent: "center",
-    alignItems: "center",
-    padding: 24,
-    minHeight: 300,
-  },
-  errorTitle: {
-    fontSize: 20,
-    fontWeight: "700",
-    color: colors.text.primary,
-    marginTop: 12,
-    marginBottom: 6,
-  },
-  errorDesc: {
-    fontSize: 14,
-    color: colors.text.muted,
-    textAlign: "center",
-    marginBottom: 20,
-  },
-  backLink: {
-    paddingVertical: 10,
-    paddingHorizontal: 20,
-    backgroundColor: colors.accent.primary,
-    borderRadius: 10,
-  },
-  backLinkText: {
-    color: colors.bg.card,
-    fontWeight: "700",
-  },
-  header: {
-    flexDirection: "row",
-    justifyContent: "space-between",
-    alignItems: "center",
-    marginBottom: 20,
-  },
-  backButton: {
-    flexDirection: "row",
-    alignItems: "center",
-  },
-  backText: {
-    fontSize: 15,
-    fontWeight: "600",
-    color: colors.text.secondary,
-    marginLeft: 6,
-  },
-  headerActions: {
-    flexDirection: "row",
-    gap: 8,
-  },
-  actionButton: {
-    width: 38,
-    height: 38,
-    borderRadius: 19,
-    justifyContent: "center",
-    alignItems: "center",
-    borderWidth: 1.5,
-  },
-  editAction: {
-    backgroundColor: "#6C5CE720",
-    borderColor: "#6C5CE740",
-  },
-  deleteAction: {
-    backgroundColor: "#fff5f5",
-    borderColor: "#fecaca",
-  },
-  buttonPressed: {
-    opacity: 0.75,
-  },
-  detailsCard: {
-    backgroundColor: colors.bg.card,
-    borderWidth: 1,
-    borderColor: colors.border.subtle,
-    borderRadius: 16,
-    padding: 20,
-    marginBottom: 24,
-    shadowColor: colors.text.primary,
-    shadowOffset: { width: 0, height: 2 },
-    shadowOpacity: 0.04,
-    shadowRadius: 10,
-    elevation: 2,
-  },
-  cardHeaderRow: {
-    flexDirection: "row",
-    justifyContent: "space-between",
-    alignItems: "flex-start",
-    marginBottom: 16,
-  },
-  titleWrapper: {
-    flex: 1,
-  },
-  unitBadge: {
-    backgroundColor: colors.border.subtle,
-    paddingHorizontal: 8,
-    paddingVertical: 4,
-    borderRadius: 6,
-  },
-  unitBadgeText: {
-    fontSize: 10,
-    fontWeight: "700",
-    textTransform: "uppercase",
-    color: colors.text.muted,
-  },
-  statusBadge: {
-    paddingHorizontal: 8,
-    paddingVertical: 4,
-    borderRadius: 6,
-  },
-  statusBadgeText: {
-    fontSize: 10,
-    fontWeight: "700",
-    textTransform: "uppercase",
-  },
-  materialTitle: {
-    fontSize: 22,
-    fontWeight: "800",
-    color: colors.text.primary,
-  },
-  gridContainer: {
-    flexDirection: "row",
-    flexWrap: "wrap",
-    gap: 12,
-  },
-  gridCell: {
-    width: "48%",
-    backgroundColor: colors.bg.primary,
-    borderWidth: 1,
-    borderColor: colors.border.subtle,
-    borderRadius: 12,
-    padding: 12,
-  },
-  gridLabel: {
-    fontSize: 10,
-    color: colors.text.muted,
-    fontWeight: "600",
-    marginBottom: 4,
-  },
-  gridValue: {
-    fontSize: 15,
-    fontWeight: "800",
-    color: colors.text.primary,
-  },
-  gridUnit: {
-    fontSize: 11,
-    fontWeight: "500",
-    color: colors.text.muted,
-  },
-  warningText: {
-    color: colors.accent.warning,
-  },
-  dangerText: {
-    color: colors.accent.danger,
-  },
-  descWrapper: {
-    marginTop: 16,
-    borderTopWidth: 1,
-    borderTopColor: colors.border.subtle,
-    paddingTop: 14,
-  },
-  descTitle: {
-    fontSize: 11,
-    fontWeight: "700",
-    textTransform: "uppercase",
-    color: colors.text.muted,
-    letterSpacing: 0.5,
-    marginBottom: 6,
-  },
-  descText: {
-    fontSize: 14,
-    color: colors.text.secondary,
-    lineHeight: 20,
-  },
-  wastageOverviewCard: {
-    marginTop: 12,
-    backgroundColor: "#fffbeb",
-    borderWidth: 1,
-    borderColor: "#fde68a",
-    borderRadius: 12,
-    padding: 12,
-    gap: 10,
-  },
-  wastageOverviewHeader: {
-    flexDirection: "row",
-    alignItems: "center",
-    gap: 10,
-  },
-  wastageOverviewIcon: {
-    width: 34,
-    height: 34,
-    borderRadius: 17,
-    backgroundColor: "#fef3c7",
-    justifyContent: "center",
-    alignItems: "center",
-  },
-  wastageOverviewTitle: {
-    fontSize: 13,
-    fontWeight: "700",
-    color: "#b45309",
-  },
-  wastageOverviewSub: {
-    fontSize: 12,
-    color: colors.text.secondary,
-    marginTop: 1,
-  },
-  wastageOverviewStats: {
-    flexDirection: "row",
-    gap: 10,
-    backgroundColor: colors.bg.card,
-    borderRadius: 8,
-    padding: 8,
-  },
-  wastageStatBox: {
-    flex: 1,
-  },
-  wastageStatLabel: {
-    fontSize: 10,
-    fontWeight: "700",
-    color: colors.text.muted,
-    textTransform: "uppercase",
-  },
-  wastageStatValue: {
-    fontSize: 14,
-    fontWeight: "800",
-    color: "#b45309",
-    marginTop: 2,
-  },
-  sectionTitle: {
-    fontSize: 14,
-    fontWeight: "700",
-    color: colors.text.muted,
-    textTransform: "uppercase",
-    letterSpacing: 0.8,
-    marginBottom: 12,
-    marginLeft: 4,
-  },
-  actionsContainer: {
-    flexDirection: "row",
-    gap: 12,
-    marginBottom: 24,
-  },
-  stockActionButton: {
-    flex: 1,
-    flexDirection: "row",
-    alignItems: "center",
-    padding: 14,
-    borderRadius: 12,
-    gap: 10,
-  },
-  stockInBtn: {
-    backgroundColor: colors.accent.success,
-  },
-  stockOutBtn: {
-    backgroundColor: "#3b82f6",
-  },
-  stockActionBtnTitle: {
-    color: colors.bg.card,
-    fontWeight: "700",
-    fontSize: 14,
-  },
-  stockActionBtnDesc: {
-    color: "rgba(255, 255, 255, 0.8)",
-    fontSize: 9,
-    fontWeight: "500",
-  },
-  logsContainer: {
-    gap: 10,
-    paddingBottom: 30,
-  },
-  emptyLogsCard: {
-    padding: 24,
-    alignItems: "center",
-    borderWidth: 1.5,
-    borderStyle: "dashed",
-    borderColor: colors.border.subtle,
-    borderRadius: 12,
-    backgroundColor: "#fafafa",
-  },
-  emptyLogsTitle: {
-    fontSize: 14,
-    fontWeight: "700",
-    color: colors.text.muted,
-    marginTop: 8,
-    marginBottom: 2,
-  },
-  emptyLogsDesc: {
-    fontSize: 12,
-    color: colors.text.muted,
-    textAlign: "center",
-  },
-  logItem: {
-    flexDirection: "row",
-    justifyContent: "space-between",
-    alignItems: "center",
-    borderWidth: 1,
-    borderColor: colors.border.subtle,
-    borderRadius: 12,
-    padding: 12,
-    backgroundColor: colors.bg.card,
-  },
-  logItemLeft: {
-    flexDirection: "row",
-    gap: 10,
-    flex: 1,
-  },
-  logIndicatorCircle: {
-    width: 28,
-    height: 28,
-    borderRadius: 14,
-    justifyContent: "center",
-    alignItems: "center",
-    marginTop: 2,
-  },
-  logItemTitle: {
-    fontSize: 13,
-    fontWeight: "700",
-    color: colors.text.primary,
-  },
-  logQtyText: {
-    fontSize: 13,
-    fontWeight: "800",
-  },
-  logItemDate: {
-    fontSize: 10,
-    color: colors.text.muted,
-    marginTop: 2,
-  },
-  logItemCostText: {
-    fontSize: 11,
-    color: colors.text.secondary,
-    fontWeight: "600",
-    marginTop: 4,
-  },
-  logItemNotes: {
-    fontSize: 11,
-    color: colors.text.muted,
-    backgroundColor: colors.bg.primary,
-    padding: 6,
-    borderRadius: 6,
-    marginTop: 6,
-    lineHeight: 15,
-  },
-  deleteLogBtn: {
-    padding: 6,
-  },
-  modalBg: {
-    flex: 1,
-    backgroundColor: "rgba(0,0,0,0.55)",
-    justifyContent: "center",
-    alignItems: "center",
-    padding: 16,
-  },
-  modalContent: {
-    backgroundColor: colors.bg.card,
-    borderRadius: 16,
-    padding: 20,
-    width: "100%",
-    maxWidth: 340,
-    alignItems: "center",
-    shadowColor: colors.text.primary,
-    shadowOffset: { width: 0, height: 4 },
-    shadowOpacity: 0.1,
-    shadowRadius: 15,
-    elevation: 5,
-  },
-  logModalContent: {
-    maxWidth: 380,
-    alignItems: "stretch",
-  },
-  logModalHeader: {
-    flexDirection: "row",
-    justifyContent: "space-between",
-    alignItems: "center",
-    marginBottom: 16,
-  },
-  logModalTitle: {
-    fontSize: 16,
-    fontWeight: "800",
-    color: colors.text.primary,
-  },
-  modalTitle: {
-    fontSize: 18,
-    fontWeight: "800",
-    color: colors.text.primary,
-    marginBottom: 8,
-  },
-  modalDesc: {
-    fontSize: 13,
-    color: colors.text.muted,
-    textAlign: "center",
-    lineHeight: 18,
-    marginBottom: 20,
-  },
-  modalActions: {
-    flexDirection: "row",
-    gap: 10,
-    width: "100%",
-  },
-  modalBtn: {
-    flex: 1,
-    height: 40,
-    borderRadius: 8,
-    justifyContent: "center",
-    alignItems: "center",
-  },
-  modalCancelBtn: {
-    borderWidth: 1.5,
-    borderColor: colors.border.medium,
-    backgroundColor: colors.bg.card,
-  },
-  modalDeleteBtn: {
-    backgroundColor: colors.accent.danger,
-  },
-  modalCancelText: {
-    color: colors.text.muted,
-    fontWeight: "700",
-  },
-  modalDeleteText: {
-    color: colors.bg.card,
-    fontWeight: "700",
-  },
-  modalError: {
-    flexDirection: "row",
-    alignItems: "center",
-    backgroundColor: "#fef2f2",
-    borderWidth: 1,
-    borderColor: "#fca5a5",
-    borderRadius: 8,
-    padding: 8,
-    gap: 6,
-    marginBottom: 12,
-  },
-  modalErrorText: {
-    color: "#b91c1c",
-    fontSize: 12,
-    fontWeight: "600",
-    flex: 1,
-  },
-  modalInputLabel: {
-    fontSize: 11,
-    fontWeight: "700",
-    color: colors.text.secondary,
-    textTransform: "uppercase",
-    marginBottom: 6,
-    marginTop: 8,
-  },
-  modalTextInput: {
-    backgroundColor: colors.bg.card,
-    borderWidth: 1.5,
-    borderColor: colors.border.medium,
-    borderRadius: 8,
-    paddingHorizontal: 10,
-    height: 40,
-    fontSize: 14,
-    color: colors.text.primary,
-    marginBottom: 10,
-  },
-  modalTextArea: {
-    height: 60,
-    paddingVertical: 8,
-  },
-  submitLogBtn: {
-    backgroundColor: colors.accent.success,
-    height: 44,
-    borderRadius: 8,
-    justifyContent: "center",
-    alignItems: "center",
-    marginTop: 10,
-  },
-  submitOutBtn: {
-    backgroundColor: "#3b82f6",
-  },
-  submitLogBtnText: {
-    color: colors.bg.card,
-    fontWeight: "700",
-    fontSize: 14,
-  },
-  disabledBtn: {
-    opacity: 0.6,
-  },
-  dateSelector: {
-    flexDirection: "row",
-    alignItems: "center",
-    backgroundColor: colors.bg.card,
-    borderWidth: 1.5,
-    borderColor: colors.border.medium,
-    borderRadius: 8,
-    paddingHorizontal: 10,
-    height: 40,
-    marginBottom: 10,
-  },
-  dateSelectorText: {
-    fontSize: 14,
-    color: colors.text.primary,
-    fontWeight: "500",
-  },
-  dropdownSelector: {
-    flexDirection: "row",
-    justifyContent: "space-between",
-    alignItems: "center",
-    backgroundColor: colors.bg.card,
-    borderWidth: 1.5,
-    borderColor: colors.border.medium,
-    borderRadius: 8,
-    paddingHorizontal: 10,
-    height: 40,
-    marginBottom: 10,
-  },
-  dropdownSelectorText: {
-    fontSize: 14,
-    color: colors.text.primary,
-    fontWeight: "500",
-  },
-  dropdownListContainer: {
-    maxHeight: 120,
-    borderWidth: 1.5,
-    borderColor: colors.border.medium,
-    borderRadius: 8,
-    marginBottom: 10,
-    backgroundColor: colors.bg.primary,
-    overflow: "hidden",
-  },
-  dropdownList: {
-    padding: 2,
-  },
-  dropdownListItem: {
-    paddingVertical: 8,
-    paddingHorizontal: 10,
-    borderBottomWidth: 1,
-    borderBottomColor: colors.border.subtle,
-  },
-  dropdownListItemText: {
-    fontSize: 13,
-    color: colors.text.primary,
-  },
-  calcRow: {
-    flexDirection: "row",
-    alignItems: "center",
-    backgroundColor: "#f0fdf4",
-    padding: 10,
-    borderRadius: 8,
-    borderWidth: 1,
-    borderColor: "#bbf7d0",
-    marginBottom: 10,
-  },
-  calcLabel: {
-    fontSize: 12,
-    fontWeight: "600",
-    color: "#166534",
-  },
-  calcVal: {
-    fontSize: 13,
-    fontWeight: "800",
-    color: "#166534",
-  },
-  creditInfoAlert: {
-    flexDirection: "row",
-    alignItems: "center",
-    backgroundColor: "#fffbeb",
-    borderWidth: 1,
-    borderColor: "#fde68a",
-    padding: 8,
-    borderRadius: 8,
-    gap: 6,
-    marginBottom: 10,
-  },
-  creditInfoAlertText: {
-    color: "#92400e",
-    fontSize: 11,
-    fontWeight: "600",
-    flex: 1,
-  },
-})
+    screenWrapper: {
+      flex: 1,
+      backgroundColor: colors.bg.card,
+    },
+    container: {
+      padding: 16,
+      paddingBottom: 46,
+      backgroundColor: colors.bg.card,
+      flexGrow: 1,
+    },
+    errorContainer: {
+      flex: 1,
+      justifyContent: "center",
+      alignItems: "center",
+      padding: 24,
+      minHeight: 300,
+    },
+    errorTitle: {
+      fontSize: 20,
+      fontWeight: "700",
+      color: colors.text.primary,
+      marginTop: 12,
+      marginBottom: 6,
+    },
+    errorDesc: {
+      fontSize: 14,
+      color: colors.text.muted,
+      textAlign: "center",
+      marginBottom: 20,
+    },
+    backLink: {
+      paddingVertical: 10,
+      paddingHorizontal: 20,
+      backgroundColor: colors.accent.primary,
+      borderRadius: 10,
+    },
+    backLinkText: {
+      color: colors.bg.card,
+      fontWeight: "700",
+    },
+    header: {
+      flexDirection: "row",
+      justifyContent: "space-between",
+      alignItems: "center",
+      marginBottom: 20,
+    },
+    backButton: {
+      flexDirection: "row",
+      alignItems: "center",
+    },
+    backText: {
+      fontSize: 15,
+      fontWeight: "600",
+      color: colors.text.secondary,
+      marginLeft: 6,
+    },
+    headerActions: {
+      flexDirection: "row",
+      gap: 8,
+    },
+    actionButton: {
+      width: 38,
+      height: 38,
+      borderRadius: 19,
+      justifyContent: "center",
+      alignItems: "center",
+      borderWidth: 1.5,
+    },
+    editAction: {
+      backgroundColor: "#6C5CE720",
+      borderColor: "#6C5CE740",
+    },
+    deleteAction: {
+      backgroundColor: "#fff5f5",
+      borderColor: "#fecaca",
+    },
+    buttonPressed: {
+      opacity: 0.75,
+    },
+    detailsCard: {
+      backgroundColor: colors.bg.card,
+      borderWidth: 1,
+      borderColor: colors.border.subtle,
+      borderRadius: 16,
+      padding: 20,
+      marginBottom: 24,
+      shadowColor: colors.text.primary,
+      shadowOffset: { width: 0, height: 2 },
+      shadowOpacity: 0.04,
+      shadowRadius: 10,
+      elevation: 2,
+    },
+    cardHeaderRow: {
+      flexDirection: "row",
+      justifyContent: "space-between",
+      alignItems: "flex-start",
+      marginBottom: 16,
+    },
+    titleWrapper: {
+      flex: 1,
+    },
+    unitBadge: {
+      backgroundColor: colors.border.subtle,
+      paddingHorizontal: 8,
+      paddingVertical: 4,
+      borderRadius: 6,
+    },
+    unitBadgeText: {
+      fontSize: 10,
+      fontWeight: "700",
+      textTransform: "uppercase",
+      color: colors.text.muted,
+    },
+    statusBadge: {
+      paddingHorizontal: 8,
+      paddingVertical: 4,
+      borderRadius: 6,
+    },
+    statusBadgeText: {
+      fontSize: 10,
+      fontWeight: "700",
+      textTransform: "uppercase",
+    },
+    materialTitle: {
+      fontSize: 22,
+      fontWeight: "800",
+      color: colors.text.primary,
+    },
+    gridContainer: {
+      flexDirection: "row",
+      flexWrap: "wrap",
+      gap: 12,
+    },
+    gridCell: {
+      flexGrow: 1,
+      flexBasis: "45%",
+      minWidth: 126,
+      backgroundColor: colors.bg.primary,
+      borderWidth: 1,
+      borderColor: colors.border.subtle,
+      borderRadius: 12,
+      padding: 12,
+    },
+    gridLabel: {
+      fontSize: 10,
+      color: colors.text.muted,
+      fontWeight: "600",
+      marginBottom: 4,
+    },
+    gridValue: {
+      fontSize: 15,
+      fontWeight: "800",
+      color: colors.text.primary,
+    },
+    gridUnit: {
+      fontSize: 11,
+      fontWeight: "500",
+      color: colors.text.muted,
+    },
+    warningText: {
+      color: colors.accent.warning,
+    },
+    dangerText: {
+      color: colors.accent.danger,
+    },
+    descWrapper: {
+      marginTop: 16,
+      borderTopWidth: 1,
+      borderTopColor: colors.border.subtle,
+      paddingTop: 14,
+    },
+    descTitle: {
+      fontSize: 11,
+      fontWeight: "700",
+      textTransform: "uppercase",
+      color: colors.text.muted,
+      letterSpacing: 0.5,
+      marginBottom: 6,
+    },
+    descText: {
+      fontSize: 14,
+      color: colors.text.secondary,
+      lineHeight: 20,
+    },
+    wastageOverviewCard: {
+      marginTop: 12,
+      backgroundColor: "#fffbeb",
+      borderWidth: 1,
+      borderColor: "#fde68a",
+      borderRadius: 12,
+      padding: 12,
+      gap: 10,
+    },
+    wastageOverviewHeader: {
+      flexDirection: "row",
+      alignItems: "center",
+      gap: 10,
+    },
+    wastageOverviewIcon: {
+      width: 34,
+      height: 34,
+      borderRadius: 17,
+      backgroundColor: "#fef3c7",
+      justifyContent: "center",
+      alignItems: "center",
+    },
+    wastageOverviewTitle: {
+      fontSize: 13,
+      fontWeight: "700",
+      color: "#b45309",
+    },
+    wastageOverviewSub: {
+      fontSize: 12,
+      color: colors.text.secondary,
+      marginTop: 1,
+    },
+    wastageOverviewStats: {
+      flexDirection: "row",
+      gap: 10,
+      backgroundColor: colors.bg.card,
+      borderRadius: 8,
+      padding: 8,
+    },
+    wastageStatBox: {
+      flex: 1,
+    },
+    wastageStatLabel: {
+      fontSize: 10,
+      fontWeight: "700",
+      color: colors.text.muted,
+      textTransform: "uppercase",
+    },
+    wastageStatValue: {
+      fontSize: 14,
+      fontWeight: "800",
+      color: "#b45309",
+      marginTop: 2,
+    },
+    sectionTitle: {
+      fontSize: 14,
+      fontWeight: "700",
+      color: colors.text.muted,
+      textTransform: "uppercase",
+      letterSpacing: 0.8,
+      marginBottom: 12,
+      marginLeft: 4,
+    },
+    actionsContainer: {
+      flexDirection: "row",
+      gap: 12,
+      marginBottom: 24,
+    },
+    stockActionButton: {
+      flex: 1,
+      flexDirection: "row",
+      alignItems: "center",
+      padding: 14,
+      borderRadius: 12,
+      gap: 10,
+    },
+    stockInBtn: {
+      backgroundColor: colors.accent.success,
+    },
+    stockOutBtn: {
+      backgroundColor: "#3b82f6",
+    },
+    stockActionBtnTitle: {
+      color: colors.bg.card,
+      fontWeight: "700",
+      fontSize: 14,
+    },
+    stockActionBtnDesc: {
+      color: "rgba(255, 255, 255, 0.8)",
+      fontSize: 9,
+      fontWeight: "500",
+    },
+    logsContainer: {
+      gap: 10,
+      paddingBottom: 30,
+    },
+    emptyLogsCard: {
+      padding: 24,
+      alignItems: "center",
+      borderWidth: 1.5,
+      borderStyle: "dashed",
+      borderColor: colors.border.subtle,
+      borderRadius: 12,
+      backgroundColor: "#fafafa",
+    },
+    emptyLogsTitle: {
+      fontSize: 14,
+      fontWeight: "700",
+      color: colors.text.muted,
+      marginTop: 8,
+      marginBottom: 2,
+    },
+    emptyLogsDesc: {
+      fontSize: 12,
+      color: colors.text.muted,
+      textAlign: "center",
+    },
+    logItem: {
+      flexDirection: "row",
+      justifyContent: "space-between",
+      alignItems: "center",
+      borderWidth: 1,
+      borderColor: colors.border.subtle,
+      borderRadius: 12,
+      padding: 12,
+      marginBottom: 10,
+      backgroundColor: colors.bg.card,
+    },
+    logPurchaseCircleBg: {
+      backgroundColor: "#ecfdf5",
+    },
+    logConsumeCircleBg: {
+      backgroundColor: "#fee2e2",
+    },
+    logContentFlex: {
+      flex: 1,
+    },
+    logTitleRow: {
+      flexDirection: "row",
+      alignItems: "center",
+      gap: 6,
+    },
+    logActionButtonsRow: {
+      flexDirection: "row",
+      alignItems: "center",
+      gap: 4,
+    },
+    logItemLeft: {
+      flexDirection: "row",
+      gap: 10,
+      flex: 1,
+    },
+    logIndicatorCircle: {
+      width: 28,
+      height: 28,
+      borderRadius: 14,
+      justifyContent: "center",
+      alignItems: "center",
+      marginTop: 2,
+    },
+    logItemTitle: {
+      fontSize: 13,
+      fontWeight: "700",
+      color: colors.text.primary,
+    },
+    logQtyText: {
+      fontSize: 13,
+      fontWeight: "800",
+    },
+    logItemDate: {
+      fontSize: 10,
+      color: colors.text.muted,
+      marginTop: 2,
+    },
+    logItemCostText: {
+      fontSize: 11,
+      color: colors.text.secondary,
+      fontWeight: "600",
+      marginTop: 4,
+    },
+    logItemNotes: {
+      fontSize: 11,
+      color: colors.text.muted,
+      backgroundColor: colors.bg.primary,
+      padding: 6,
+      borderRadius: 6,
+      marginTop: 6,
+      lineHeight: 15,
+    },
+    deleteLogBtn: {
+      padding: 6,
+    },
+    modalBg: {
+      flex: 1,
+      backgroundColor: "rgba(0,0,0,0.55)",
+      justifyContent: "center",
+      alignItems: "center",
+      padding: 16,
+    },
+    modalContent: {
+      backgroundColor: colors.bg.card,
+      borderRadius: 16,
+      padding: 20,
+      width: "92%",
+      maxWidth: 400,
+      maxHeight: "88%",
+      alignItems: "center",
+      shadowColor: colors.text.primary,
+      shadowOffset: { width: 0, height: 4 },
+      shadowOpacity: 0.1,
+      shadowRadius: 15,
+      elevation: 5,
+    },
+    logModalContent: {
+      maxWidth: 440,
+      alignItems: "stretch",
+    },
+    logModalHeader: {
+      flexDirection: "row",
+      justifyContent: "space-between",
+      alignItems: "center",
+      marginBottom: 16,
+    },
+    logModalTitle: {
+      fontSize: 16,
+      fontWeight: "800",
+      color: colors.text.primary,
+    },
+    modalTitle: {
+      fontSize: 18,
+      fontWeight: "800",
+      color: colors.text.primary,
+      marginBottom: 8,
+    },
+    modalDesc: {
+      fontSize: 13,
+      color: colors.text.muted,
+      textAlign: "center",
+      lineHeight: 18,
+      marginBottom: 20,
+    },
+    modalActions: {
+      flexDirection: "row",
+      gap: 10,
+      width: "100%",
+    },
+    modalBtn: {
+      flex: 1,
+      height: 40,
+      borderRadius: 8,
+      justifyContent: "center",
+      alignItems: "center",
+    },
+    modalCancelBtn: {
+      borderWidth: 1.5,
+      borderColor: colors.border.medium,
+      backgroundColor: colors.bg.card,
+    },
+    modalDeleteBtn: {
+      backgroundColor: colors.accent.danger,
+    },
+    modalCancelText: {
+      color: colors.text.muted,
+      fontWeight: "700",
+    },
+    modalDeleteText: {
+      color: colors.bg.card,
+      fontWeight: "700",
+    },
+    modalError: {
+      flexDirection: "row",
+      alignItems: "center",
+      backgroundColor: "#fef2f2",
+      borderWidth: 1,
+      borderColor: "#fca5a5",
+      borderRadius: 8,
+      padding: 8,
+      gap: 6,
+      marginBottom: 12,
+    },
+    modalErrorText: {
+      color: "#b91c1c",
+      fontSize: 12,
+      fontWeight: "600",
+      flex: 1,
+    },
+    modalInputLabel: {
+      fontSize: 11,
+      fontWeight: "700",
+      color: colors.text.secondary,
+      textTransform: "uppercase",
+      marginBottom: 6,
+      marginTop: 8,
+    },
+    modalTextInput: {
+      backgroundColor: colors.bg.card,
+      borderWidth: 1.5,
+      borderColor: colors.border.medium,
+      borderRadius: 8,
+      paddingHorizontal: 10,
+      height: 40,
+      fontSize: 14,
+      color: colors.text.primary,
+      marginBottom: 10,
+    },
+    modalTextArea: {
+      height: 60,
+      paddingVertical: 8,
+    },
+    submitLogBtn: {
+      backgroundColor: colors.accent.success,
+      height: 44,
+      borderRadius: 8,
+      justifyContent: "center",
+      alignItems: "center",
+      marginTop: 10,
+    },
+    submitOutBtn: {
+      backgroundColor: "#3b82f6",
+    },
+    submitLogBtnText: {
+      color: colors.bg.card,
+      fontWeight: "700",
+      fontSize: 14,
+    },
+    disabledBtn: {
+      opacity: 0.6,
+    },
+    dateSelector: {
+      flexDirection: "row",
+      alignItems: "center",
+      backgroundColor: colors.bg.card,
+      borderWidth: 1.5,
+      borderColor: colors.border.medium,
+      borderRadius: 8,
+      paddingHorizontal: 10,
+      height: 40,
+      marginBottom: 10,
+    },
+    dateSelectorText: {
+      fontSize: 14,
+      color: colors.text.primary,
+      fontWeight: "500",
+    },
+    dropdownSelector: {
+      flexDirection: "row",
+      justifyContent: "space-between",
+      alignItems: "center",
+      backgroundColor: colors.bg.card,
+      borderWidth: 1.5,
+      borderColor: colors.border.medium,
+      borderRadius: 8,
+      paddingHorizontal: 10,
+      height: 40,
+      marginBottom: 10,
+    },
+    dropdownSelectorText: {
+      fontSize: 14,
+      color: colors.text.primary,
+      fontWeight: "500",
+    },
+    dropdownListContainer: {
+      maxHeight: 120,
+      borderWidth: 1.5,
+      borderColor: colors.border.medium,
+      borderRadius: 8,
+      marginBottom: 10,
+      backgroundColor: colors.bg.primary,
+      overflow: "hidden",
+    },
+    dropdownList: {
+      padding: 2,
+    },
+    dropdownListItem: {
+      paddingVertical: 8,
+      paddingHorizontal: 10,
+      borderBottomWidth: 1,
+      borderBottomColor: colors.border.subtle,
+    },
+    dropdownListItemText: {
+      fontSize: 13,
+      color: colors.text.primary,
+    },
+    calcRow: {
+      flexDirection: "row",
+      alignItems: "center",
+      backgroundColor: "#f0fdf4",
+      padding: 10,
+      borderRadius: 8,
+      borderWidth: 1,
+      borderColor: "#bbf7d0",
+      marginBottom: 10,
+    },
+    calcLabel: {
+      fontSize: 12,
+      fontWeight: "600",
+      color: "#166534",
+    },
+    calcVal: {
+      fontSize: 13,
+      fontWeight: "800",
+      color: "#166534",
+    },
+    creditInfoAlert: {
+      flexDirection: "row",
+      alignItems: "center",
+      backgroundColor: "#fffbeb",
+      borderWidth: 1,
+      borderColor: "#fde68a",
+      padding: 8,
+      borderRadius: 8,
+      gap: 6,
+      marginBottom: 10,
+    },
+    creditInfoAlertText: {
+      color: "#92400e",
+      fontSize: 11,
+      fontWeight: "600",
+      flex: 1,
+    },
+  })
 };
 ;

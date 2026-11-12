@@ -8,6 +8,8 @@ import {
   FlatList,
   Pressable,
   ActivityIndicator,
+  KeyboardAvoidingView,
+  Platform,
 } from "react-native";
 import { MaterialIcons } from "@expo/vector-icons";
 import * as Contacts from "expo-contacts/legacy";
@@ -174,8 +176,11 @@ export default function ContactsModal({
   });
 
   return (
-    <Modal visible={visible} animationType="slide" transparent>
-      <View style={styles.modalBg}>
+    <Modal visible={visible} animationType="slide" transparent onRequestClose={onClose}>
+      <KeyboardAvoidingView
+        behavior={Platform.OS === "ios" ? "padding" : "height"}
+        style={styles.modalBg}
+      >
         <View style={styles.container}>
           {/* Header */}
           <View style={styles.header}>
@@ -242,7 +247,7 @@ export default function ContactsModal({
             />
           )}
         </View>
-      </View>
+      </KeyboardAvoidingView>
     </Modal>
   );
 }

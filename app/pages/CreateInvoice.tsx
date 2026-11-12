@@ -29,12 +29,14 @@ import EasyCalendarModal from "../components/EasyCalendarModal";
 import BackButton from "../components/BackButton";
 import { useTheme } from "../context/ThemeContext";
 import { UserContext } from "../context/UserContext";
+import { useResponsive } from "../../utils/responsive";
 import { TransactionShareBottomSheet } from "../../src/components/sharing/TransactionShareBottomSheet";
 import { adaptToTransactionData } from "../../src/utils/transactionAdapter";
 import { TransactionData } from "../../src/types/sharing";
 
 export default function CreateInvoice() {
   const { theme } = useTheme();
+  const { kavBehavior, scrollBottomPadding } = useResponsive();
   const { colors, spacing, radius, shadows } = theme;
   const styles = useMemo(() => getStyles(theme), [theme]);
   const router = useRouter();
@@ -905,11 +907,11 @@ export default function CreateInvoice() {
         onSelectContact={handleImportContact}
       />
       <KeyboardAvoidingView
-        behavior={Platform.OS === "ios" ? "padding" : undefined}
+        behavior={kavBehavior}
         style={{ flex: 1 }}
       >
         <ScrollView
-          contentContainerStyle={styles.container}
+          contentContainerStyle={[styles.container, { paddingBottom: scrollBottomPadding }]}
           showsVerticalScrollIndicator={false}
           keyboardShouldPersistTaps="handled"
         >
@@ -2068,8 +2070,17 @@ export default function CreateInvoice() {
                 <View style={styles.divider} />
 
                 <View style={styles.calcRow}>
-                  <Text style={styles.calcLabelBold}>Total Balance Unpaid:</Text>
-                  <Text style={[styles.calcValueBold, totalNetUnpaid > 0 ? { color: colors.accent.danger } : { color: colors.accent.success }]}>
+                  <Text style={[styles.calcLabelBold, { flex: 1, flexShrink: 1 }]}>Total Balance Unpaid:</Text>
+                  <Text
+                    style={[
+                      styles.calcValueBold,
+                      { flexShrink: 0 },
+                      totalNetUnpaid > 0 ? { color: colors.accent.danger } : { color: colors.accent.success },
+                    ]}
+                    numberOfLines={1}
+                    adjustsFontSizeToFit
+                    minimumFontScale={0.75}
+                  >
                     ₹{totalNetUnpaid.toLocaleString("en-IN")}
                   </Text>
                 </View>
@@ -2703,8 +2714,9 @@ const getStyles = (theme: any) => {
     backgroundColor: colors.bg.card,
     borderRadius: 20,
     padding: 16,
-    width: "85%",
-    maxWidth: 340,
+    width: "92%",
+    maxWidth: 420,
+    maxHeight: "88%",
     shadowColor: "#000",
     shadowOffset: { width: 0, height: 4 },
     shadowOpacity: 0.1,

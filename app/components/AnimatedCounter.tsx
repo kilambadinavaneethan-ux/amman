@@ -15,6 +15,7 @@ interface AnimatedCounterProps {
   prefix?: string;
   duration?: number;
   style?: any;
+  maxFontSizeMultiplier?: number;
 }
 
 export default function AnimatedCounter({
@@ -22,6 +23,7 @@ export default function AnimatedCounter({
   prefix = "",
   duration = 1200,
   style,
+  maxFontSizeMultiplier = 1.2,
 }: AnimatedCounterProps) {
   const count = useSharedValue(0);
 
@@ -46,6 +48,7 @@ export default function AnimatedCounter({
       underlineColorAndroid="transparent"
       editable={false}
       style={[styles.text, style]}
+      maxFontSizeMultiplier={maxFontSizeMultiplier}
       // Fallback value for the initial paint/SSR
       value={`${prefix}${Math.round(value).toLocaleString("en-IN")}`}
       animatedProps={animatedProps}

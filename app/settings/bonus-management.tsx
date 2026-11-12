@@ -1,9 +1,12 @@
 import { MaterialIcons } from "@expo/vector-icons";
 import { useRouter } from "expo-router";
-import { useCallback, useContext, useEffect, useMemo, useState } from "react";
+import React, { useCallback, useContext, useEffect, useMemo, useState } from "react";
 import {
   ActivityIndicator,
   Alert,
+  FlatList,
+  KeyboardAvoidingView,
+  ListRenderItem,
   Modal,
   Pressable,
   RefreshControl,
@@ -16,6 +19,7 @@ import {
 } from "react-native";
 
 // Theme & Navigation
+import { useResponsive } from "../../utils/responsive";
 import BackButton from "../components/BackButton";
 import EasyCalendarModal from "../components/EasyCalendarModal";
 import ProtectedRoute from "../components/ProtectedRoute";
@@ -34,27 +38,20 @@ import {
   updateDoc,
 } from "firebase/firestore";
 import { db, normalizeDateValue } from "../../src/config/firebase";
+import { BonusEntry } from "../../src/types/models";
 import { getMarkingConfig, normalizeMarkings } from "../../src/utils/markingUtils";
+import { roundCurrency } from "../../utils/currency";
+import {
+  buildUnifiedBonuses,
+  computeBonusStats,
+  filterAndSortBonuses,
+} from "../../utils/ledgerCalculations";
 import { CustomerContext } from "../context/CustomerContext";
 import { DeliveryPartnerContext } from "../context/DeliveryPartnerContext";
 import { UserContext } from "../context/UserContext";
 import { WorkerContext } from "../context/WorkerContext";
 
-interface BonusItem {
-  id: string;
-  type: "worker" | "delivery" | "customer" | "other";
-  recipientId: string;
-  recipientName: string;
-  recipientPhone?: string;
-  recipientRole?: string;
-  markings?: string[];
-  amount: number;
-  reason: string;
-  notes?: string;
-  createdAt: Date;
-  updatedAt?: Date;
-  rawData?: any;
-}
+type BonusItem = BonusEntry;
 
 const OTHER_ROLES = [
   { id: "police", label: "Police", icon: "local-police" as const, emoji: "👮" },
@@ -99,6 +96,151 @@ function getOtherRoleDetails(role?: string) {
   return { label: role || "Other", icon: "groups" as const, color: "#9333EA", bg: "#FAF5FF", border: "#E9D5FF" };
 }
 
+interface BonusRowProps {
+  item: BonusItem;
+  isDark: boolean;
+  styles: any;
+  colors: any;
+  onSelect: (item: BonusItem) => void;
+}
+
+const BonusRow = React.memo(function BonusRow({
+  item,
+  isDark,
+  styles,
+  colors,
+  onSelect,
+}: BonusRowProps) {
+  const isWorker = item.type === "worker";
+  const isDelivery = item.type === "delivery";
+  const isCust = item.type === "customer";
+  const isOther = item.type === "other";
+
+  const otherRole = isOther ? getOtherRoleDetails(item.recipientRole) : null;
+
+  const tagBg = isWorker
+    ? `${colors.accent.primary}18`
+    : isDelivery
+      ? "#8B5CF618"
+      : isCust
+        ? "#10B98118"
+        : otherRole?.bg || "#9333EA18";
+
+  const tagColor = isWorker
+    ? colors.accent.primary
+    : isDelivery
+      ? "#8B5CF6"
+      : isCust
+        ? "#10B981"
+        : otherRole?.color || "#9333EA";
+
+  const iconName = isWorker
+    ? "engineering"
+    : isDelivery
+      ? "local-shipping"
+      : isCust
+        ? "loyalty"
+        : (otherRole?.icon as any) || "groups";
+
+  const roleLabel = isWorker
+    ? "Worker"
+    : isDelivery
+      ? "Delivery"
+      : isCust
+        ? "Marked Cust."
+        : item.recipientRole || "Other";
+
+  return (
+    <Pressable
+      style={({ pressed }) => [
+        styles.bonusCard,
+        pressed && styles.bonusCardPressed,
+      ]}
+      onPress={() => onSelect(item)}
+    >
+      <View style={styles.cardHeaderRow}>
+        <View style={styles.cardRecipientGroup}>
+          <View style={[styles.recipientAvatar, { backgroundColor: tagBg }]}>
+            <MaterialIcons name={iconName} size={20} color={tagColor} />
+          </View>
+          <View style={styles.bonusCardMain}>
+            <View style={styles.nameBadgeRow}>
+              <Text style={styles.recipientName} numberOfLines={1}>
+                {item.recipientName}
+              </Text>
+              <View style={[styles.roleBadge, { backgroundColor: tagBg }]}>
+                <Text style={[styles.roleBadgeText, { color: tagColor }]}>
+                  {roleLabel}
+                </Text>
+              </View>
+            </View>
+            <Text style={styles.bonusDate}>
+              {item.createdAt.toLocaleDateString("en-IN", {
+                day: "2-digit",
+                month: "short",
+                year: "numeric",
+              })}
+            </Text>
+          </View>
+        </View>
+
+        <View style={styles.cardAmountGroup}>
+          <Text style={styles.bonusAmount}>
+            ₹{item.amount.toLocaleString("en-IN")}
+          </Text>
+          <View style={styles.verifiedStarPill}>
+            <MaterialIcons name="stars" size={12} color="#F59E0B" />
+            <Text style={styles.verifiedStarText}>Reward</Text>
+          </View>
+        </View>
+      </View>
+
+      {/* Active Markings chips if customer */}
+      {isCust && item.markings && item.markings.length > 0 && (
+        <View style={styles.markingsRow}>
+          {item.markings.map((tag) => {
+            const cfg = getMarkingConfig(tag, isDark);
+            return (
+              <View
+                key={tag}
+                style={[
+                  styles.markingPill,
+                  { backgroundColor: cfg.bg, borderColor: cfg.border },
+                ]}
+              >
+                <MaterialIcons name={cfg.icon} size={11} color={cfg.color} />
+                <Text style={[styles.markingPillText, { color: cfg.color }]}>
+                  {tag}
+                </Text>
+              </View>
+            );
+          })}
+        </View>
+      )}
+
+      <View style={styles.cardBody}>
+        <View style={styles.reasonPill}>
+          <MaterialIcons name="label" size={13} color="#D97706" />
+          <Text style={styles.reasonText} numberOfLines={1}>
+            {item.reason}
+          </Text>
+        </View>
+
+        {item.notes ? (
+          <Text style={styles.notesPreview} numberOfLines={2}>
+            "{item.notes}"
+          </Text>
+        ) : null}
+      </View>
+
+      <View style={styles.cardFooter}>
+        <Text style={styles.tapToViewText}>Tap for details, receipt & options</Text>
+        <MaterialIcons name="chevron-right" size={18} color={colors.text.muted} />
+      </View>
+    </Pressable>
+  );
+});
+
 const WORKER_REASONS = [
   "Festival Bonus",
   "Performance Bonus",
@@ -136,6 +278,8 @@ function BonusManagementContent() {
   const router = useRouter();
   const { theme } = useTheme();
   const { colors, spacing, radius, shadows } = theme;
+  const { insets, kavBehavior, bottomFabOffset, scrollBottomPadding, currencyKpiTextProps } =
+    useResponsive();
   const styles = useMemo(() => getStyles(theme), [theme]);
   const { scrollViewRef, handleScroll, handleContentSizeChange } =
     useScrollRestoration("/settings/bonus-management");
@@ -349,85 +493,27 @@ function BonusManagementContent() {
   }, [customers]);
 
   // Combined Unified Bonuses List
-  const unifiedBonuses = useMemo<BonusItem[]>(() => {
-    const list: BonusItem[] = [];
-
-    // Worker bonuses
-    workerBonusesRaw.forEach((item) => {
-      const recipient = workerMap.get(item.workerId);
-      list.push({
-        id: item.id,
-        type: "worker",
-        recipientId: item.workerId,
-        recipientName: recipient?.name || item.workerName || "Worker",
-        recipientPhone: recipient?.phone,
-        amount: Number(item.amount || 0),
-        reason: item.reason || "Performance Bonus",
-        notes: item.notes || "",
-        createdAt: item.createdAt instanceof Date ? item.createdAt : new Date(item.createdAt || Date.now()),
-        updatedAt: item.updatedAt ? normalizeDateValue(item.updatedAt) : undefined,
-        rawData: item,
-      });
-    });
-
-    // Delivery partner bonuses
-    deliveryBonusesRaw.forEach((item) => {
-      const recipient = partnerMap.get(item.partnerId);
-      list.push({
-        id: item.id,
-        type: "delivery",
-        recipientId: item.partnerId,
-        recipientName: recipient?.name || item.partnerName || "Delivery Partner",
-        recipientPhone: recipient?.phone,
-        amount: Number(item.amount || 0),
-        reason: item.reason || "Performance Bonus",
-        notes: item.notes || "",
-        createdAt: item.createdAt instanceof Date ? item.createdAt : new Date(item.createdAt || Date.now()),
-        updatedAt: item.updatedAt ? normalizeDateValue(item.updatedAt) : undefined,
-        rawData: item,
-      });
-    });
-
-    // Marked Customer bonuses
-    customerBonusesRaw.forEach((item) => {
-      const recipient = customerMap.get(item.customerId);
-      const marks = item.markings || recipient?.markings || [];
-      list.push({
-        id: item.id,
-        type: "customer",
-        recipientId: item.customerId,
-        recipientName: recipient?.name || item.customerName || "Marked Customer",
-        recipientPhone: recipient?.phone || item.customerPhone,
-        markings: marks,
-        amount: Number(item.amount || 0),
-        reason: item.reason || "Contractor Commission",
-        notes: item.notes || "",
-        createdAt: item.createdAt instanceof Date ? item.createdAt : new Date(item.createdAt || Date.now()),
-        updatedAt: item.updatedAt ? normalizeDateValue(item.updatedAt) : undefined,
-        rawData: item,
-      });
-    });
-
-    // Other (Police, Lineman, Municipal, Security, etc.) bonuses
-    otherBonusesRaw.forEach((item) => {
-      list.push({
-        id: item.id,
-        type: "other",
-        recipientId: item.id,
-        recipientName: item.recipientName || "Recipient",
-        recipientPhone: item.recipientPhone || "",
-        recipientRole: item.recipientRole || "Other",
-        amount: Number(item.amount || 0),
-        reason: item.reason || "Festival Gift / Perk",
-        notes: item.notes || "",
-        createdAt: item.createdAt instanceof Date ? item.createdAt : new Date(item.createdAt || Date.now()),
-        updatedAt: item.updatedAt ? normalizeDateValue(item.updatedAt) : undefined,
-        rawData: item,
-      });
-    });
-
-    return list;
-  }, [workerBonusesRaw, deliveryBonusesRaw, customerBonusesRaw, otherBonusesRaw, workerMap, partnerMap, customerMap]);
+  const unifiedBonuses = useMemo<BonusItem[]>(
+    () =>
+      buildUnifiedBonuses({
+        workerBonusesRaw,
+        deliveryBonusesRaw,
+        customerBonusesRaw,
+        otherBonusesRaw,
+        workerMap,
+        partnerMap,
+        customerMap,
+      }),
+    [
+      workerBonusesRaw,
+      deliveryBonusesRaw,
+      customerBonusesRaw,
+      otherBonusesRaw,
+      workerMap,
+      partnerMap,
+      customerMap,
+    ]
+  );
 
   // Unique past 'Other' recipients for autocomplete / suggestions
   const pastOtherRecipients = useMemo(() => {
@@ -542,90 +628,43 @@ function BonusManagementContent() {
   );
 
   // Filtered & Sorted bonuses
-  const filteredBonuses = useMemo(() => {
-    return unifiedBonuses
-      .filter((b) => {
-        // Tab filter
-        if (selectedTab === "worker" && b.type !== "worker") return false;
-        if (selectedTab === "delivery" && b.type !== "delivery") return false;
-        if (selectedTab === "customer" && b.type !== "customer") return false;
-        if (selectedTab === "other" && b.type !== "other") return false;
-
-        // Date period filter
-        if (!isDateInFilter(b.createdAt)) return false;
-
-        // Search query filter
-        if (searchQuery.trim()) {
-          const q = searchQuery.toLowerCase();
-          const matchName = b.recipientName.toLowerCase().includes(q);
-          const matchReason = b.reason.toLowerCase().includes(q);
-          const matchNotes = (b.notes || "").toLowerCase().includes(q);
-          const matchPhone = (b.recipientPhone || "").toLowerCase().includes(q);
-          const matchMarking = (b.markings || []).some((m) => m.toLowerCase().includes(q));
-          const matchRole = (b.recipientRole || "").toLowerCase().includes(q);
-          if (!matchName && !matchReason && !matchNotes && !matchPhone && !matchMarking && !matchRole) return false;
-        }
-
-        return true;
-      })
-      .sort((a, b) => {
-        if (sortBy === "newest") return b.createdAt.getTime() - a.createdAt.getTime();
-        if (sortBy === "oldest") return a.createdAt.getTime() - b.createdAt.getTime();
-        if (sortBy === "amount_desc") return b.amount - a.amount;
-        if (sortBy === "amount_asc") return a.amount - b.amount;
-        return 0;
-      });
-  }, [unifiedBonuses, selectedTab, isDateInFilter, searchQuery, sortBy]);
+  const filteredBonuses = useMemo(
+    () =>
+      filterAndSortBonuses({
+        unifiedBonuses,
+        selectedTab,
+        searchQuery,
+        sortBy,
+        isDateInFilter,
+      }),
+    [unifiedBonuses, selectedTab, isDateInFilter, searchQuery, sortBy]
+  );
 
   // Financial aggregates
-  const stats = useMemo(() => {
-    let totalAll = 0;
-    let totalWorker = 0;
-    let countWorker = 0;
-    let totalDelivery = 0;
-    let countDelivery = 0;
-    let totalCustomer = 0;
-    let countCustomer = 0;
-    let totalOther = 0;
-    let countOther = 0;
-    let filteredTotal = 0;
+  const stats = useMemo(
+    () => computeBonusStats(unifiedBonuses, filteredBonuses),
+    [unifiedBonuses, filteredBonuses]
+  );
 
-    unifiedBonuses.forEach((b) => {
-      totalAll += b.amount;
-      if (b.type === "worker") {
-        totalWorker += b.amount;
-        countWorker += 1;
-      } else if (b.type === "delivery") {
-        totalDelivery += b.amount;
-        countDelivery += 1;
-      } else if (b.type === "customer") {
-        totalCustomer += b.amount;
-        countCustomer += 1;
-      } else if (b.type === "other") {
-        totalOther += b.amount;
-        countOther += 1;
-      }
-    });
+  const handleSelectBonus = useCallback((item: BonusItem) => {
+    setSelectedBonus(item);
+    setIsDetailModalOpen(true);
+  }, []);
 
-    filteredBonuses.forEach((b) => {
-      filteredTotal += b.amount;
-    });
+  const bonusKeyExtractor = useCallback((item: BonusItem) => `${item.type}-${item.id}`, []);
 
-    return {
-      totalAll,
-      totalCount: unifiedBonuses.length,
-      totalWorker,
-      countWorker,
-      totalDelivery,
-      countDelivery,
-      totalCustomer,
-      countCustomer,
-      totalOther,
-      countOther,
-      filteredTotal,
-      filteredCount: filteredBonuses.length,
-    };
-  }, [unifiedBonuses, filteredBonuses]);
+  const renderBonusItem: ListRenderItem<BonusItem> = useCallback(
+    ({ item }) => (
+      <BonusRow
+        item={item}
+        isDark={theme.isDark}
+        styles={styles}
+        colors={colors}
+        onSelect={handleSelectBonus}
+      />
+    ),
+    [theme.isDark, styles, colors, handleSelectBonus]
+  );
 
   const onRefresh = useCallback(() => {
     setRefreshing(true);
@@ -669,7 +708,7 @@ function BonusManagementContent() {
 
   // Submit Award Bonus
   const handleSaveAward = async () => {
-    const amt = parseFloat(awardAmount);
+    const amt = roundCurrency(parseFloat(awardAmount));
     if (isNaN(amt) || amt <= 0) {
       Alert.alert("Invalid Amount", "Please enter a valid bonus amount greater than zero.");
       return;
@@ -828,7 +867,7 @@ function BonusManagementContent() {
   // Submit Edit Bonus
   const handleSaveEdit = async () => {
     if (!selectedBonus) return;
-    const amt = parseFloat(editAmount);
+    const amt = roundCurrency(parseFloat(editAmount));
     if (isNaN(amt) || amt <= 0) {
       Alert.alert("Invalid Amount", "Please enter a valid bonus amount.");
       return;
@@ -978,10 +1017,228 @@ function BonusManagementContent() {
 
   const isLoading = loadingWorkerBonuses || loadingDeliveryBonuses || loadingCustomerBonuses || loadingOtherBonuses;
 
+  const bonusListHeader = (
+    <>
+      {/* KPI Summary Cards */}
+      <ScrollView horizontal showsHorizontalScrollIndicator={false} contentContainerStyle={styles.statsScroll}>
+        <View style={[styles.statCard, { borderLeftColor: "#F59E0B", borderLeftWidth: 4 }]}>
+          <View style={styles.statTopRow}>
+            <Text style={styles.statLabel}>Total Bonuses</Text>
+            <MaterialIcons name="stars" size={18} color="#F59E0B" />
+          </View>
+          <Text style={styles.statValue} {...currencyKpiTextProps}>₹{stats.totalAll.toLocaleString("en-IN")}</Text>
+          <Text style={styles.statMeta}>{stats.totalCount} total rewards</Text>
+        </View>
+
+        <View style={[styles.statCard, { borderLeftColor: colors.accent.primary, borderLeftWidth: 4 }]}>
+          <View style={styles.statTopRow}>
+            <Text style={styles.statLabel}>Workers</Text>
+            <MaterialIcons name="engineering" size={18} color={colors.accent.primary} />
+          </View>
+          <Text style={styles.statValue} {...currencyKpiTextProps}>₹{stats.totalWorker.toLocaleString("en-IN")}</Text>
+          <Text style={styles.statMeta}>{stats.countWorker} rewards</Text>
+        </View>
+
+        <View style={[styles.statCard, { borderLeftColor: "#8B5CF6", borderLeftWidth: 4 }]}>
+          <View style={styles.statTopRow}>
+            <Text style={styles.statLabel}>Delivery</Text>
+            <MaterialIcons name="local-shipping" size={18} color="#8B5CF6" />
+          </View>
+          <Text style={styles.statValue} {...currencyKpiTextProps}>₹{stats.totalDelivery.toLocaleString("en-IN")}</Text>
+          <Text style={styles.statMeta}>{stats.countDelivery} rewards</Text>
+        </View>
+
+        <View style={[styles.statCard, { borderLeftColor: "#10B981", borderLeftWidth: 4 }]}>
+          <View style={styles.statTopRow}>
+            <Text style={styles.statLabel}>Marked Cust.</Text>
+            <MaterialIcons name="loyalty" size={18} color="#10B981" />
+          </View>
+          <Text style={styles.statValue} {...currencyKpiTextProps}>₹{stats.totalCustomer.toLocaleString("en-IN")}</Text>
+          <Text style={styles.statMeta}>{stats.countCustomer} rewards</Text>
+        </View>
+
+        <View style={[styles.statCard, { borderLeftColor: "#9333EA", borderLeftWidth: 4 }]}>
+          <View style={styles.statTopRow}>
+            <Text style={styles.statLabel}>Others</Text>
+            <MaterialIcons name="groups" size={18} color="#9333EA" />
+          </View>
+          <Text style={styles.statValue} {...currencyKpiTextProps}>₹{stats.totalOther.toLocaleString("en-IN")}</Text>
+          <Text style={styles.statMeta}>{stats.countOther} rewards</Text>
+        </View>
+      </ScrollView>
+
+      {/* Tab Switcher */}
+      <ScrollView horizontal showsHorizontalScrollIndicator={false} contentContainerStyle={styles.tabScrollWrap}>
+        <Pressable
+          style={[styles.tabButton, selectedTab === "all" && styles.tabButtonActive]}
+          onPress={() => setSelectedTab("all")}
+        >
+          <Text style={[styles.tabText, selectedTab === "all" && styles.tabTextActive]}>
+            All ({unifiedBonuses.length})
+          </Text>
+        </Pressable>
+        <Pressable
+          style={[styles.tabButton, selectedTab === "worker" && styles.tabButtonActive]}
+          onPress={() => setSelectedTab("worker")}
+        >
+          <Text style={[styles.tabText, selectedTab === "worker" && styles.tabTextActive]}>
+            👷 Workers ({workerBonusesRaw.length})
+          </Text>
+        </Pressable>
+        <Pressable
+          style={[styles.tabButton, selectedTab === "delivery" && styles.tabButtonActive]}
+          onPress={() => setSelectedTab("delivery")}
+        >
+          <Text style={[styles.tabText, selectedTab === "delivery" && styles.tabTextActive]}>
+            🚚 Delivery ({deliveryBonusesRaw.length})
+          </Text>
+        </Pressable>
+        <Pressable
+          style={[styles.tabButton, selectedTab === "customer" && styles.tabButtonActive]}
+          onPress={() => setSelectedTab("customer")}
+        >
+          <Text style={[styles.tabText, selectedTab === "customer" && styles.tabTextActive]}>
+            🏷️ Marked Cust. ({customerBonusesRaw.length})
+          </Text>
+        </Pressable>
+        <Pressable
+          style={[styles.tabButton, selectedTab === "other" && styles.tabButtonActive]}
+          onPress={() => setSelectedTab("other")}
+        >
+          <Text style={[styles.tabText, selectedTab === "other" && styles.tabTextActive]}>
+            🤝 Others ({otherBonusesRaw.length})
+          </Text>
+        </Pressable>
+      </ScrollView>
+
+      {/* Search & Period Controls */}
+      <View style={styles.filterCard}>
+        <View style={styles.searchBar}>
+          <MaterialIcons name="search" size={20} color={colors.text.muted} />
+          <TextInput
+            style={styles.searchInput}
+            placeholder="Search recipient, marking, reason, or notes..."
+            placeholderTextColor={colors.text.muted}
+            value={searchQuery}
+            onChangeText={setSearchQuery}
+            clearButtonMode="while-editing"
+          />
+          {searchQuery.length > 0 && (
+            <Pressable onPress={() => setSearchQuery("")} hitSlop={8}>
+              <MaterialIcons name="close" size={18} color={colors.text.muted} />
+            </Pressable>
+          )}
+        </View>
+
+        {/* Period Filter Chips */}
+        <ScrollView horizontal showsHorizontalScrollIndicator={false} contentContainerStyle={styles.periodRow}>
+          {(["all", "today", "week", "month", "custom"] as const).map((period) => {
+            const active = selectedPeriod === period;
+            const labels: Record<string, string> = {
+              all: "All Time",
+              today: "Today",
+              week: "7 Days",
+              month: "This Month",
+              custom: "Custom Range",
+            };
+            return (
+              <Pressable
+                key={period}
+                style={[styles.periodChip, active && styles.periodChipActive]}
+                onPress={() => setSelectedPeriod(period)}
+              >
+                <Text style={[styles.periodChipText, active && styles.periodChipTextActive]}>
+                  {labels[period]}
+                </Text>
+              </Pressable>
+            );
+          })}
+        </ScrollView>
+
+        {/* Custom Date Range Display */}
+        {selectedPeriod === "custom" && (
+          <View style={styles.customDateRow}>
+            <Pressable
+              style={styles.customDateBtn}
+              onPress={() => setCalendarTarget("start")}
+            >
+              <MaterialIcons name="date-range" size={16} color={colors.accent.primary} />
+              <Text style={styles.customDateText}>
+                {startDate ? startDate.toLocaleDateString("en-IN") : "Start Date"}
+              </Text>
+            </Pressable>
+            <Text style={styles.customDateSep}>to</Text>
+            <Pressable
+              style={styles.customDateBtn}
+              onPress={() => setCalendarTarget("end")}
+            >
+              <MaterialIcons name="date-range" size={16} color={colors.accent.primary} />
+              <Text style={styles.customDateText}>
+                {endDate ? endDate.toLocaleDateString("en-IN") : "End Date"}
+              </Text>
+            </Pressable>
+          </View>
+        )}
+
+        {/* Sort Selector */}
+        <View style={styles.sortRow}>
+          <Text style={styles.sortLabel}>Showing {filteredBonuses.length} records</Text>
+          <View style={styles.sortChips}>
+            <Pressable
+              style={[styles.sortChip, sortBy === "newest" && styles.sortChipActive]}
+              onPress={() => setSortBy("newest")}
+            >
+              <Text style={[styles.sortChipText, sortBy === "newest" && styles.sortChipTextActive]}>
+                Newest
+              </Text>
+            </Pressable>
+            <Pressable
+              style={[styles.sortChip, sortBy === "amount_desc" && styles.sortChipActive]}
+              onPress={() => setSortBy("amount_desc")}
+            >
+              <Text style={[styles.sortChipText, sortBy === "amount_desc" && styles.sortChipTextActive]}>
+                Highest ₹
+              </Text>
+            </Pressable>
+          </View>
+        </View>
+      </View>
+    </>
+  );
+
+  const bonusListData = isLoading && unifiedBonuses.length === 0 ? [] : filteredBonuses;
+
+  const bonusListEmpty =
+    isLoading && unifiedBonuses.length === 0 ? (
+      <View style={styles.loadingBox}>
+        <ActivityIndicator size="large" color={colors.accent.primary} />
+        <Text style={styles.loadingText}>Loading bonus records...</Text>
+      </View>
+    ) : (
+      <View style={styles.emptyCard}>
+        <View style={styles.emptyIconCircle}>
+          <MaterialIcons name="stars" size={36} color="#F59E0B" />
+        </View>
+        <Text style={styles.emptyTitle}>No Bonus Records Found</Text>
+        <Text style={styles.emptyDesc}>
+          {searchQuery || selectedPeriod !== "all"
+            ? "No bonuses match your active filters. Try adjusting your search or date period."
+            : "Acknowledge and reward your workforce and marked contractors/clients with festival gifts and performance perks."}
+        </Text>
+        <Pressable
+          style={styles.emptyActionBtn}
+          onPress={() => handleOpenAwardModal()}
+        >
+          <MaterialIcons name="add" size={18} color="#ffffff" />
+          <Text style={styles.emptyActionBtnText}>Award First Bonus</Text>
+        </Pressable>
+      </View>
+    );
+
   return (
     <View style={styles.screenWrapper}>
       {/* Top Header */}
-      <View style={styles.topHeader}>
+      <View style={[styles.topHeader, { paddingTop: Math.max(insets.top + 8, spacing.md) }]}>
         <BackButton label="Settings" />
         <View style={styles.headerTitleGroup}>
           <View style={styles.headerIconWrap}>
@@ -1004,371 +1261,32 @@ function BonusManagementContent() {
         </Pressable>
       </View>
 
-      <ScrollView
+      <FlatList
         ref={scrollViewRef}
-        contentContainerStyle={styles.container}
+        contentContainerStyle={[styles.container, { paddingBottom: scrollBottomPadding + 68 }]}
+        data={bonusListData}
+        keyExtractor={bonusKeyExtractor}
+        renderItem={renderBonusItem}
+        ListHeaderComponent={bonusListHeader}
+        ListEmptyComponent={bonusListEmpty}
         showsVerticalScrollIndicator={false}
         scrollEventThrottle={32}
         onScroll={handleScroll}
         onContentSizeChange={handleContentSizeChange}
+        initialNumToRender={10}
+        maxToRenderPerBatch={10}
+        windowSize={5}
+        removeClippedSubviews={true}
         refreshControl={
           <RefreshControl refreshing={refreshing} onRefresh={onRefresh} colors={[colors.accent.primary]} />
         }
-      >
-        {/* KPI Summary Cards */}
-        <ScrollView horizontal showsHorizontalScrollIndicator={false} contentContainerStyle={styles.statsScroll}>
-          <View style={[styles.statCard, { borderLeftColor: "#F59E0B", borderLeftWidth: 4 }]}>
-            <View style={styles.statTopRow}>
-              <Text style={styles.statLabel}>Total Bonuses</Text>
-              <MaterialIcons name="stars" size={18} color="#F59E0B" />
-            </View>
-            <Text style={styles.statValue}>₹{stats.totalAll.toLocaleString("en-IN")}</Text>
-            <Text style={styles.statMeta}>{stats.totalCount} total rewards</Text>
-          </View>
-
-          <View style={[styles.statCard, { borderLeftColor: colors.accent.primary, borderLeftWidth: 4 }]}>
-            <View style={styles.statTopRow}>
-              <Text style={styles.statLabel}>Workers</Text>
-              <MaterialIcons name="engineering" size={18} color={colors.accent.primary} />
-            </View>
-            <Text style={styles.statValue}>₹{stats.totalWorker.toLocaleString("en-IN")}</Text>
-            <Text style={styles.statMeta}>{stats.countWorker} rewards</Text>
-          </View>
-
-          <View style={[styles.statCard, { borderLeftColor: "#8B5CF6", borderLeftWidth: 4 }]}>
-            <View style={styles.statTopRow}>
-              <Text style={styles.statLabel}>Delivery</Text>
-              <MaterialIcons name="local-shipping" size={18} color="#8B5CF6" />
-            </View>
-            <Text style={styles.statValue}>₹{stats.totalDelivery.toLocaleString("en-IN")}</Text>
-            <Text style={styles.statMeta}>{stats.countDelivery} rewards</Text>
-          </View>
-
-          <View style={[styles.statCard, { borderLeftColor: "#10B981", borderLeftWidth: 4 }]}>
-            <View style={styles.statTopRow}>
-              <Text style={styles.statLabel}>Marked Cust.</Text>
-              <MaterialIcons name="loyalty" size={18} color="#10B981" />
-            </View>
-            <Text style={styles.statValue}>₹{stats.totalCustomer.toLocaleString("en-IN")}</Text>
-            <Text style={styles.statMeta}>{stats.countCustomer} rewards</Text>
-          </View>
-
-          <View style={[styles.statCard, { borderLeftColor: "#9333EA", borderLeftWidth: 4 }]}>
-            <View style={styles.statTopRow}>
-              <Text style={styles.statLabel}>Others</Text>
-              <MaterialIcons name="groups" size={18} color="#9333EA" />
-            </View>
-            <Text style={styles.statValue}>₹{stats.totalOther.toLocaleString("en-IN")}</Text>
-            <Text style={styles.statMeta}>{stats.countOther} rewards</Text>
-          </View>
-        </ScrollView>
-
-        {/* Tab Switcher */}
-        <ScrollView horizontal showsHorizontalScrollIndicator={false} contentContainerStyle={styles.tabScrollWrap}>
-          <Pressable
-            style={[styles.tabButton, selectedTab === "all" && styles.tabButtonActive]}
-            onPress={() => setSelectedTab("all")}
-          >
-            <Text style={[styles.tabText, selectedTab === "all" && styles.tabTextActive]}>
-              All ({unifiedBonuses.length})
-            </Text>
-          </Pressable>
-          <Pressable
-            style={[styles.tabButton, selectedTab === "worker" && styles.tabButtonActive]}
-            onPress={() => setSelectedTab("worker")}
-          >
-            <Text style={[styles.tabText, selectedTab === "worker" && styles.tabTextActive]}>
-              👷 Workers ({workerBonusesRaw.length})
-            </Text>
-          </Pressable>
-          <Pressable
-            style={[styles.tabButton, selectedTab === "delivery" && styles.tabButtonActive]}
-            onPress={() => setSelectedTab("delivery")}
-          >
-            <Text style={[styles.tabText, selectedTab === "delivery" && styles.tabTextActive]}>
-              🚚 Delivery ({deliveryBonusesRaw.length})
-            </Text>
-          </Pressable>
-          <Pressable
-            style={[styles.tabButton, selectedTab === "customer" && styles.tabButtonActive]}
-            onPress={() => setSelectedTab("customer")}
-          >
-            <Text style={[styles.tabText, selectedTab === "customer" && styles.tabTextActive]}>
-              🏷️ Marked Cust. ({customerBonusesRaw.length})
-            </Text>
-          </Pressable>
-          <Pressable
-            style={[styles.tabButton, selectedTab === "other" && styles.tabButtonActive]}
-            onPress={() => setSelectedTab("other")}
-          >
-            <Text style={[styles.tabText, selectedTab === "other" && styles.tabTextActive]}>
-              🤝 Others ({otherBonusesRaw.length})
-            </Text>
-          </Pressable>
-        </ScrollView>
-
-        {/* Search & Period Controls */}
-        <View style={styles.filterCard}>
-          <View style={styles.searchBar}>
-            <MaterialIcons name="search" size={20} color={colors.text.muted} />
-            <TextInput
-              style={styles.searchInput}
-              placeholder="Search recipient, marking, reason, or notes..."
-              placeholderTextColor={colors.text.muted}
-              value={searchQuery}
-              onChangeText={setSearchQuery}
-              clearButtonMode="while-editing"
-            />
-            {searchQuery.length > 0 && (
-              <Pressable onPress={() => setSearchQuery("")} hitSlop={8}>
-                <MaterialIcons name="close" size={18} color={colors.text.muted} />
-              </Pressable>
-            )}
-          </View>
-
-          {/* Period Filter Chips */}
-          <ScrollView horizontal showsHorizontalScrollIndicator={false} contentContainerStyle={styles.periodRow}>
-            {(["all", "today", "week", "month", "custom"] as const).map((period) => {
-              const active = selectedPeriod === period;
-              const labels: Record<string, string> = {
-                all: "All Time",
-                today: "Today",
-                week: "7 Days",
-                month: "This Month",
-                custom: "Custom Range",
-              };
-              return (
-                <Pressable
-                  key={period}
-                  style={[styles.periodChip, active && styles.periodChipActive]}
-                  onPress={() => setSelectedPeriod(period)}
-                >
-                  <Text style={[styles.periodChipText, active && styles.periodChipTextActive]}>
-                    {labels[period]}
-                  </Text>
-                </Pressable>
-              );
-            })}
-          </ScrollView>
-
-          {/* Custom Date Range Display */}
-          {selectedPeriod === "custom" && (
-            <View style={styles.customDateRow}>
-              <Pressable
-                style={styles.customDateBtn}
-                onPress={() => setCalendarTarget("start")}
-              >
-                <MaterialIcons name="date-range" size={16} color={colors.accent.primary} />
-                <Text style={styles.customDateText}>
-                  {startDate ? startDate.toLocaleDateString("en-IN") : "Start Date"}
-                </Text>
-              </Pressable>
-              <Text style={styles.customDateSep}>to</Text>
-              <Pressable
-                style={styles.customDateBtn}
-                onPress={() => setCalendarTarget("end")}
-              >
-                <MaterialIcons name="date-range" size={16} color={colors.accent.primary} />
-                <Text style={styles.customDateText}>
-                  {endDate ? endDate.toLocaleDateString("en-IN") : "End Date"}
-                </Text>
-              </Pressable>
-            </View>
-          )}
-
-          {/* Sort Selector */}
-          <View style={styles.sortRow}>
-            <Text style={styles.sortLabel}>Showing {filteredBonuses.length} records</Text>
-            <View style={styles.sortChips}>
-              <Pressable
-                style={[styles.sortChip, sortBy === "newest" && styles.sortChipActive]}
-                onPress={() => setSortBy("newest")}
-              >
-                <Text style={[styles.sortChipText, sortBy === "newest" && styles.sortChipTextActive]}>
-                  Newest
-                </Text>
-              </Pressable>
-              <Pressable
-                style={[styles.sortChip, sortBy === "amount_desc" && styles.sortChipActive]}
-                onPress={() => setSortBy("amount_desc")}
-              >
-                <Text style={[styles.sortChipText, sortBy === "amount_desc" && styles.sortChipTextActive]}>
-                  Highest ₹
-                </Text>
-              </Pressable>
-            </View>
-          </View>
-        </View>
-
-        {/* Bonus List */}
-        {isLoading && unifiedBonuses.length === 0 ? (
-          <View style={styles.loadingBox}>
-            <ActivityIndicator size="large" color={colors.accent.primary} />
-            <Text style={styles.loadingText}>Loading bonus records...</Text>
-          </View>
-        ) : filteredBonuses.length === 0 ? (
-          <View style={styles.emptyCard}>
-            <View style={styles.emptyIconCircle}>
-              <MaterialIcons name="stars" size={36} color="#F59E0B" />
-            </View>
-            <Text style={styles.emptyTitle}>No Bonus Records Found</Text>
-            <Text style={styles.emptyDesc}>
-              {searchQuery || selectedPeriod !== "all"
-                ? "No bonuses match your active filters. Try adjusting your search or date period."
-                : "Acknowledge and reward your workforce and marked contractors/clients with festival gifts and performance perks."}
-            </Text>
-            <Pressable
-              style={styles.emptyActionBtn}
-              onPress={() => handleOpenAwardModal()}
-            >
-              <MaterialIcons name="add" size={18} color="#ffffff" />
-              <Text style={styles.emptyActionBtnText}>Award First Bonus</Text>
-            </Pressable>
-          </View>
-        ) : (
-          <View style={styles.bonusList}>
-            {filteredBonuses.map((item) => {
-              const isWorker = item.type === "worker";
-              const isDelivery = item.type === "delivery";
-              const isCust = item.type === "customer";
-              const isOther = item.type === "other";
-
-              const otherRole = isOther ? getOtherRoleDetails(item.recipientRole) : null;
-
-              const tagBg = isWorker
-                ? `${colors.accent.primary}18`
-                : isDelivery
-                  ? "#8B5CF618"
-                  : isCust
-                    ? "#10B98118"
-                    : otherRole?.bg || "#9333EA18";
-
-              const tagColor = isWorker
-                ? colors.accent.primary
-                : isDelivery
-                  ? "#8B5CF6"
-                  : isCust
-                    ? "#10B981"
-                    : otherRole?.color || "#9333EA";
-
-              const iconName = isWorker
-                ? "engineering"
-                : isDelivery
-                  ? "local-shipping"
-                  : isCust
-                    ? "loyalty"
-                    : (otherRole?.icon as any) || "groups";
-
-              const roleLabel = isWorker
-                ? "Worker"
-                : isDelivery
-                  ? "Delivery"
-                  : isCust
-                    ? "Marked Cust."
-                    : item.recipientRole || "Other";
-
-              return (
-                <Pressable
-                  key={`${item.type}-${item.id}`}
-                  style={({ pressed }) => [
-                    styles.bonusCard,
-                    pressed && styles.bonusCardPressed,
-                  ]}
-                  onPress={() => {
-                    setSelectedBonus(item);
-                    setIsDetailModalOpen(true);
-                  }}
-                >
-                  <View style={styles.cardHeaderRow}>
-                    <View style={styles.cardRecipientGroup}>
-                      <View style={[styles.recipientAvatar, { backgroundColor: tagBg }]}>
-                        <MaterialIcons name={iconName} size={20} color={tagColor} />
-                      </View>
-                      <View style={{ flex: 1 }}>
-                        <View style={styles.nameBadgeRow}>
-                          <Text style={styles.recipientName} numberOfLines={1}>
-                            {item.recipientName}
-                          </Text>
-                          <View style={[styles.roleBadge, { backgroundColor: tagBg }]}>
-                            <Text style={[styles.roleBadgeText, { color: tagColor }]}>
-                              {roleLabel}
-                            </Text>
-                          </View>
-                        </View>
-                        <Text style={styles.bonusDate}>
-                          {item.createdAt.toLocaleDateString("en-IN", {
-                            day: "2-digit",
-                            month: "short",
-                            year: "numeric",
-                          })}
-                        </Text>
-                      </View>
-                    </View>
-
-                    <View style={styles.cardAmountGroup}>
-                      <Text style={styles.bonusAmount}>
-                        ₹{item.amount.toLocaleString("en-IN")}
-                      </Text>
-                      <View style={styles.verifiedStarPill}>
-                        <MaterialIcons name="stars" size={12} color="#F59E0B" />
-                        <Text style={styles.verifiedStarText}>Reward</Text>
-                      </View>
-                    </View>
-                  </View>
-
-                  {/* Active Markings chips if customer */}
-                  {isCust && item.markings && item.markings.length > 0 && (
-                    <View style={styles.markingsRow}>
-                      {item.markings.map((tag) => {
-                        const cfg = getMarkingConfig(tag, theme.isDark);
-                        return (
-                          <View
-                            key={tag}
-                            style={[
-                              styles.markingPill,
-                              { backgroundColor: cfg.bg, borderColor: cfg.border },
-                            ]}
-                          >
-                            <MaterialIcons name={cfg.icon} size={11} color={cfg.color} />
-                            <Text style={[styles.markingPillText, { color: cfg.color }]}>
-                              {tag}
-                            </Text>
-                          </View>
-                        );
-                      })}
-                    </View>
-                  )}
-
-                  <View style={styles.cardBody}>
-                    <View style={styles.reasonPill}>
-                      <MaterialIcons name="label" size={13} color="#D97706" />
-                      <Text style={styles.reasonText} numberOfLines={1}>
-                        {item.reason}
-                      </Text>
-                    </View>
-
-                    {item.notes ? (
-                      <Text style={styles.notesPreview} numberOfLines={2}>
-                        "{item.notes}"
-                      </Text>
-                    ) : null}
-                  </View>
-
-                  <View style={styles.cardFooter}>
-                    <Text style={styles.tapToViewText}>Tap for details, receipt & options</Text>
-                    <MaterialIcons name="chevron-right" size={18} color={colors.text.muted} />
-                  </View>
-                </Pressable>
-              );
-            })}
-          </View>
-        )}
-      </ScrollView>
+      />
 
       {/* Floating Action Button */}
       <Pressable
         style={({ pressed }) => [
           styles.fab,
+          { bottom: bottomFabOffset },
           pressed && styles.fabPressed,
         ]}
         onPress={() => handleOpenAwardModal()}
@@ -1384,123 +1302,125 @@ function BonusManagementContent() {
         animationType="fade"
         onRequestClose={() => setIsDetailModalOpen(false)}
       >
-        <View style={styles.modalBackdrop}>
+        <KeyboardAvoidingView behavior={kavBehavior} style={styles.modalBackdrop}>
           <View style={styles.modalCard}>
-            {selectedBonus && (
-              <>
-                <View style={styles.modalReceiptHeader}>
-                  <View style={styles.modalReceiptIconWrap}>
-                    <MaterialIcons name="stars" size={32} color="#F59E0B" />
+            <ScrollView showsVerticalScrollIndicator={false}>
+              {selectedBonus && (
+                <>
+                  <View style={styles.modalReceiptHeader}>
+                    <View style={styles.modalReceiptIconWrap}>
+                      <MaterialIcons name="stars" size={32} color="#F59E0B" />
+                    </View>
+                    <Text style={styles.modalReceiptTitle}>Bonus Receipt</Text>
+                    <Text style={styles.modalReceiptAmount}>
+                      ₹{selectedBonus.amount.toLocaleString("en-IN")}
+                    </Text>
+                    <Text style={styles.modalReceiptRole}>
+                      {selectedBonus.type === "worker"
+                        ? "👷 Factory Worker"
+                        : selectedBonus.type === "delivery"
+                          ? "🚚 Delivery Driver"
+                          : selectedBonus.type === "customer"
+                            ? `🏷️ Marked Customer (${(selectedBonus.markings || []).join(", ") || "Client"})`
+                            : `🤝 Other: ${selectedBonus.recipientRole || "Goodwill Recipient"}`}
+                    </Text>
                   </View>
-                  <Text style={styles.modalReceiptTitle}>Bonus Receipt</Text>
-                  <Text style={styles.modalReceiptAmount}>
-                    ₹{selectedBonus.amount.toLocaleString("en-IN")}
-                  </Text>
-                  <Text style={styles.modalReceiptRole}>
-                    {selectedBonus.type === "worker"
-                      ? "👷 Factory Worker"
-                      : selectedBonus.type === "delivery"
-                        ? "🚚 Delivery Driver"
-                        : selectedBonus.type === "customer"
-                          ? `🏷️ Marked Customer (${(selectedBonus.markings || []).join(", ") || "Client"})`
-                          : `🤝 Other: ${selectedBonus.recipientRole || "Goodwill Recipient"}`}
-                  </Text>
-                </View>
 
-                <View style={styles.modalReceiptDetails}>
-                  <View style={styles.receiptRow}>
-                    <Text style={styles.receiptLabel}>Recipient</Text>
-                    <Text style={styles.receiptValue}>{selectedBonus.recipientName}</Text>
-                  </View>
-                  {selectedBonus.type === "other" && selectedBonus.recipientRole ? (
+                  <View style={styles.modalReceiptDetails}>
                     <View style={styles.receiptRow}>
-                      <Text style={styles.receiptLabel}>Category / Role</Text>
-                      <Text style={[styles.receiptValue, { color: colors.accent.primary, fontWeight: "700" }]}>
-                        {selectedBonus.recipientRole}
-                      </Text>
+                      <Text style={styles.receiptLabel}>Recipient</Text>
+                      <Text style={styles.receiptValue}>{selectedBonus.recipientName}</Text>
                     </View>
-                  ) : null}
-                  {selectedBonus.recipientPhone ? (
-                    <View style={styles.receiptRow}>
-                      <Text style={styles.receiptLabel}>Phone</Text>
-                      <Text style={styles.receiptValue}>{selectedBonus.recipientPhone}</Text>
-                    </View>
-                  ) : null}
-                  {selectedBonus.markings && selectedBonus.markings.length > 0 ? (
-                    <View style={[styles.receiptRow, { alignItems: "center" }]}>
-                      <Text style={styles.receiptLabel}>Markings</Text>
-                      <View style={{ flexDirection: "row", gap: 4, flexWrap: "wrap", justifyContent: "flex-end" }}>
-                        {selectedBonus.markings.map((tag) => (
-                          <View key={tag} style={styles.receiptMarkingTag}>
-                            <Text style={styles.receiptMarkingTagText}>{tag}</Text>
-                          </View>
-                        ))}
+                    {selectedBonus.type === "other" && selectedBonus.recipientRole ? (
+                      <View style={styles.receiptRow}>
+                        <Text style={styles.receiptLabel}>Category / Role</Text>
+                        <Text style={[styles.receiptValue, { color: colors.accent.primary, fontWeight: "700" }]}>
+                          {selectedBonus.recipientRole}
+                        </Text>
                       </View>
-                    </View>
-                  ) : null}
-                  <View style={styles.receiptRow}>
-                    <Text style={styles.receiptLabel}>Reason / Incentive</Text>
-                    <Text style={[styles.receiptValue, { color: "#D97706", fontWeight: "700" }]}>
-                      {selectedBonus.reason}
-                    </Text>
-                  </View>
-                  <View style={styles.receiptRow}>
-                    <Text style={styles.receiptLabel}>Date Awarded</Text>
-                    <Text style={styles.receiptValue}>
-                      {selectedBonus.createdAt.toLocaleDateString("en-IN", {
-                        weekday: "short",
-                        day: "2-digit",
-                        month: "long",
-                        year: "numeric",
-                      })}
-                    </Text>
-                  </View>
-                  {selectedBonus.notes ? (
-                    <View style={[styles.receiptRow, { alignItems: "flex-start" }]}>
-                      <Text style={styles.receiptLabel}>Notes</Text>
-                      <Text style={[styles.receiptValue, { flex: 1, textAlign: "right" }]}>
-                        {selectedBonus.notes}
+                    ) : null}
+                    {selectedBonus.recipientPhone ? (
+                      <View style={styles.receiptRow}>
+                        <Text style={styles.receiptLabel}>Phone</Text>
+                        <Text style={styles.receiptValue}>{selectedBonus.recipientPhone}</Text>
+                      </View>
+                    ) : null}
+                    {selectedBonus.markings && selectedBonus.markings.length > 0 ? (
+                      <View style={[styles.receiptRow, { alignItems: "center" }]}>
+                        <Text style={styles.receiptLabel}>Markings</Text>
+                        <View style={{ flexDirection: "row", gap: 4, flexWrap: "wrap", justifyContent: "flex-end" }}>
+                          {selectedBonus.markings.map((tag) => (
+                            <View key={tag} style={styles.receiptMarkingTag}>
+                              <Text style={styles.receiptMarkingTagText}>{tag}</Text>
+                            </View>
+                          ))}
+                        </View>
+                      </View>
+                    ) : null}
+                    <View style={styles.receiptRow}>
+                      <Text style={styles.receiptLabel}>Reason / Incentive</Text>
+                      <Text style={[styles.receiptValue, { color: "#D97706", fontWeight: "700" }]}>
+                        {selectedBonus.reason}
                       </Text>
                     </View>
-                  ) : null}
-                </View>
+                    <View style={styles.receiptRow}>
+                      <Text style={styles.receiptLabel}>Date Awarded</Text>
+                      <Text style={styles.receiptValue}>
+                        {selectedBonus.createdAt.toLocaleDateString("en-IN", {
+                          weekday: "short",
+                          day: "2-digit",
+                          month: "long",
+                          year: "numeric",
+                        })}
+                      </Text>
+                    </View>
+                    {selectedBonus.notes ? (
+                      <View style={[styles.receiptRow, { alignItems: "flex-start" }]}>
+                        <Text style={styles.receiptLabel}>Notes</Text>
+                        <Text style={[styles.receiptValue, { flex: 1, textAlign: "right" }]}>
+                          {selectedBonus.notes}
+                        </Text>
+                      </View>
+                    ) : null}
+                  </View>
 
-                {/* Modal Action Buttons */}
-                <View style={styles.modalActionRow}>
+                  {/* Modal Action Buttons */}
+                  <View style={styles.modalActionRow}>
+                    <Pressable
+                      style={styles.modalShareBtn}
+                      onPress={() => handleShareReceipt(selectedBonus)}
+                    >
+                      <MaterialIcons name="share" size={18} color={colors.accent.primary} />
+                      <Text style={styles.modalShareBtnText}>Share</Text>
+                    </Pressable>
+
+                    <Pressable
+                      style={styles.modalEditBtn}
+                      onPress={() => handleOpenEdit(selectedBonus)}
+                    >
+                      <MaterialIcons name="edit" size={18} color="#ffffff" />
+                      <Text style={styles.modalEditBtnText}>Edit</Text>
+                    </Pressable>
+
+                    <Pressable
+                      style={styles.modalDeleteBtn}
+                      onPress={() => handleDeleteBonus(selectedBonus)}
+                    >
+                      <MaterialIcons name="delete-outline" size={18} color={colors.accent.danger} />
+                    </Pressable>
+                  </View>
+
                   <Pressable
-                    style={styles.modalShareBtn}
-                    onPress={() => handleShareReceipt(selectedBonus)}
+                    style={styles.modalCloseBtn}
+                    onPress={() => setIsDetailModalOpen(false)}
                   >
-                    <MaterialIcons name="share" size={18} color={colors.accent.primary} />
-                    <Text style={styles.modalShareBtnText}>Share</Text>
+                    <Text style={styles.modalCloseBtnText}>Close</Text>
                   </Pressable>
-
-                  <Pressable
-                    style={styles.modalEditBtn}
-                    onPress={() => handleOpenEdit(selectedBonus)}
-                  >
-                    <MaterialIcons name="edit" size={18} color="#ffffff" />
-                    <Text style={styles.modalEditBtnText}>Edit</Text>
-                  </Pressable>
-
-                  <Pressable
-                    style={styles.modalDeleteBtn}
-                    onPress={() => handleDeleteBonus(selectedBonus)}
-                  >
-                    <MaterialIcons name="delete-outline" size={18} color={colors.accent.danger} />
-                  </Pressable>
-                </View>
-
-                <Pressable
-                  style={styles.modalCloseBtn}
-                  onPress={() => setIsDetailModalOpen(false)}
-                >
-                  <Text style={styles.modalCloseBtnText}>Close</Text>
-                </Pressable>
-              </>
-            )}
+                </>
+              )}
+            </ScrollView>
           </View>
-        </View>
+        </KeyboardAvoidingView>
       </Modal>
 
       {/* Award Bonus Modal */}
@@ -1512,8 +1432,8 @@ function BonusManagementContent() {
           if (!isSavingAward) setIsAwardModalOpen(false);
         }}
       >
-        <View style={styles.modalBackdrop}>
-          <View style={styles.formModalCard}>
+        <KeyboardAvoidingView behavior={kavBehavior} style={styles.modalBackdrop}>
+          <View style={[styles.formModalCard, { paddingBottom: Math.max(insets.bottom + 8, spacing.lg) }]}>
             <View style={styles.formHeader}>
               <View style={styles.formTitleRow}>
                 <MaterialIcons name="stars" size={22} color="#F59E0B" />
@@ -2044,7 +1964,7 @@ function BonusManagementContent() {
               </Pressable>
             </View>
           </View>
-        </View>
+        </KeyboardAvoidingView>
       </Modal>
 
       {/* Edit Bonus Modal */}
@@ -2056,8 +1976,8 @@ function BonusManagementContent() {
           if (!isSavingEdit) setIsEditModalOpen(false);
         }}
       >
-        <View style={styles.modalBackdrop}>
-          <View style={styles.formModalCard}>
+        <KeyboardAvoidingView behavior={kavBehavior} style={styles.modalBackdrop}>
+          <View style={[styles.formModalCard, { paddingBottom: Math.max(insets.bottom + 8, spacing.lg) }]}>
             <View style={styles.formHeader}>
               <View style={styles.formTitleRow}>
                 <MaterialIcons name="edit" size={20} color={colors.accent.primary} />
@@ -2220,7 +2140,7 @@ function BonusManagementContent() {
               </Pressable>
             </View>
           </View>
-        </View>
+        </KeyboardAvoidingView>
       </Modal>
 
       {/* Date Picker Modal (EasyCalendarModal) */}
@@ -2533,9 +2453,13 @@ const getStyles = (theme: any) => {
       backgroundColor: colors.bg.card,
       borderRadius: radius.lg,
       padding: spacing.md,
+      marginBottom: spacing.sm,
       borderWidth: 1,
       borderColor: colors.border.subtle,
       ...shadows.subtle,
+    },
+    bonusCardMain: {
+      flex: 1,
     },
     bonusCardPressed: {
       backgroundColor: colors.bg.elevated || "#F9FAFB",
@@ -2762,7 +2686,8 @@ const getStyles = (theme: any) => {
       borderRadius: radius.xl,
       padding: spacing.xl,
       width: "100%",
-      maxWidth: 420,
+      maxWidth: 440,
+      maxHeight: "88%",
       borderWidth: 1,
       borderColor: colors.border.subtle,
       ...shadows.elevated,
@@ -2895,8 +2820,8 @@ const getStyles = (theme: any) => {
       borderRadius: radius.xl,
       padding: spacing.lg,
       width: "100%",
-      maxWidth: 460,
-      maxHeight: "90%",
+      maxWidth: 480,
+      maxHeight: "88%",
       borderWidth: 1,
       borderColor: colors.border.subtle,
       ...shadows.elevated,

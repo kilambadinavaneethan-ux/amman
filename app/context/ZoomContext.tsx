@@ -1,4 +1,13 @@
-import React, { createContext, useContext, useState, useEffect, useMemo, useCallback } from "react";
+import React, {
+  createContext,
+  useCallback,
+  useContext,
+  useEffect,
+  useMemo,
+  useRef,
+  useState,
+  type ReactNode,
+} from "react";
 import { StyleSheet } from "react-native";
 import AsyncStorage from "@react-native-async-storage/async-storage";
 import { GestureHandlerRootView, GestureDetector, Gesture } from "react-native-gesture-handler";
@@ -7,6 +16,7 @@ import Animated, {
   useAnimatedStyle,
   withTiming,
   runOnJS,
+  type SharedValue,
 } from "react-native-reanimated";
 
 const ZOOM_STORAGE_KEY = "@app_global_zoom_scale";
@@ -14,35 +24,52 @@ const MIN_ZOOM = 0.75;
 const DEFAULT_ZOOM = 1.0;
 const MAX_ZOOM = 2.5;
 
-export const ZoomContext = createContext({
-  scale: DEFAULT_ZOOM,
+export interface ZoomContextType {
+  scale: SharedValue<number>;
+  zoomPercent: number;
+  minZoom: number;
+  maxZoom: number;
+  resetZoom: () => void;
+  setZoomScale: (val: number) => void;
+  zoomIn: () => void;
+  zoomOut: () => void;
+}
+
+export const ZoomContext = createContext<ZoomContextType>({
+  scale: { value: DEFAULT_ZOOM } as SharedValue<number>,
   zoomPercent: 100,
   minZoom: MIN_ZOOM,
   maxZoom: MAX_ZOOM,
   resetZoom: () => {},
-  setZoomScale: (val) => {},
+  setZoomScale: () => {},
   zoomIn: () => {},
   zoomOut: () => {},
 });
 
 export const useZoom = () => useContext(ZoomContext);
 
-export function ZoomProvider({ children }) {
+export function ZoomProvider({ children }: { children: ReactNode }) {
   const scale = useSharedValue(DEFAULT_ZOOM);
   const savedScale = useSharedValue(DEFAULT_ZOOM);
   const translateX = useSharedValue(0);
   const translateY = useSharedValue(0);
   const savedTranslateX = useSharedValue(0);
   const savedTranslateY = useSharedValue(0);
-  const [zoomPercent, setZoomPercent] = useState(100);
+  const [zoomPercent, setZoomPercent] = useState<number>(100);
+  const zoomPercentRef = useRef<number>(100);
+
+  useEffect(() => {
+    zoomPercentRef.current = zoomPercent;
+  }, [zoomPercent]);
 
   // Helper to update React state & persist scale to AsyncStorage
-  const updateZoomState = useCallback((newScale) => {
+  const updateZoomState = useCallback((newScale: number) => {
     const clamped = Math.min(Math.max(newScale, MIN_ZOOM), MAX_ZOOM);
     const percent = Math.round(clamped * 100);
+    zoomPercentRef.current = percent;
     setZoomPercent(percent);
     AsyncStorage.setItem(ZOOM_STORAGE_KEY, String(clamped)).catch((err) =>
-      console.warn("Failed to persist zoom level", err)
+      console.warn("Failed to persist zoom level", err),
     );
   }, []);
 
@@ -54,9 +81,10 @@ export function ZoomProvider({ children }) {
     translateY.value = 0;
     savedTranslateX.value = 0;
     savedTranslateY.value = 0;
+    zoomPercentRef.current = 100;
     setZoomPercent(100);
     AsyncStorage.setItem(ZOOM_STORAGE_KEY, String(DEFAULT_ZOOM)).catch(() => {});
-  }, []);
+  }, [scale, savedScale, translateX, translateY, savedTranslateX, savedTranslateY]);
 
   // Manual reset to 100%
   const resetZoom = useCallback(() => {
@@ -67,38 +95,44 @@ export function ZoomProvider({ children }) {
     savedTranslateX.value = 0;
     savedTranslateY.value = 0;
     updateZoomState(DEFAULT_ZOOM);
-  }, [updateZoomState]);
+  }, [scale, translateX, translateY, savedScale, savedTranslateX, savedTranslateY, updateZoomState]);
 
   // Set explicit zoom scale
-  const setZoomScale = useCallback((newScale) => {
-    const clamped = Math.min(Math.max(newScale, MIN_ZOOM), MAX_ZOOM);
-    scale.value = withTiming(clamped, { duration: 250 });
-    savedScale.value = clamped;
-    if (clamped === DEFAULT_ZOOM) {
-      translateX.value = withTiming(0, { duration: 250 });
-      translateY.value = withTiming(0, { duration: 250 });
-      savedTranslateX.value = 0;
-      savedTranslateY.value = 0;
-    }
-    updateZoomState(clamped);
-  }, [updateZoomState]);
+  const setZoomScale = useCallback(
+    (newScale: number) => {
+      const clamped = Math.min(Math.max(newScale, MIN_ZOOM), MAX_ZOOM);
+      scale.value = withTiming(clamped, { duration: 250 });
+      savedScale.value = clamped;
+      if (clamped === DEFAULT_ZOOM) {
+        translateX.value = withTiming(0, { duration: 250 });
+        translateY.value = withTiming(0, { duration: 250 });
+        savedTranslateX.value = 0;
+        savedTranslateY.value = 0;
+      }
+      updateZoomState(clamped);
+    },
+    [scale, savedScale, translateX, translateY, savedTranslateX, savedTranslateY, updateZoomState],
+  );
 
   // Zoom In step (+0.25x / +25%)
   const zoomIn = useCallback(() => {
-    const nextScale = Math.min((zoomPercent + 25) / 100, MAX_ZOOM);
+    const nextScale = Math.min((zoomPercentRef.current + 25) / 100, MAX_ZOOM);
     setZoomScale(Math.round(nextScale * 100) / 100);
-  }, [zoomPercent, setZoomScale]);
+  }, [setZoomScale]);
 
   // Zoom Out step (-0.25x / -25%)
   const zoomOut = useCallback(() => {
-    const nextScale = Math.max((zoomPercent - 25) / 100, MIN_ZOOM);
+    const nextScale = Math.max((zoomPercentRef.current - 25) / 100, MIN_ZOOM);
     setZoomScale(Math.round(nextScale * 100) / 100);
-  }, [zoomPercent, setZoomScale]);
+  }, [setZoomScale]);
 
   // Callback to sync JS state when gesture ends
-  const onGestureEndJS = useCallback((finalScale) => {
-    updateZoomState(finalScale);
-  }, [updateZoomState]);
+  const onGestureEndJS = useCallback(
+    (finalScale: number) => {
+      updateZoomState(finalScale);
+    },
+    [updateZoomState],
+  );
 
   // Fast & Responsive Pinch Gesture (2-finger pinch)
   const pinchGesture = Gesture.Pinch()
@@ -144,7 +178,7 @@ export function ZoomProvider({ children }) {
   const composedGesture = Gesture.Simultaneous(
     pinchGesture,
     twoFingerPanGesture,
-    doubleTapGesture
+    doubleTapGesture,
   );
 
   // Animated style applied to root content container
@@ -158,7 +192,7 @@ export function ZoomProvider({ children }) {
     };
   });
 
-  const contextValue = useMemo(
+  const contextValue = useMemo<ZoomContextType>(
     () => ({
       scale,
       zoomPercent,
@@ -169,7 +203,7 @@ export function ZoomProvider({ children }) {
       zoomIn,
       zoomOut,
     }),
-    [zoomPercent, resetZoom, setZoomScale, zoomIn, zoomOut]
+    [scale, zoomPercent, resetZoom, setZoomScale, zoomIn, zoomOut],
   );
 
   return (
@@ -197,3 +231,4 @@ const styles = StyleSheet.create({
 export default function ZoomRoutePlaceholder() {
   return null;
 }
+

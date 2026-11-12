@@ -9,6 +9,7 @@ import {
   Alert,
 } from "react-native";
 import { useRouter } from "expo-router";
+import { useSafeAreaInsets } from "react-native-safe-area-context";
 import { MaterialIcons } from "@expo/vector-icons";
 import Animated, { FadeInDown } from "react-native-reanimated";
 import { Directory, File, Paths } from "expo-file-system";
@@ -40,6 +41,7 @@ import { fetchDatabaseStats, DatabaseStats } from "../../services/firebase/fireb
 
 export default function FirebaseManagementScreen() {
   const router = useRouter();
+  const insets = useSafeAreaInsets();
   const { theme } = useTheme();
   const { colors, shadows } = theme;
 
@@ -171,18 +173,32 @@ export default function FirebaseManagementScreen() {
   return (
     <View style={[styles.container, { backgroundColor: colors.bg.primary }]}>
       {/* Header */}
-      <View style={[styles.header, { backgroundColor: colors.bg.card, borderBottomColor: colors.border.subtle }]}>
+      <View
+        style={[
+          styles.header,
+          {
+            paddingTop: Math.max(insets.top + 8, 16),
+            backgroundColor: colors.bg.card,
+            borderBottomColor: colors.border.subtle,
+          },
+        ]}
+      >
         <Pressable style={styles.backButton} onPress={() => router.back()}>
           <MaterialIcons name="arrow-back" size={24} color={colors.text.primary} />
         </Pressable>
-        <Text style={[styles.headerTitle, { color: colors.text.primary }]}>Firebase Management</Text>
+        <Text style={[styles.headerTitle, { color: colors.text.primary }]} numberOfLines={1}>
+          Firebase Management
+        </Text>
         <Pressable onPress={() => loadData(false)} style={styles.backButton}>
           <MaterialIcons name="refresh" size={22} color={colors.accent.primary} />
         </Pressable>
       </View>
 
       <ScrollView
-        contentContainerStyle={styles.scrollContent}
+        contentContainerStyle={[
+          styles.scrollContent,
+          { paddingBottom: Math.max(insets.bottom + 24, 32) },
+        ]}
         showsVerticalScrollIndicator={false}
         refreshControl={
           <RefreshControl refreshing={refreshing} onRefresh={onRefresh} colors={[colors.accent.primary]} />
@@ -355,7 +371,6 @@ const styles = StyleSheet.create({
     flexDirection: "row",
     alignItems: "center",
     justifyContent: "space-between",
-    paddingTop: 50,
     paddingBottom: 14,
     paddingHorizontal: 16,
     borderBottomWidth: 1,
@@ -364,6 +379,9 @@ const styles = StyleSheet.create({
     padding: 6,
   },
   headerTitle: {
+    flex: 1,
+    flexShrink: 1,
+    textAlign: "center",
     fontSize: 18,
     fontWeight: "800",
   },
@@ -437,8 +455,11 @@ const styles = StyleSheet.create({
     flexDirection: "row",
     justifyContent: "space-between",
     alignItems: "center",
+    gap: 8,
   },
   infoLabel: {
+    flex: 1,
+    flexShrink: 1,
     fontSize: 13,
     fontWeight: "600",
   },

@@ -1,13 +1,32 @@
-import React, { createContext, useContext, useState, useEffect, useMemo } from "react";
+import React, {
+  createContext,
+  useCallback,
+  useContext,
+  useEffect,
+  useMemo,
+  useRef,
+  useState,
+  type ReactNode,
+} from "react";
 import AsyncStorage from "@react-native-async-storage/async-storage";
 import * as Font from "expo-font";
-import { StyleSheet } from "react-native";
+import { StyleSheet, useWindowDimensions } from "react-native";
 import * as RN from "react-native";
 
 import theme from "../../src/theme/theme";
 import { fontStyles } from "../../src/theme/fonts";
 import { fontScaleMap } from "../../src/theme/fontScale";
 import { getScaledTypography } from "../../src/theme/typography";
+import {
+  BASE_HEIGHT,
+  BASE_WIDTH,
+  getResponsiveMetrics,
+  getTamilSafeLineHeight,
+  hasTamilScript,
+  ms,
+  syncViewportDimensions,
+  type ResponsiveMetrics,
+} from "../../utils/responsive";
 
 // ═══════════════════════════════════════════════════════════════════
 // MODULE-LEVEL MUTABLE FONT CONFIG
@@ -20,14 +39,14 @@ let _fontStyleId = "Default";
 let _letterSpacingMode = "normal";
 let _lineHeightMode = "normal";
 
-const letterSpacingOffsetMap = {
+const letterSpacingOffsetMap: Record<string, number> = {
   tight: -0.5,
   normal: 0,
   spacious: 0.5,
   wide: 1.0,
 };
 
-const lineHeightMultiplierMap = {
+const lineHeightMultiplierMap: Record<string, number> = {
   compact: 0.9,
   normal: 1.0,
   relaxed: 1.2,
@@ -39,7 +58,7 @@ const lineHeightMultiplierMap = {
 const defaultTypographyConfig = {
   ...getScaledTypography("Default", false),
   fontScale: 1.0,
-  fontFamily: undefined,
+  fontFamily: undefined as string | undefined,
   boldEnabled: false,
   fontSizeKey: "default",
   fontStyleId: "Default",
@@ -47,16 +66,46 @@ const defaultTypographyConfig = {
   lineHeightMode: "normal",
 };
 
+export type AppTheme = Omit<typeof theme, "typography"> & {
+  typography: typeof defaultTypographyConfig & Record<string, any>;
+  responsive: ResponsiveMetrics;
+  isDark: boolean;
+  name: string;
+};
+
+export interface ThemeContextType {
+  themeName: string;
+  theme: AppTheme;
+  fontSize: string;
+  fontStyle: string;
+  boldEnabled: boolean;
+  letterSpacing: string;
+  lineHeight: string;
+  fontsLoaded: boolean;
+  setFontSize: (size: string) => void;
+  setFontStyle: (style: string) => void;
+  setBoldEnabled: (enabled: boolean) => void;
+  setLetterSpacing: (spacing: string) => void;
+  setLineHeight: (height: string) => void;
+  saveFontSettings: () => Promise<boolean>;
+  revertFontSettings: () => Promise<void>;
+  resetFontSettings: () => Promise<boolean>;
+  setThemeName: (name: string) => Promise<void>;
+}
+
 // ═══════════════════════════════════════════════════════════════════
 // CONTEXT
 // ═══════════════════════════════════════════════════════════════════
-export const UnscaledTextContext = createContext(false);
+export const UnscaledTextContext = createContext<boolean>(false);
 
-export const ThemeContext = createContext({
+const defaultResponsiveMetrics = getResponsiveMetrics(BASE_WIDTH, BASE_HEIGHT);
+
+export const ThemeContext = createContext<ThemeContextType>({
   themeName: "nordic",
   theme: {
     ...theme,
     typography: defaultTypographyConfig,
+    responsive: defaultResponsiveMetrics,
     isDark: false,
     name: "Nordic Frost (Light)",
   },
@@ -66,21 +115,23 @@ export const ThemeContext = createContext({
   letterSpacing: "normal",
   lineHeight: "normal",
   fontsLoaded: true,
-  setFontSize: (_size) => {},
-  setFontStyle: (_style) => {},
-  setBoldEnabled: (_enabled) => {},
-  setLetterSpacing: (_spacing) => {},
-  setLineHeight: (_height) => {},
+  setFontSize: () => {},
+  setFontStyle: () => {},
+  setBoldEnabled: () => {},
+  setLetterSpacing: () => {},
+  setLineHeight: () => {},
   saveFontSettings: async () => false,
   revertFontSettings: async () => {},
-  resetFontSettings: async () => {},
+  resetFontSettings: async () => false,
   setThemeName: async () => {},
 });
 
-const styleCache = new Map();
+const styleCache = new Map<unknown, Record<string, any>>();
+const tamilStyleCache = new Map<unknown, Record<string, any>>();
 
 function clearFontStyleCache() {
   styleCache.clear();
+  tamilStyleCache.clear();
 }
 
 // ═══════════════════════════════════════════════════════════════════
@@ -93,20 +144,21 @@ function patchGlobalTextComponents() {
   isPatched = true;
 
   // Capture originals BEFORE overriding
-  const OriginalText = RN.Text;
-  const OriginalTextInput = RN.TextInput;
+  const OriginalText = RN.Text as any;
+  const OriginalTextInput = RN.TextInput as any;
 
-  // Enforce allowFontScaling = false and maxFontSizeMultiplier = 1 globally
+  // Cap runaway OS font magnification on unconfigured system texts while letting explicit
+  // allowFontScaling / maxFontSizeMultiplier props (e.g. 1.15 on compact badges/headers) apply.
   if (OriginalText.defaultProps == null) OriginalText.defaultProps = {};
-  OriginalText.defaultProps.allowFontScaling = false;
-  OriginalText.defaultProps.maxFontSizeMultiplier = 1;
+  OriginalText.defaultProps.allowFontScaling = true;
+  OriginalText.defaultProps.maxFontSizeMultiplier = 1.25;
 
   if (OriginalTextInput.defaultProps == null) OriginalTextInput.defaultProps = {};
-  OriginalTextInput.defaultProps.allowFontScaling = false;
-  OriginalTextInput.defaultProps.maxFontSizeMultiplier = 1;
+  OriginalTextInput.defaultProps.allowFontScaling = true;
+  OriginalTextInput.defaultProps.maxFontSizeMultiplier = 1.25;
 
   // Pure function — reads module-level vars, no hooks, no closures
-  function computeFontStyle(inputStyle) {
+  function computeFontStyle(inputStyle: any, containsTamil = false) {
     const scale = _fontScale;
     const bold = _boldEnabled;
     const sid = _fontStyleId;
@@ -120,14 +172,13 @@ function patchGlobalTextComponents() {
       spacingMode === "normal" &&
       heightMode === "normal";
 
-    // Ultra-fast path: If defaults are active, skip flattening and object allocation entirely
-    if (isDefaultConfig) {
+    // Ultra-fast path: If defaults are active and no Tamil vertical rhythm guard is needed
+    if (isDefaultConfig && !containsTamil) {
       return inputStyle;
     }
 
     if (!inputStyle) {
-      // No style prop — apply custom font family + bold + spacing + scaled size if active
-      const res = {};
+      const res: Record<string, any> = {};
       if (sid && sid !== "Default") {
         res.fontFamily = bold ? `${sid}-Bold` : `${sid}-Regular`;
       }
@@ -138,23 +189,27 @@ function patchGlobalTextComponents() {
       if (scale !== 1.0) {
         res.fontSize = Math.round(14 * scale);
       }
+      if (containsTamil) {
+        const effSize = res.fontSize ?? 14;
+        res.lineHeight = getTamilSafeLineHeight(effSize, 1.4);
+      }
       return res;
     }
 
+    const activeCache = containsTamil ? tamilStyleCache : styleCache;
     // Fast-path lookup for previously computed styles
-    if (styleCache.has(inputStyle)) {
-      return styleCache.get(inputStyle);
+    if (activeCache.has(inputStyle)) {
+      return activeCache.get(inputStyle);
     }
 
-    const flat = StyleSheet.flatten(inputStyle) || {};
+    const flat = (StyleSheet.flatten(inputStyle) || {}) as Record<string, any>;
 
-    // Scale font size: if explicitly set, scale it. Otherwise default base 14px scales if scale != 1.0
     const rawSize = flat.fontSize;
     const hasExplicitSize = typeof rawSize === "number" && !isNaN(rawSize);
     const baseSize = hasExplicitSize ? rawSize : 14;
-    const finalSize = (hasExplicitSize || scale !== 1.0) ? Math.round(baseSize * scale) : undefined;
+    const finalSize =
+      hasExplicitSize || scale !== 1.0 ? Math.round(baseSize * scale) : undefined;
 
-    // Scale or adjust line height
     let finalLineHeight = flat.lineHeight;
     const lhMultiplier = lineHeightMultiplierMap[heightMode] || 1.0;
     if (typeof flat.lineHeight === "number") {
@@ -163,14 +218,20 @@ function patchGlobalTextComponents() {
       finalLineHeight = Math.round(finalSize * 1.35 * lhMultiplier);
     }
 
-    // Adjust letter spacing
+    if (containsTamil) {
+      const effSize = finalSize ?? baseSize;
+      const minTamilLh = getTamilSafeLineHeight(effSize, 1.4);
+      if (typeof finalLineHeight !== "number" || finalLineHeight < minTamilLh) {
+        finalLineHeight = minTamilLh;
+      }
+    }
+
     let finalLetterSpacing = flat.letterSpacing;
     const spacingOffset = letterSpacingOffsetMap[spacingMode] || 0;
     if (spacingOffset !== 0) {
       finalLetterSpacing = (flat.letterSpacing || 0) + spacingOffset;
     }
 
-    // Bold weight adjustment
     let weight = flat.fontWeight;
     if (bold) {
       if (!weight || weight === "normal" || weight === "400") {
@@ -180,41 +241,51 @@ function patchGlobalTextComponents() {
       }
     }
 
-    // Font family based on final resolved weight
     let family = flat.fontFamily;
     if (sid && sid !== "Default") {
-      const isBoldWeight = weight === "700" || weight === "800" || weight === "900" || weight === "bold";
+      const isBoldWeight =
+        weight === "700" || weight === "800" || weight === "900" || weight === "bold";
       family = isBoldWeight ? `${sid}-Bold` : `${sid}-Regular`;
     }
 
-    const result = { ...flat };
+    const result: Record<string, any> = { ...flat };
     if (finalSize !== undefined) result.fontSize = finalSize;
     if (finalLineHeight !== undefined) result.lineHeight = finalLineHeight;
     if (finalLetterSpacing !== undefined) result.letterSpacing = finalLetterSpacing;
     if (weight !== undefined) result.fontWeight = weight;
     if (family !== undefined) result.fontFamily = family;
 
-    if (styleCache.size > 1500) {
-      styleCache.clear();
+    if (activeCache.size > 1500) {
+      activeCache.clear();
     }
-    styleCache.set(inputStyle, result);
+    activeCache.set(inputStyle, result);
 
     return result;
   }
 
   // Patched Text — useContext only for re-render trigger
-  const PatchedText = React.forwardRef(function PatchedText(props, ref) {
-    const { style, children, unscaled, ...rest } = props;
-    useContext(ThemeContext); // triggers re-render when settings change
+  const PatchedText = React.forwardRef(function PatchedText(props: any, ref: any) {
+    const {
+      style,
+      children,
+      unscaled,
+      allowFontScaling: propAllowFontScaling,
+      maxFontSizeMultiplier: propMaxFontSizeMultiplier,
+      ...rest
+    } = props;
+    useContext(ThemeContext);
     const isUnscaledContext = useContext(UnscaledTextContext);
-    const finalStyle = (isUnscaledContext || unscaled) ? style : computeFontStyle(style);
+    const lockScaling = Boolean(isUnscaledContext || unscaled);
+    const containsTamil = !lockScaling && hasTamilScript(children);
+    const finalStyle = lockScaling ? style : computeFontStyle(style, containsTamil);
+
     return (
       <OriginalText
         ref={ref}
         style={finalStyle}
         {...rest}
-        allowFontScaling={false}
-        maxFontSizeMultiplier={1}
+        allowFontScaling={lockScaling ? false : (propAllowFontScaling ?? true)}
+        maxFontSizeMultiplier={lockScaling ? 1 : (propMaxFontSizeMultiplier ?? 1.25)}
       >
         {children}
       </OriginalText>
@@ -222,18 +293,25 @@ function patchGlobalTextComponents() {
   });
 
   // Patched TextInput — useContext only for re-render trigger
-  const PatchedTextInput = React.forwardRef(function PatchedTextInput(props, ref) {
-    const { style, unscaled, ...rest } = props;
-    useContext(ThemeContext); // triggers re-render when settings change
+  const PatchedTextInput = React.forwardRef(function PatchedTextInput(props: any, ref: any) {
+    const {
+      style,
+      unscaled,
+      allowFontScaling: propAllowFontScaling,
+      maxFontSizeMultiplier: propMaxFontSizeMultiplier,
+      ...rest
+    } = props;
+    useContext(ThemeContext);
     const isUnscaledContext = useContext(UnscaledTextContext);
-    const finalStyle = (isUnscaledContext || unscaled) ? style : computeFontStyle(style);
+    const lockScaling = Boolean(isUnscaledContext || unscaled);
+    const finalStyle = lockScaling ? style : computeFontStyle(style, false);
     return (
       <OriginalTextInput
         ref={ref}
         style={finalStyle}
         {...rest}
-        allowFontScaling={false}
-        maxFontSizeMultiplier={1}
+        allowFontScaling={lockScaling ? false : (propAllowFontScaling ?? true)}
+        maxFontSizeMultiplier={lockScaling ? 1 : (propMaxFontSizeMultiplier ?? 1.25)}
       />
     );
   });
@@ -241,24 +319,32 @@ function patchGlobalTextComponents() {
   // Override RN exports — all import { Text } will get PatchedText
   try {
     Object.defineProperty(RN, "Text", {
-      get() { return PatchedText; },
+      get() {
+        return PatchedText;
+      },
       configurable: true,
     });
-  } catch (e) {
+  } catch {
     try {
-      RN.Text = PatchedText;
-    } catch (_) {}
+      (RN as any).Text = PatchedText;
+    } catch {
+      // Ignore readonly module export error
+    }
   }
 
   try {
     Object.defineProperty(RN, "TextInput", {
-      get() { return PatchedTextInput; },
+      get() {
+        return PatchedTextInput;
+      },
       configurable: true,
     });
-  } catch (e) {
+  } catch {
     try {
-      RN.TextInput = PatchedTextInput;
-    } catch (_) {}
+      (RN as any).TextInput = PatchedTextInput;
+    } catch {
+      // Ignore readonly module export error
+    }
   }
 }
 
@@ -268,27 +354,58 @@ patchGlobalTextComponents();
 // ═══════════════════════════════════════════════════════════════════
 // THEME PROVIDER
 // ═══════════════════════════════════════════════════════════════════
-export function ThemeProvider({ children }) {
-  const [fontSize, setFontSizeState] = useState("default");
-  const [fontStyle, setFontStyleState] = useState("Default");
-  const [boldEnabled, setBoldEnabledState] = useState(false);
-  const [letterSpacing, setLetterSpacingState] = useState("normal");
-  const [lineHeight, setLineHeightState] = useState("normal");
-  const [loadedFonts, setLoadedFonts] = useState({});
-  const [loadingFont, setLoadingFont] = useState(false);
+export function ThemeProvider({ children }: { children: ReactNode }) {
+  const { width: windowWidth, height: windowHeight } = useWindowDimensions();
+  syncViewportDimensions(windowWidth, windowHeight);
+
+  const responsiveMetrics = useMemo(
+    () => getResponsiveMetrics(windowWidth, windowHeight),
+    [windowWidth, windowHeight],
+  );
+
+  useEffect(() => {
+    syncViewportDimensions(windowWidth, windowHeight);
+  }, [windowWidth, windowHeight]);
+
+  const [fontSize, setFontSizeState] = useState<string>("default");
+  const [fontStyle, setFontStyleState] = useState<string>("Default");
+  const [boldEnabled, setBoldEnabledState] = useState<boolean>(false);
+  const [letterSpacing, setLetterSpacingState] = useState<string>("normal");
+  const [lineHeight, setLineHeightState] = useState<string>("normal");
+  const [loadedFonts, setLoadedFonts] = useState<Record<string, boolean>>({});
+  const [loadingFont, setLoadingFont] = useState<boolean>(false);
+
+  const settingsRef = useRef({
+    fontSize,
+    fontStyle,
+    boldEnabled,
+    letterSpacing,
+    lineHeight,
+  });
+
+  useEffect(() => {
+    settingsRef.current = {
+      fontSize,
+      fontStyle,
+      boldEnabled,
+      letterSpacing,
+      lineHeight,
+    };
+  }, [fontSize, fontStyle, boldEnabled, letterSpacing, lineHeight]);
 
   // Load saved preferences on mount
   useEffect(() => {
     let isMounted = true;
     (async () => {
       try {
-        const [savedSize, savedStyle, savedBold, savedSpacing, savedHeight] = await Promise.all([
-          AsyncStorage.getItem("font_size"),
-          AsyncStorage.getItem("font_style"),
-          AsyncStorage.getItem("font_bold"),
-          AsyncStorage.getItem("font_letter_spacing"),
-          AsyncStorage.getItem("font_line_height"),
-        ]);
+        const [savedSize, savedStyle, savedBold, savedSpacing, savedHeight] =
+          await Promise.all([
+            AsyncStorage.getItem("font_size"),
+            AsyncStorage.getItem("font_style"),
+            AsyncStorage.getItem("font_bold"),
+            AsyncStorage.getItem("font_letter_spacing"),
+            AsyncStorage.getItem("font_line_height"),
+          ]);
         if (!isMounted) return;
         if (savedSize) setFontSizeState(savedSize);
         if (savedStyle) setFontStyleState(savedStyle);
@@ -306,52 +423,58 @@ export function ThemeProvider({ children }) {
   }, []);
 
   // Auto-persisting setters so changes apply instantly & stick across screens
-  const setFontSize = (s) => {
+  const setFontSize = useCallback((s: string) => {
     setFontSizeState(s);
     AsyncStorage.setItem("font_size", s).catch(console.error);
-  };
-  const setFontStyle = (s) => {
+  }, []);
+
+  const setFontStyle = useCallback((s: string) => {
     setFontStyleState(s);
     AsyncStorage.setItem("font_style", s).catch(console.error);
-  };
-  const setBoldEnabled = (b) => {
+  }, []);
+
+  const setBoldEnabled = useCallback((b: boolean) => {
     setBoldEnabledState(b);
     AsyncStorage.setItem("font_bold", String(b)).catch(console.error);
-  };
-  const setLetterSpacing = (ls) => {
+  }, []);
+
+  const setLetterSpacing = useCallback((ls: string) => {
     setLetterSpacingState(ls);
     AsyncStorage.setItem("font_letter_spacing", ls).catch(console.error);
-  };
-  const setLineHeight = (lh) => {
+  }, []);
+
+  const setLineHeight = useCallback((lh: string) => {
     setLineHeightState(lh);
     AsyncStorage.setItem("font_line_height", lh).catch(console.error);
-  };
+  }, []);
 
-  const saveFontSettings = async () => {
+  const saveFontSettings = useCallback(async (): Promise<boolean> => {
+    const current = settingsRef.current;
     try {
       await Promise.all([
-        AsyncStorage.setItem("font_size", fontSize),
-        AsyncStorage.setItem("font_style", fontStyle),
-        AsyncStorage.setItem("font_bold", String(boldEnabled)),
-        AsyncStorage.setItem("font_letter_spacing", letterSpacing),
-        AsyncStorage.setItem("font_line_height", lineHeight),
+        AsyncStorage.setItem("font_size", current.fontSize),
+        AsyncStorage.setItem("font_style", current.fontStyle),
+        AsyncStorage.setItem("font_bold", String(current.boldEnabled)),
+        AsyncStorage.setItem("font_letter_spacing", current.letterSpacing),
+        AsyncStorage.setItem("font_line_height", current.lineHeight),
       ]);
       return true;
     } catch (e) {
       console.error(e);
       return false;
     }
-  };
+  }, []);
 
-  const revertFontSettings = async () => {
+  const revertFontSettings = useCallback(async (): Promise<void> => {
     try {
-      const [savedSize, savedStyle, savedBold, savedSpacing, savedHeight] = await Promise.all([
-        AsyncStorage.getItem("font_size"),
-        AsyncStorage.getItem("font_style"),
-        AsyncStorage.getItem("font_bold"),
-        AsyncStorage.getItem("font_letter_spacing"),
-        AsyncStorage.getItem("font_line_height"),
-      ]);
+      const [savedSize, savedStyle, savedBold, savedSpacing, savedHeight] =
+        await Promise.all([
+          AsyncStorage.getItem("font_size"),
+          AsyncStorage.getItem("font_style"),
+          AsyncStorage.getItem("font_bold"),
+          AsyncStorage.getItem("font_letter_spacing"),
+          AsyncStorage.getItem("font_line_height"),
+        ]);
       setFontSizeState(savedSize || "default");
       setFontStyleState(savedStyle || "Default");
       setBoldEnabledState(savedBold === "true");
@@ -360,9 +483,9 @@ export function ThemeProvider({ children }) {
     } catch (e) {
       console.error(e);
     }
-  };
+  }, []);
 
-  const resetFontSettings = async () => {
+  const resetFontSettings = useCallback(async (): Promise<boolean> => {
     try {
       await AsyncStorage.multiRemove([
         "font_size",
@@ -381,42 +504,65 @@ export function ThemeProvider({ children }) {
       console.error(e);
       return false;
     }
-  };
+  }, []);
+
+  const setThemeName = useCallback(async (_name: string): Promise<void> => {}, []);
 
   // Load custom fonts on demand when fontStyle changes
   useEffect(() => {
     if (fontStyle === "Default") return;
-    const opt = fontStyles.find((f) => f.id === fontStyle);
+    const opt = (fontStyles as any[]).find((f) => f.id === fontStyle);
     if (!opt || !opt.regularUrl || !opt.boldUrl) return;
     const rKey = `${fontStyle}-Regular`;
     const bKey = `${fontStyle}-Bold`;
     if (loadedFonts[rKey] && loadedFonts[bKey]) return;
 
+    let isMounted = true;
     (async () => {
       setLoadingFont(true);
       try {
         await Font.loadAsync({ [rKey]: opt.regularUrl, [bKey]: opt.boldUrl });
-        setLoadedFonts((p) => ({ ...p, [rKey]: true, [bKey]: true }));
+        if (isMounted) {
+          setLoadedFonts((p) => ({ ...p, [rKey]: true, [bKey]: true }));
+        }
       } catch (e) {
         console.warn(`Font load error (${fontStyle}):`, e);
       } finally {
-        setLoadingFont(false);
+        if (isMounted) {
+          setLoadingFont(false);
+        }
       }
     })();
-  }, [fontStyle]);
+
+    return () => {
+      isMounted = false;
+    };
+  }, [fontStyle, loadedFonts]);
 
   // Compute typography config + update module-level variables
   const typographyConfig = useMemo(() => {
-    const isFontReady = fontStyle === "Default" ||
+    const isFontReady =
+      fontStyle === "Default" ||
       (loadedFonts[`${fontStyle}-Regular`] && loadedFonts[`${fontStyle}-Bold`]);
     const activeStyle = isFontReady ? fontStyle : "Default";
 
-    const scaled = getScaledTypography(activeStyle, boldEnabled, fontSize);
-    const fontScale = fontScaleMap[fontSize] || 1.0;
-    const fontSuffix = boldEnabled ? "Bold" : "Regular";
-    const fontFamily = activeStyle === "Default" ? undefined : `${activeStyle}-${fontSuffix}`;
+    const scaled = getScaledTypography(activeStyle, boldEnabled, fontSize as any);
+    const responsiveScaled = Object.fromEntries(
+      Object.entries(scaled).map(([k, def]) => [
+        k,
+        {
+          ...def,
+          fontSize: ms(def.fontSize, 0.35, responsiveMetrics.width),
+        },
+      ]),
+    ) as typeof scaled;
 
-    // ★ CRITICAL: Update module-level variables synchronously during render
+    const fontScale = (fontScaleMap as Record<string, number>)[fontSize] || 1.0;
+    const fontSuffix = boldEnabled ? "Bold" : "Regular";
+    const fontFamily =
+      activeStyle === "Default" ? undefined : `${activeStyle}-${fontSuffix}`;
+
+    // Update module-level variables synchronously during render
     // so patched Text/TextInput always read the latest values
     _fontScale = fontScale;
     _boldEnabled = boldEnabled;
@@ -426,7 +572,7 @@ export function ThemeProvider({ children }) {
     clearFontStyleCache();
 
     return {
-      ...scaled,
+      ...responsiveScaled,
       fontScale,
       fontFamily,
       boldEnabled,
@@ -435,33 +581,55 @@ export function ThemeProvider({ children }) {
       letterSpacingMode: letterSpacing,
       lineHeightMode: lineHeight,
     };
-  }, [fontSize, fontStyle, boldEnabled, letterSpacing, lineHeight, loadedFonts]);
+  }, [fontSize, fontStyle, boldEnabled, letterSpacing, lineHeight, loadedFonts, responsiveMetrics.width]);
 
   // Build context value
-  const ctxValue = useMemo(() => ({
-    themeName: "nordic",
-    theme: {
-      ...theme,
-      typography: typographyConfig,
-      isDark: false,
-      name: "Nordic Frost (Light)",
-    },
-    fontSize,
-    fontStyle,
-    boldEnabled,
-    letterSpacing,
-    lineHeight,
-    fontsLoaded: !loadingFont,
-    setFontSize,
-    setFontStyle,
-    setBoldEnabled,
-    setLetterSpacing,
-    setLineHeight,
-    saveFontSettings,
-    revertFontSettings,
-    resetFontSettings,
-    setThemeName: async () => {},
-  }), [typographyConfig, fontSize, fontStyle, boldEnabled, letterSpacing, lineHeight, loadingFont]);
+  const ctxValue = useMemo<ThemeContextType>(
+    () => ({
+      themeName: "nordic",
+      theme: {
+        ...theme,
+        typography: typographyConfig,
+        responsive: responsiveMetrics,
+        isDark: false,
+        name: "Nordic Frost (Light)",
+      },
+      fontSize,
+      fontStyle,
+      boldEnabled,
+      letterSpacing,
+      lineHeight,
+      fontsLoaded: !loadingFont,
+      setFontSize,
+      setFontStyle,
+      setBoldEnabled,
+      setLetterSpacing,
+      setLineHeight,
+      saveFontSettings,
+      revertFontSettings,
+      resetFontSettings,
+      setThemeName,
+    }),
+    [
+      typographyConfig,
+      responsiveMetrics,
+      fontSize,
+      fontStyle,
+      boldEnabled,
+      letterSpacing,
+      lineHeight,
+      loadingFont,
+      setFontSize,
+      setFontStyle,
+      setBoldEnabled,
+      setLetterSpacing,
+      setLineHeight,
+      saveFontSettings,
+      revertFontSettings,
+      resetFontSettings,
+      setThemeName,
+    ],
+  );
 
   return (
     <ThemeContext.Provider value={ctxValue}>
@@ -470,7 +638,7 @@ export function ThemeProvider({ children }) {
   );
 }
 
-export function useTheme() {
+export function useTheme(): ThemeContextType {
   return useContext(ThemeContext);
 }
 

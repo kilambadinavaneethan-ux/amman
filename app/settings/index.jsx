@@ -4,6 +4,7 @@ import React, { useContext, useState, useMemo } from "react";
 import {
     ActivityIndicator,
     Image,
+    KeyboardAvoidingView,
     Modal,
     Pressable,
     ScrollView,
@@ -16,12 +17,14 @@ import ProtectedRoute from "../components/ProtectedRoute";
 import { UserContext } from "../context/UserContext";
 import { useTheme } from "../context/ThemeContext";
 import { useScrollRestoration } from "../context/ScrollContext";
+import { useResponsive } from "../../utils/responsive";
 
 function SettingsHome() {
   const router = useRouter();
   const { profile, loading } = useContext(UserContext);
   const { theme } = useTheme();
   const { colors } = theme;
+  const { insets, kavBehavior, scrollBottomPadding } = useResponsive();
   const styles = useMemo(() => getStyles(theme), [theme]);
   const { scrollViewRef, handleScroll, handleContentSizeChange } = useScrollRestoration("/settings");
   const [showAbout, setShowAbout] = useState(false);
@@ -120,7 +123,10 @@ function SettingsHome() {
   return (
     <ScrollView
       ref={scrollViewRef}
-      contentContainerStyle={styles.container}
+      contentContainerStyle={[
+        styles.container,
+        { paddingTop: Math.max(insets.top + 8, theme.spacing.lg), paddingBottom: scrollBottomPadding },
+      ]}
       showsVerticalScrollIndicator={false}
       scrollEventThrottle={32}
       onScroll={handleScroll}
@@ -316,8 +322,8 @@ function SettingsHome() {
       </Text>
 
       {/* About Modal */}
-      <Modal visible={showAbout} transparent animationType="fade">
-        <View style={styles.modalBg}>
+      <Modal visible={showAbout} transparent animationType="fade" onRequestClose={() => setShowAbout(false)}>
+        <KeyboardAvoidingView behavior={kavBehavior} style={styles.modalBg}>
           <View style={styles.modalContent}>
             <Text style={styles.modalTitle}>About Business Suite</Text>
             <Text style={styles.modalDesc}>
@@ -334,12 +340,12 @@ function SettingsHome() {
               <Text style={styles.modalCloseBtnText}>Close</Text>
             </Pressable>
           </View>
-        </View>
+        </KeyboardAvoidingView>
       </Modal>
 
       {/* Privacy Modal */}
-      <Modal visible={showPrivacy} transparent animationType="fade">
-        <View style={styles.modalBg}>
+      <Modal visible={showPrivacy} transparent animationType="fade" onRequestClose={() => setShowPrivacy(false)}>
+        <KeyboardAvoidingView behavior={kavBehavior} style={styles.modalBg}>
           <View style={styles.modalContent}>
             <Text style={styles.modalTitle}>Privacy Policy</Text>
             <Text style={styles.modalDesc}>
@@ -355,12 +361,12 @@ function SettingsHome() {
               <Text style={styles.modalCloseBtnText}>I Understand</Text>
             </Pressable>
           </View>
-        </View>
+        </KeyboardAvoidingView>
       </Modal>
 
       {/* Logout Confirmation Modal */}
-      <Modal visible={showLogoutModal} transparent animationType="fade">
-        <View style={styles.modalBg}>
+      <Modal visible={showLogoutModal} transparent animationType="fade" onRequestClose={() => setShowLogoutModal(false)}>
+        <KeyboardAvoidingView behavior={kavBehavior} style={styles.modalBg}>
           <View style={styles.dialogCard}>
             <Text style={styles.dialogTitle}>Logout</Text>
             <Text style={styles.dialogDesc}>
@@ -381,7 +387,7 @@ function SettingsHome() {
               </Pressable>
             </View>
           </View>
-        </View>
+        </KeyboardAvoidingView>
       </Modal>
 
     </ScrollView>
@@ -657,8 +663,9 @@ const getStyles = (theme) => {
     backgroundColor: colors.bg.card,
     borderRadius: radius.xl,
     padding: 24,
-    width: "100%",
-    maxWidth: 400,
+    width: "92%",
+    maxWidth: 440,
+    maxHeight: "88%",
     alignItems: "center",
     borderWidth: 1,
     borderColor: colors.border.subtle,

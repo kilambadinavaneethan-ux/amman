@@ -25,6 +25,7 @@ import ProtectedRoute from "../../components/ProtectedRoute";
 import BackButton from "../../components/BackButton";
 import EasyCalendarModal from "../../components/EasyCalendarModal";
 import { useTheme } from "../../context/ThemeContext";
+import { useResponsive } from "../../../utils/responsive";
 import {
   collection,
   onSnapshot,
@@ -78,6 +79,7 @@ const endOfDay = (d) => {
 function PartnerDetailsScreen() {
   const { theme } = useTheme();
   const { colors, isDark } = theme;
+  const { insets, kavBehavior, hp, scrollBottomPadding } = useResponsive();
   const styles = useMemo(() => getStyles(theme), [theme]);
   const router = useRouter();
   const { id } = useLocalSearchParams();
@@ -2327,7 +2329,13 @@ function PartnerDetailsScreen() {
   return (
     <ProtectedRoute>
       <View style={styles.screenWrapper}>
-        <ScrollView contentContainerStyle={styles.container} showsVerticalScrollIndicator={false}>
+        <ScrollView
+          contentContainerStyle={[
+            styles.container,
+            { paddingTop: Math.max(insets.top + 8, 16), paddingBottom: scrollBottomPadding },
+          ]}
+          showsVerticalScrollIndicator={false}
+        >
           {/* Top Bar Header */}
           <View style={styles.topHeader}>
             <BackButton label="Delivery Partners" onPress={() => router.push("/settings/delivery-partners")} />
@@ -3791,9 +3799,14 @@ function PartnerDetailsScreen() {
         </ScrollView>
 
         {/* ========== MODAL: RECORD PAYMENT (DISBURSEMENT / ADVANCE) ========== */}
-        <Modal visible={payModalVisible} transparent animationType="fade">
+        <Modal
+          visible={payModalVisible}
+          transparent
+          animationType="fade"
+          onRequestClose={() => !savingPayment && setPayModalVisible(false)}
+        >
           <KeyboardAvoidingView
-            behavior={Platform.OS === "ios" ? "padding" : "height"}
+            behavior={kavBehavior}
             style={styles.modalBg}
           >
             <View style={styles.modalContent}>
@@ -3938,9 +3951,14 @@ function PartnerDetailsScreen() {
         </Modal>
 
         {/* ========== MODAL: REPAY ADVANCE (DRIVER REFUND TO BUSINESS) ========== */}
-        <Modal visible={repayModalVisible} transparent animationType="fade">
+        <Modal
+          visible={repayModalVisible}
+          transparent
+          animationType="fade"
+          onRequestClose={() => !savingRepay && setRepayModalVisible(false)}
+        >
           <KeyboardAvoidingView
-            behavior={Platform.OS === "ios" ? "padding" : "height"}
+            behavior={kavBehavior}
             style={styles.modalBg}
           >
             <View style={styles.modalContent}>
@@ -4082,9 +4100,14 @@ function PartnerDetailsScreen() {
         </Modal>
 
         {/* ========== MODAL: LOG / EDIT TRIP ========== */}
-        <Modal visible={showTripModal} transparent animationType="fade">
+        <Modal
+          visible={showTripModal}
+          transparent
+          animationType="fade"
+          onRequestClose={() => !savingTrip && setShowTripModal(false)}
+        >
           <KeyboardAvoidingView
-            behavior={Platform.OS === "ios" ? "padding" : "height"}
+            behavior={kavBehavior}
             style={styles.modalBg}
           >
             <View style={styles.modalContent}>
@@ -4581,9 +4604,14 @@ function PartnerDetailsScreen() {
         </Modal>
 
         {/* ========== MODAL: AWARD / EDIT BONUS ========== */}
-        <Modal visible={showBonusModal} transparent animationType="fade">
+        <Modal
+          visible={showBonusModal}
+          transparent
+          animationType="fade"
+          onRequestClose={() => !savingBonus && setShowBonusModal(false)}
+        >
           <KeyboardAvoidingView
-            behavior={Platform.OS === "ios" ? "padding" : "height"}
+            behavior={kavBehavior}
             style={styles.modalBg}
           >
             <View style={styles.modalContent}>
@@ -4717,9 +4745,14 @@ function PartnerDetailsScreen() {
         </Modal>
 
         {/* ========== MODAL: EDIT PAYMENT ========== */}
-        <Modal visible={showEditPaymentModal} transparent animationType="fade">
+        <Modal
+          visible={showEditPaymentModal}
+          transparent
+          animationType="fade"
+          onRequestClose={() => !savingEditPayment && setShowEditPaymentModal(false)}
+        >
           <KeyboardAvoidingView
-            behavior={Platform.OS === "ios" ? "padding" : "height"}
+            behavior={kavBehavior}
             style={styles.modalBg}
           >
             <View style={styles.modalContent}>
@@ -4828,10 +4861,12 @@ function PartnerDetailsScreen() {
         </Modal>
 
         {/* ========== MODAL: OPTIONS MENU ========== */}
-        <Modal visible={optionsMenuVisible} transparent animationType="fade">
-          <Pressable style={styles.modalBg} onPress={() => setOptionsMenuVisible(false)}>
-            <View style={[styles.modalContent, { maxWidth: 360, padding: 12 }]}>
-              <Text style={styles.optionsMenuHeader}>Partner Actions</Text>
+        <Modal visible={optionsMenuVisible} transparent animationType="fade" onRequestClose={() => setOptionsMenuVisible(false)}>
+          <KeyboardAvoidingView behavior={kavBehavior} style={{ flex: 1 }}>
+            <Pressable style={styles.modalBg} onPress={() => setOptionsMenuVisible(false)}>
+              <View style={[styles.modalContent, { maxWidth: 380, padding: 12 }]}>
+                <ScrollView style={{ maxHeight: Math.round(hp(74)) }} showsVerticalScrollIndicator={false} bounces={false}>
+                  <Text style={styles.optionsMenuHeader}>Partner Actions</Text>
 
               <Pressable
                 style={styles.optionMenuItem}
@@ -4934,13 +4969,20 @@ function PartnerDetailsScreen() {
                   Delete Delivery Partner
                 </Text>
               </Pressable>
-            </View>
-          </Pressable>
+                </ScrollView>
+              </View>
+            </Pressable>
+          </KeyboardAvoidingView>
         </Modal>
 
         {/* ========== MODAL: DELETE PARTNER CONFIRMATION ========== */}
-        <Modal visible={deleteModalVisible} transparent animationType="fade">
-          <View style={styles.modalBg}>
+        <Modal
+          visible={deleteModalVisible}
+          transparent
+          animationType="fade"
+          onRequestClose={() => !deleting && setDeleteModalVisible(false)}
+        >
+          <KeyboardAvoidingView behavior={kavBehavior} style={styles.modalBg}>
             <View style={styles.modalContent}>
               <View style={styles.modalIconWrapper}>
                 <MaterialIcons name="warning" size={36} color={colors.accent.danger} />
@@ -4972,7 +5014,7 @@ function PartnerDetailsScreen() {
                 </Pressable>
               </View>
             </View>
-          </View>
+          </KeyboardAvoidingView>
         </Modal>
 
         {/* Unified Calendar Modal */}
@@ -5001,12 +5043,17 @@ function PartnerDetailsScreen() {
         />
 
         {/* ========== MODAL: CALCULATION BREAKDOWN & AUDIT ========== */}
-        <Modal visible={breakdownModalVisible} transparent animationType="fade">
+        <Modal
+          visible={breakdownModalVisible}
+          transparent
+          animationType="fade"
+          onRequestClose={() => setBreakdownModalVisible(false)}
+        >
           <KeyboardAvoidingView
-            behavior={Platform.OS === "ios" ? "padding" : "height"}
+            behavior={kavBehavior}
             style={styles.modalBg}
           >
-            <View style={[styles.modalContent, { maxWidth: 440 }]}>
+            <View style={[styles.modalContent, { maxWidth: 460, maxHeight: "88%" }]}>
               <View style={styles.modalHeaderRow}>
                 <View style={{ flexDirection: "row", alignItems: "center", gap: 8 }}>
                   <View style={[styles.modalIconBadge, { backgroundColor: "#2563eb18" }]}>
@@ -5023,7 +5070,7 @@ function PartnerDetailsScreen() {
                 </Pressable>
               </View>
 
-              <ScrollView showsVerticalScrollIndicator={false} style={{ maxHeight: 420 }}>
+              <ScrollView showsVerticalScrollIndicator={false} style={{ maxHeight: hp(55) }}>
                 <View style={styles.breakdownCard}>
                   {/* Step 1: Delivery Trips Earnings (Trip Freight + Loading + Unloading) */}
                   <View style={styles.breakdownRow}>
@@ -6071,12 +6118,12 @@ const getStyles = (theme) => {
       padding: 16,
     },
     modalContent: {
-      width: "100%",
-      maxWidth: 440,
+      width: "92%",
+      maxWidth: 460,
       backgroundColor: colors.bg.card,
       borderRadius: 20,
       padding: 18,
-      maxHeight: "90%",
+      maxHeight: "88%",
       shadowColor: "#000",
       shadowOffset: { width: 0, height: 4 },
       shadowOpacity: 0.15,

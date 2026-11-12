@@ -24,6 +24,7 @@ import { WorkerContext } from "../context/WorkerContext";
 import { RawMaterialSupplierContext } from "../context/RawMaterialSupplierContext";
 import { DeliveryPartnerContext } from "../context/DeliveryPartnerContext";
 import { UserContext } from "../context/UserContext";
+import { useResponsive } from "../../utils/responsive";
 import AnimatedPage from "../components/AnimatedPage";
 import ContactsModal from "../components/ContactsModal";
 import EasyCalendarModal from "../components/EasyCalendarModal";
@@ -47,6 +48,11 @@ const AVATAR_COLORS = [
 export default function Customers() {
   const { theme } = useTheme();
   const { colors, spacing, radius, shadows } = theme;
+  const {
+    scrollBottomPadding,
+    compactBadgeTextProps,
+    currencyKpiTextProps,
+  } = useResponsive();
   const styles = useMemo(() => getStyles(theme), [theme]);
   const router = useRouter();
   const params = useLocalSearchParams();
@@ -835,7 +841,7 @@ setContactsVisible(true);
 
       <ScrollView
         ref={scrollViewRef}
-        contentContainerStyle={styles.container}
+        contentContainerStyle={[styles.container, { paddingBottom: scrollBottomPadding }]}
         showsVerticalScrollIndicator={false}
         scrollEventThrottle={32}
         onScroll={handleScroll}
@@ -1101,7 +1107,7 @@ setContactsVisible(true);
         <View style={styles.statsSection}>
           <View style={styles.statCard}>
             <Text style={styles.statLabel}>Total Accounts</Text>
-            <Text style={styles.statValue}>{unifiedCustomers.length}</Text>
+            <Text style={styles.statValue} {...currencyKpiTextProps}>{unifiedCustomers.length}</Text>
           </View>
           <Pressable
             style={({ pressed }) => [
@@ -1111,14 +1117,14 @@ setContactsVisible(true);
             ]}
             onPress={() => setIsSummaryModalOpen(true)}
           >
-            <View style={{ flexDirection: "row", alignItems: "center", justifyContent: "space-between" }}>
-              <Text style={styles.statLabel}>Total Unpaid Balances</Text>
-              <View style={{ flexDirection: "row", alignItems: "center", gap: 2, backgroundColor: "#fee2e2", paddingHorizontal: 6, paddingVertical: 2, borderRadius: 12 }}>
+            <View style={{ flexDirection: "row", alignItems: "center", justifyContent: "space-between", gap: 8 }}>
+              <Text style={[styles.statLabel, { flex: 1, flexShrink: 1 }]}>Total Unpaid Balances</Text>
+              <View style={{ flexDirection: "row", alignItems: "center", gap: 2, backgroundColor: "#fee2e2", paddingHorizontal: 6, paddingVertical: 2, borderRadius: 12, flexShrink: 0 }}>
                 <MaterialIcons name="analytics" size={14} color={colors.accent.danger} />
-                <Text style={{ fontSize: 10, fontWeight: "700", color: colors.accent.danger }}>Summary</Text>
+                <Text style={{ fontSize: 10, fontWeight: "700", color: colors.accent.danger }} {...compactBadgeTextProps}>Summary</Text>
               </View>
             </View>
-            <Text style={styles.statValue}>₹{totalUnpaidBalancesSum.toLocaleString("en-IN")}</Text>
+            <Text style={styles.statValue} {...currencyKpiTextProps}>₹{totalUnpaidBalancesSum.toLocaleString("en-IN")}</Text>
           </Pressable>
         </View>
 
@@ -1409,7 +1415,7 @@ setContactsVisible(true);
                                 }}
                               >
                                 <MaterialIcons name={cfg.icon} size={11} color={cfg.color} />
-                                <Text style={{ fontSize: 9.5, fontWeight: "800", color: cfg.color }}>
+                                <Text style={{ fontSize: 9.5, fontWeight: "800", color: cfg.color }} {...compactBadgeTextProps}>
                                   {tag}
                                 </Text>
                               </View>
@@ -1478,6 +1484,7 @@ setContactsVisible(true);
                           Number(customer.balance) > 0 && { color: colors.accent.danger },
                           Number(customer.balance) < 0 && { color: colors.accent.success },
                         ]}
+                        {...currencyKpiTextProps}
                       >
                         ₹{Math.abs(Number(customer.balance || 0)).toLocaleString("en-IN")}
                       </Text>
@@ -2205,7 +2212,7 @@ setContactsVisible(true);
           style={styles.modalBackdrop}
         >
           <Pressable style={styles.modalOverlay} onPress={() => setIsSummaryModalOpen(false)} />
-          <View style={[styles.modalContent, { maxWidth: 500, height: "80%", maxHeight: 700, padding: 16 }]}>
+          <View style={[styles.modalContent, { width: "92%", maxWidth: 480, maxHeight: "88%", padding: 16 }]}>
             {/* Modal Header */}
             <View style={styles.modalHeader}>
               <View style={{ flex: 1, marginRight: 8 }}>
@@ -2231,12 +2238,12 @@ setContactsVisible(true);
               {/* Overall Summary KPI Cards */}
               <View style={{ flexDirection: "row", flexWrap: "wrap", gap: 8, marginBottom: 16 }}>
                 <View style={{ flex: 1, minWidth: 110, backgroundColor: "#fef2f2", borderRadius: 12, padding: 10, borderWidth: 1, borderColor: "#fca5a5" }}>
-                  <Text style={{ fontSize: 10, fontWeight: "700", color: "#991b1b", textTransform: "uppercase" }}>Total Outstanding</Text>
-                  <Text style={{ fontSize: 16, fontWeight: "800", color: "#991b1b", marginTop: 2 }}>₹{summaryMetrics.totalSum.toLocaleString("en-IN")}</Text>
+                  <Text style={{ fontSize: 10, fontWeight: "700", color: "#991b1b", textTransform: "uppercase" }} {...compactBadgeTextProps}>Total Outstanding</Text>
+                  <Text style={{ fontSize: 16, fontWeight: "800", color: "#991b1b", marginTop: 2 }} {...currencyKpiTextProps}>₹{summaryMetrics.totalSum.toLocaleString("en-IN")}</Text>
                 </View>
                 <View style={{ flex: 1, minWidth: 110, backgroundColor: colors.bg.primary, borderRadius: 12, padding: 10, borderWidth: 1, borderColor: colors.border.medium }}>
-                  <Text style={{ fontSize: 10, fontWeight: "700", color: colors.text.muted, textTransform: "uppercase" }}>Unpaid Accounts</Text>
-                  <Text style={{ fontSize: 16, fontWeight: "800", color: colors.text.primary, marginTop: 2 }}>{summaryMetrics.totalCount}</Text>
+                  <Text style={{ fontSize: 10, fontWeight: "700", color: colors.text.muted, textTransform: "uppercase" }} {...compactBadgeTextProps}>Unpaid Accounts</Text>
+                  <Text style={{ fontSize: 16, fontWeight: "800", color: colors.text.primary, marginTop: 2 }} {...currencyKpiTextProps}>{summaryMetrics.totalCount}</Text>
                 </View>
                 <View style={{ flex: 1, minWidth: 110, backgroundColor: summaryMetrics.overdueCount > 0 ? "#fff7ed" : colors.bg.primary, borderRadius: 12, padding: 10, borderWidth: 1, borderColor: summaryMetrics.overdueCount > 0 ? "#fed7aa" : colors.border.medium }}>
                   <Text style={{ fontSize: 10, fontWeight: "700", color: summaryMetrics.overdueCount > 0 ? "#c2410c" : colors.text.muted, textTransform: "uppercase" }}>Overdue</Text>
@@ -2977,10 +2984,10 @@ const getStyles = (theme: any) => {
     zIndex: 1,
   },
   modalContent: {
-    width: "100%",
-    maxWidth: 420,
-    maxHeight: "85%",
-    minHeight: 300,
+    width: "92%",
+    maxWidth: 480,
+    maxHeight: "88%",
+    minHeight: 260,
     backgroundColor: colors.bg.card,
     borderRadius: 20,
     padding: 20,

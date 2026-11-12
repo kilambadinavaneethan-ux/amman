@@ -1,5 +1,6 @@
 import React, { useEffect } from "react";
 import { StyleSheet, View, useWindowDimensions } from "react-native";
+import { useSafeAreaInsets } from "react-native-safe-area-context";
 import Animated, {
   useSharedValue,
   useAnimatedStyle,
@@ -14,9 +15,10 @@ interface ParticleProps {
   duration: number;
   startX: number;
   size: number;
+  riseDistance: number;
 }
 
-const Particle: React.FC<ParticleProps> = ({ delay, duration, startX, size }) => {
+const Particle: React.FC<ParticleProps> = ({ delay, duration, startX, size, riseDistance }) => {
   const progress = useSharedValue(0);
 
   useEffect(() => {
@@ -43,7 +45,7 @@ const Particle: React.FC<ParticleProps> = ({ delay, duration, startX, size }) =>
         : 1;
 
     // Float upwards along Y axis (from bottom to top)
-    const translateY = -progress.value * 450;
+    const translateY = -progress.value * riseDistance;
     // Gentle horizontal drifting swaying
     const translateX = startX + Math.sin(progress.value * Math.PI * 4) * 15;
     // Slight size pulsating
@@ -72,7 +74,7 @@ const Particle: React.FC<ParticleProps> = ({ delay, duration, startX, size }) =>
 
 // Pre-computed particle data (deterministic) to avoid useState+useEffect on mount.
 // 10 particles instead of 20 for faster splash render.
-const STATIC_PARTICLES: ParticleProps[] = [
+const STATIC_PARTICLES: Omit<ParticleProps, "riseDistance">[] = [
   { delay: 0, duration: 5800, startX: -80, size: 4.2 },
   { delay: 450, duration: 6200, startX: 60, size: 5.5 },
   { delay: 900, duration: 7100, startX: -30, size: 3.8 },
@@ -86,11 +88,22 @@ const STATIC_PARTICLES: ParticleProps[] = [
 ];
 
 export const SplashParticles: React.FC = () => {
+  const { width, height } = useWindowDimensions();
+  const insets = useSafeAreaInsets();
+  const xScale = Math.min(1.18, Math.max(0.75, width / 375));
+  const riseDistance = Math.round(height * 0.55);
+  const bottomPad = Math.max(insets.bottom + 88, Math.round(height * 0.18));
+
   return (
     <View style={StyleSheet.absoluteFill} pointerEvents="none">
-      <View style={styles.container}>
+      <View style={[styles.container, { paddingBottom: bottomPad }]}>
         {STATIC_PARTICLES.map((p, index) => (
-          <Particle key={index} {...p} />
+          <Particle
+            key={index}
+            {...p}
+            startX={Math.round(p.startX * xScale)}
+            riseDistance={riseDistance}
+          />
         ))}
       </View>
     </View>

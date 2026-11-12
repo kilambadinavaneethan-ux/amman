@@ -1,5 +1,6 @@
 import React, { useEffect } from "react";
-import { StyleSheet, Text, View } from "react-native";
+import { StyleSheet, Text, View, useWindowDimensions } from "react-native";
+import { useSafeAreaInsets } from "react-native-safe-area-context";
 import Animated, {
   useSharedValue,
   useAnimatedStyle,
@@ -20,6 +21,12 @@ interface PremiumSplashProps {
 }
 
 export const PremiumSplash: React.FC<PremiumSplashProps> = ({ onFinish }) => {
+  const { width, height } = useWindowDimensions();
+  const insets = useSafeAreaInsets();
+  const logoSize = Math.round(Math.min(200, Math.max(130, width * 0.45)));
+  const trackWidth = Math.round(Math.min(260, Math.max(170, width * 0.58)));
+  const bottomOffset = Math.max(insets.bottom + 32, Math.round(height * 0.13));
+
   // Master opacity for the entire splash container (fade out at finish)
   const masterOpacity = useSharedValue(1);
 
@@ -155,12 +162,23 @@ export const PremiumSplash: React.FC<PremiumSplashProps> = ({ onFinish }) => {
       <SplashParticles />
 
       {/* Logo & Ring Center Group */}
-      <View style={styles.centerGroup}>
+      <View
+        style={[
+          styles.centerGroup,
+          { width: Math.round(logoSize * 1.75), height: Math.round(logoSize * 1.75) },
+        ]}
+      >
         {/* Subtle Rotating Halo Ring */}
         <SplashRing />
 
         {/* Pulsing & Floating Gold Logo */}
-        <Animated.View style={[styles.logoContainer, logoAnimatedStyle]}>
+        <Animated.View
+          style={[
+            styles.logoContainer,
+            { width: logoSize, height: logoSize },
+            logoAnimatedStyle,
+          ]}
+        >
           <Image
             source={require("../../assets/images/icon.png")}
             style={styles.logoImage}
@@ -170,9 +188,9 @@ export const PremiumSplash: React.FC<PremiumSplashProps> = ({ onFinish }) => {
       </View>
 
       {/* Loading Progress Group */}
-      <View style={styles.loadingGroup}>
+      <View style={[styles.loadingGroup, { bottom: bottomOffset }]}>
         {/* Track */}
-        <View style={styles.progressTrack}>
+        <View style={[styles.progressTrack, { width: trackWidth }]}>
           {/* Progress fill */}
           <Animated.View style={[styles.progressFill, progressStyle]} />
           {/* Glowing Orb */}

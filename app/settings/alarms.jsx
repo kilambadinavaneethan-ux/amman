@@ -12,6 +12,7 @@ import {
   ActivityIndicator,
   TextInput,
   Alert,
+  KeyboardAvoidingView,
   Platform,
   Modal,
 } from "react-native";
@@ -20,6 +21,7 @@ import { useRouter } from "expo-router";
 import { MaterialIcons } from "@expo/vector-icons";
 import ProtectedRoute from "../components/ProtectedRoute";
 import BackButton from "../components/BackButton";
+import { useResponsive } from "../../utils/responsive";
 
 const ALARM_CATEGORIES = {
   general: { label: "General", icon: "alarm", color: "#3B82F6", bgColor: "#3B82F615" },
@@ -42,6 +44,7 @@ const WEEKDAYS = [
 function AlarmManagerScreen() {
   const { theme } = useTheme();
   const { colors } = theme;
+  const { insets, kavBehavior, scrollBottomPadding } = useResponsive();
   const styles = useMemo(() => getStyles(theme), [theme]);
   const router = useRouter();
 
@@ -389,7 +392,13 @@ function AlarmManagerScreen() {
   };
 
   return (
-    <ScrollView contentContainerStyle={styles.container} showsVerticalScrollIndicator={false}>
+    <ScrollView
+      contentContainerStyle={[
+        styles.container,
+        { paddingTop: Math.max(insets.top + 8, theme.spacing.lg), paddingBottom: scrollBottomPadding },
+      ]}
+      showsVerticalScrollIndicator={false}
+    >
       {/* Back navigation & Title */}
       <View style={styles.header}>
         <BackButton label="Settings" onPress={() => router.push("/settings")} style={{ marginBottom: 12 }} />
@@ -558,8 +567,8 @@ function AlarmManagerScreen() {
         transparent={true}
         onRequestClose={() => setModalVisible(false)}
       >
-        <View style={styles.modalOverlay}>
-          <View style={styles.modalContent}>
+        <KeyboardAvoidingView behavior={kavBehavior} style={styles.modalOverlay}>
+          <View style={[styles.modalContent, { paddingBottom: Math.max(insets.bottom + 12, theme.spacing.lg) }]}>
             {/* Modal Header */}
             <View style={styles.modalHeader}>
               <Text style={styles.modalTitle}>
@@ -905,7 +914,7 @@ function AlarmManagerScreen() {
               </View>
             </ScrollView>
           </View>
-        </View>
+        </KeyboardAvoidingView>
       </Modal>
     </ScrollView>
   );
@@ -1227,7 +1236,10 @@ const getStyles = (theme) => {
       backgroundColor: colors.bg.card,
       borderTopLeftRadius: radius.xl,
       borderTopRightRadius: radius.xl,
-      maxHeight: "85%",
+      width: "100%",
+      maxWidth: 560,
+      alignSelf: "center",
+      maxHeight: "88%",
       padding: spacing.lg,
       ...shadows.elevated,
     },

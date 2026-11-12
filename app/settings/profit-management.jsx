@@ -25,6 +25,7 @@ import {
   TextInput,
   Alert,
   RefreshControl,
+  KeyboardAvoidingView,
   Modal,
 } from "react-native";
 import Animated, { FadeInDown } from "react-native-reanimated";
@@ -32,10 +33,12 @@ import { useRouter } from "expo-router";
 import { MaterialIcons } from "@expo/vector-icons";
 import ProtectedRoute from "../components/ProtectedRoute";
 import BackButton from "../components/BackButton";
+import { useResponsive } from "../../utils/responsive";
 
 function ProfitManagementScreen() {
   const { theme } = useTheme();
   const { colors, spacing, radius, shadows } = theme;
+  const { insets, kavBehavior, scrollBottomPadding } = useResponsive();
   const styles = useMemo(() => getStyles(theme), [theme]);
   const router = useRouter();
 
@@ -729,7 +732,10 @@ function ProfitManagementScreen() {
 
   return (
     <ScrollView
-      contentContainerStyle={styles.container}
+      contentContainerStyle={[
+        styles.container,
+        { paddingTop: Math.max(insets.top + 8, spacing.lg), paddingBottom: scrollBottomPadding },
+      ]}
       showsVerticalScrollIndicator={false}
       refreshControl={<RefreshControl refreshing={refreshing} onRefresh={handleRefresh} colors={[colors.accent.success]} />}
     >
@@ -1660,9 +1666,9 @@ function ProfitManagementScreen() {
       )}
 
       {/* OVERLAY DETAILS MODAL A: CUSTOMER PROFILE DETAILS */}
-      <Modal visible={!!selectedCustomer} transparent animationType="slide">
-        <View style={styles.modalBg}>
-          <View style={styles.modalContent}>
+      <Modal visible={!!selectedCustomer} transparent animationType="slide" onRequestClose={() => setSelectedCustomer(null)}>
+        <KeyboardAvoidingView behavior={kavBehavior} style={styles.modalBg}>
+          <View style={[styles.modalContent, { paddingBottom: Math.max(insets.bottom + 12, spacing.lg) }]}>
             {selectedCustomer && customerDetailData && (
               <View style={{ flex: 1 }}>
                 <View style={styles.modalHeaderRow}>
@@ -1749,13 +1755,13 @@ function ProfitManagementScreen() {
               </View>
             )}
           </View>
-        </View>
+        </KeyboardAvoidingView>
       </Modal>
 
       {/* OVERLAY DETAILS MODAL B: DELIVERY PARTNER DETAILS */}
-      <Modal visible={!!selectedPartner} transparent animationType="slide">
-        <View style={styles.modalBg}>
-          <View style={styles.modalContent}>
+      <Modal visible={!!selectedPartner} transparent animationType="slide" onRequestClose={() => setSelectedPartner(null)}>
+        <KeyboardAvoidingView behavior={kavBehavior} style={styles.modalBg}>
+          <View style={[styles.modalContent, { paddingBottom: Math.max(insets.bottom + 12, spacing.lg) }]}>
             {selectedPartner && partnerDetailData && (
               <View style={{ flex: 1 }}>
                 <View style={styles.modalHeaderRow}>
@@ -1853,13 +1859,13 @@ function ProfitManagementScreen() {
               </View>
             )}
           </View>
-        </View>
+        </KeyboardAvoidingView>
       </Modal>
 
       {/* OVERLAY DETAILS MODAL C: WORKER DETAILS */}
-      <Modal visible={!!selectedWorker} transparent animationType="slide">
-        <View style={styles.modalBg}>
-          <View style={styles.modalContent}>
+      <Modal visible={!!selectedWorker} transparent animationType="slide" onRequestClose={() => setSelectedWorker(null)}>
+        <KeyboardAvoidingView behavior={kavBehavior} style={styles.modalBg}>
+          <View style={[styles.modalContent, { paddingBottom: Math.max(insets.bottom + 12, spacing.lg) }]}>
             {selectedWorker && workerDetailData && (
               <View style={{ flex: 1 }}>
                 <View style={styles.modalHeaderRow}>
@@ -1926,13 +1932,13 @@ function ProfitManagementScreen() {
               </View>
             )}
           </View>
-        </View>
+        </KeyboardAvoidingView>
       </Modal>
 
       {/* OVERLAY DETAILS MODAL D: OVERVIEW METRIC DETAILS */}
-      <Modal visible={!!selectedOverviewMetric} transparent animationType="slide">
-        <View style={styles.modalBg}>
-          <View style={styles.modalContent}>
+      <Modal visible={!!selectedOverviewMetric} transparent animationType="slide" onRequestClose={() => setSelectedOverviewMetric(null)}>
+        <KeyboardAvoidingView behavior={kavBehavior} style={styles.modalBg}>
+          <View style={[styles.modalContent, { paddingBottom: Math.max(insets.bottom + 12, spacing.lg) }]}>
             {selectedOverviewMetric && (
               <View style={{ flex: 1 }}>
                 <View style={styles.modalHeaderRow}>
@@ -2176,7 +2182,7 @@ function ProfitManagementScreen() {
               </View>
             )}
           </View>
-        </View>
+        </KeyboardAvoidingView>
       </Modal>
     </ScrollView>
   );
@@ -2401,7 +2407,8 @@ const getStyles = (theme) => {
     },
     statCard: {
       flex: 1,
-      minWidth: "45%",
+      flexGrow: 1,
+      minWidth: 132,
       backgroundColor: colors.bg.card,
       borderRadius: radius.lg,
       borderWidth: 1,
@@ -2707,6 +2714,10 @@ const getStyles = (theme) => {
     },
     modalContent: {
       height: "85%",
+      maxHeight: "88%",
+      width: "100%",
+      maxWidth: 560,
+      alignSelf: "center",
       backgroundColor: colors.bg.primary,
       borderTopLeftRadius: radius.xl,
       borderTopRightRadius: radius.xl,

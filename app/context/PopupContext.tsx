@@ -1,58 +1,130 @@
 import { MaterialIcons } from "@expo/vector-icons";
 import {
-    createContext,
-    useContext,
-    useEffect,
-    useRef,
-    useState,
-    useMemo,
-    useCallback,
+  createContext,
+  useCallback,
+  useContext,
+  useEffect,
+  useMemo,
+  useRef,
+  useState,
+  type ReactNode,
 } from "react";
-import {
-    Alert,
-    Modal,
-    Pressable,
-    StyleSheet,
-    Text,
-    View
-} from "react-native";
+import { Alert, Modal, Pressable, ScrollView, StyleSheet, Text, View, type AlertButton } from "react-native";
+import { useSafeAreaInsets } from "react-native-safe-area-context";
 import Animated, {
-    FadeIn,
-    FadeInUp,
-    FadeOut,
-    FadeOutUp,
-    ZoomIn,
-    ZoomOut,
+  FadeIn,
+  FadeInUp,
+  FadeOut,
+  FadeOutUp,
+  ZoomIn,
+  ZoomOut,
 } from "react-native-reanimated";
 import { useTheme } from "./ThemeContext";
 
-const PopupContext = createContext(null);
+export type PopupType = "success" | "error" | "warning" | "confirm" | "info";
 
-export function PopupProvider({ children }) {
+export interface DialogConfig {
+  title?: string;
+  message?: string;
+  type?: PopupType;
+  confirmText?: string;
+  cancelText?: string;
+  onConfirm?: () => void;
+  onCancel?: () => void;
+}
+
+export interface PopupContextType {
+  showToast: (message: string, type?: PopupType, duration?: number) => void;
+  showDialog: (config: DialogConfig) => void;
+}
+
+interface ToastState {
+  message: string;
+  type: PopupType;
+}
+
+interface DialogState {
+  title: string;
+  message: string;
+  type: PopupType;
+  confirmText: string;
+  cancelText: string;
+  onConfirm: () => void;
+  onCancel: () => void;
+}
+
+const PopupContext = createContext<PopupContextType | null>(null);
+
+export function PopupProvider({ children }: { children: ReactNode }) {
   const { theme } = useTheme();
-  const { colors, radius, shadows } = theme;
+  const { colors } = theme;
+  const insets = useSafeAreaInsets();
   const styles = useMemo(() => getStyles(theme), [theme]);
 
   // Toast State
-  const [toast, setToast] = useState(null);
-  const toastTimeoutRef = useRef(null);
+  const [toast, setToast] = useState<ToastState | null>(null);
+  const toastTimeoutRef = useRef<ReturnType<typeof setTimeout> | null>(null);
 
   // Dialog State
-  const [dialog, setDialog] = useState(null);
+  const [dialog, setDialog] = useState<DialogState | null>(null);
+
+  const showToast = useCallback(
+    (message: string, type: PopupType = "success", duration = 3000) => {
+      if (toastTimeoutRef.current) {
+        clearTimeout(toastTimeoutRef.current);
+      }
+      setToast({ message, type });
+      toastTimeoutRef.current = setTimeout(() => {
+        setToast(null);
+      }, duration);
+    },
+    [],
+  );
+
+  const showDialog = useCallback((config: DialogConfig) => {
+    setDialog({
+      title: config.title || "Alert",
+      message: config.message || "",
+      type: config.type || "info",
+      confirmText: config.confirmText || "OK",
+      cancelText: config.cancelText || "Cancel",
+      onConfirm: () => {
+        if (config.onConfirm) config.onConfirm();
+        setDialog(null);
+      },
+      onCancel: () => {
+        if (config.onCancel) config.onCancel();
+        setDialog(null);
+      },
+    });
+  }, []);
+
+  useEffect(() => {
+    return () => {
+      if (toastTimeoutRef.current) {
+        clearTimeout(toastTimeoutRef.current);
+      }
+    };
+  }, []);
 
   useEffect(() => {
     // Override native Alert.alert globally to use premium custom dialogs
     const originalAlert = Alert.alert;
-    const originalGlobalAlert = global.alert;
+    const globalObj = globalThis as typeof globalThis & { alert?: (msg?: unknown) => void };
+    const originalGlobalAlert = globalObj.alert;
 
-    Alert.alert = (title, message, buttons, options) => {
+    Alert.alert = (
+      title: string,
+      message?: string,
+      buttons?: AlertButton[],
+    ) => {
       const hasButtons = buttons && buttons.length > 0;
 
       let onConfirm = () => {};
       let onCancel = () => {};
       let confirmText = "OK";
       let cancelText = "Cancel";
-      let type = "info";
+      let type: PopupType = "info";
 
       const titleLower = String(title || "").toLowerCase();
       const msgLower = String(message || "").toLowerCase();
@@ -82,7 +154,7 @@ export function PopupProvider({ children }) {
         type = "warning";
       }
 
-      if (hasButtons) {
+      if (hasButtons && buttons) {
         if (buttons.length === 1) {
           const btn = buttons[0];
           confirmText = btn.text || "OK";
@@ -139,46 +211,19 @@ export function PopupProvider({ children }) {
       }
     };
 
-    global.alert = (message) => {
-      Alert.alert("Notification", String(message));
+    globalObj.alert = (msg?: unknown) => {
+      Alert.alert("Notification", String(msg));
     };
 
     return () => {
       Alert.alert = originalAlert;
-      global.alert = originalGlobalAlert;
+      if (originalGlobalAlert) {
+        globalObj.alert = originalGlobalAlert;
+      }
     };
-  }, [colors, theme]);
+  }, [colors, theme, showDialog]);
 
-  const showToast = useCallback((message, type = "success", duration = 3000) => {
-    if (toastTimeoutRef.current) {
-      clearTimeout(toastTimeoutRef.current);
-    }
-    setToast({ message, type });
-    toastTimeoutRef.current = setTimeout(() => {
-      setToast(null);
-    }, duration);
-  }, []);
-
-  const showDialog = useCallback((config) => {
-    setDialog({
-      title: config.title || "Alert",
-      message: config.message || "",
-      type: config.type || "info", // success, error, warning, confirm, info
-      confirmText: config.confirmText || "OK",
-      cancelText: config.cancelText || "Cancel",
-      onConfirm: () => {
-        if (config.onConfirm) config.onConfirm();
-        setDialog(null);
-      },
-      onCancel: () => {
-        if (config.onCancel) config.onCancel();
-        setDialog(null);
-      },
-    });
-  }, []);
-
-  // Helper icons
-  const getIconName = (type) => {
+  const getIconName = useCallback((type: PopupType): keyof typeof MaterialIcons.glyphMap => {
     switch (type) {
       case "success":
         return "check-circle";
@@ -191,26 +236,29 @@ export function PopupProvider({ children }) {
       default:
         return "info";
     }
-  };
+  }, []);
 
-  const getIconColor = (type) => {
-    switch (type) {
-      case "success":
-        return "#10b981";
-      case "error":
-        return "#ef4444";
-      case "warning":
-        return "#f59e0b";
-      case "confirm":
-        return colors.accent.primary;
-      default:
-        return colors.accent.info || "#3b82f6";
-    }
-  };
+  const getIconColor = useCallback(
+    (type: PopupType): string => {
+      switch (type) {
+        case "success":
+          return "#10b981";
+        case "error":
+          return "#ef4444";
+        case "warning":
+          return "#f59e0b";
+        case "confirm":
+          return colors.accent.primary;
+        default:
+          return colors.accent.info || "#3b82f6";
+      }
+    },
+    [colors],
+  );
 
-  const contextValue = useMemo(
+  const contextValue = useMemo<PopupContextType>(
     () => ({ showToast, showDialog }),
-    [showToast, showDialog]
+    [showToast, showDialog],
   );
 
   return (
@@ -222,7 +270,13 @@ export function PopupProvider({ children }) {
         <Animated.View
           entering={FadeInUp}
           exiting={FadeOutUp}
-          style={[styles.toastContainer, { backgroundColor: colors.bg.card }]}
+          style={[
+            styles.toastContainer,
+            {
+              top: Math.max(insets.top + 8, 16),
+              backgroundColor: colors.bg.card,
+            },
+          ]}
         >
           <View
             style={[
@@ -278,14 +332,10 @@ export function PopupProvider({ children }) {
                 />
               </View>
 
-              <Text
-                style={[styles.dialogTitle, { color: colors.text.primary }]}
-              >
+              <Text style={[styles.dialogTitle, { color: colors.text.primary }]}>
                 {dialog.title}
               </Text>
-              <Text
-                style={[styles.dialogDesc, { color: colors.text.secondary }]}
-              >
+              <Text style={[styles.dialogDesc, { color: colors.text.secondary }]}>
                 {dialog.message}
               </Text>
 
@@ -317,9 +367,7 @@ export function PopupProvider({ children }) {
                   ]}
                   onPress={dialog.onConfirm}
                 >
-                  <Text style={styles.confirmBtnText}>
-                    {dialog.confirmText}
-                  </Text>
+                  <Text style={styles.confirmBtnText}>{dialog.confirmText}</Text>
                 </Pressable>
               </View>
             </Animated.View>
@@ -330,7 +378,7 @@ export function PopupProvider({ children }) {
   );
 }
 
-export function usePopup() {
+export function usePopup(): PopupContextType {
   const context = useContext(PopupContext);
   if (!context) {
     throw new Error("usePopup must be used within a PopupProvider");
@@ -338,7 +386,7 @@ export function usePopup() {
   return context;
 }
 
-const getStyles = (theme) =>
+const getStyles = (theme: any) =>
   StyleSheet.create({
     toastContainer: {
       position: "absolute",
@@ -385,8 +433,9 @@ const getStyles = (theme) =>
       padding: 24,
     },
     dialogBox: {
-      width: "100%",
-      maxWidth: 340,
+      width: "92%",
+      maxWidth: 420,
+      maxHeight: "88%",
       borderRadius: 24,
       padding: 24,
       alignItems: "center",
@@ -448,3 +497,4 @@ const getStyles = (theme) =>
 export default function PopupRoutePlaceholder() {
   return null;
 }
+

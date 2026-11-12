@@ -13,6 +13,7 @@ import { getDocsOfflineSafe } from "../../../src/utils/offlineHelpers";
 import { useContext, useEffect, useMemo, useState } from "react";
 import {
     ActivityIndicator,
+    KeyboardAvoidingView,
     Modal,
     Pressable,
     ScrollView,
@@ -25,6 +26,7 @@ import {
 import ProtectedRoute from "../../components/ProtectedRoute";
 import BackButton from "../../components/BackButton";
 import { useTheme } from "../../context/ThemeContext";
+import { useResponsive } from "../../../utils/responsive";
 import { WorkerContext } from "../../context/WorkerContext";
 import { db, normalizeDateValue } from "../../../src/config/firebase";
 
@@ -40,6 +42,7 @@ const ATTENDANCE_STATUSES = [
 function AutomationManagementScreen() {
   const { theme } = useTheme();
   const { colors, spacing, radius, shadows } = theme;
+  const { insets, kavBehavior, scrollBottomPadding } = useResponsive();
   const styles = useMemo(() => getStyles(theme), [theme]);
   const router = useRouter();
   const { workers, bulkLogAttendance, todayAttendance } =
@@ -552,7 +555,12 @@ function AutomationManagementScreen() {
 
   return (
     <ProtectedRoute>
-      <ScrollView contentContainerStyle={styles.container}>
+      <ScrollView
+        contentContainerStyle={[
+          styles.container,
+          { paddingTop: Math.max(insets.top + 8, 16), paddingBottom: scrollBottomPadding },
+        ]}
+      >
         {/* Header */}
         <View style={styles.header}>
           <BackButton label="Settings" onPress={() => router.push("/settings")} style={{ marginBottom: 12 }} />
@@ -1283,8 +1291,8 @@ function AutomationManagementScreen() {
         )}
 
         {/* CUSTOM CALENDAR MODAL */}
-        <Modal visible={calendarVisible} transparent animationType="fade">
-          <View style={styles.calendarModalBg}>
+        <Modal visible={calendarVisible} transparent animationType="fade" onRequestClose={() => setCalendarVisible(false)}>
+          <KeyboardAvoidingView behavior={kavBehavior} style={styles.calendarModalBg}>
             <View style={styles.calendarModalContent}>
               <View style={styles.calendarHeader}>
                 <Text style={styles.calendarTitle}>Select Date</Text>
@@ -1330,7 +1338,7 @@ function AutomationManagementScreen() {
                 })}
               </View>
             </View>
-          </View>
+          </KeyboardAvoidingView>
         </Modal>
 
         {/* SIMULATION LOADER & RESULT MODAL */}
@@ -1338,8 +1346,9 @@ function AutomationManagementScreen() {
           visible={simulationModalVisible}
           transparent
           animationType="slide"
+          onRequestClose={() => !simulating && setSimulationModalVisible(false)}
         >
-          <View style={styles.modalBg}>
+          <KeyboardAvoidingView behavior={kavBehavior} style={styles.modalBg}>
             <View style={styles.modalContent}>
               {simulating ? (
                 <View style={styles.simulatingBody}>
@@ -1406,7 +1415,7 @@ function AutomationManagementScreen() {
                 </View>
               )}
             </View>
-          </View>
+          </KeyboardAvoidingView>
         </Modal>
       </ScrollView>
     </ProtectedRoute>
@@ -1876,6 +1885,10 @@ const getStyles = (theme) => {
       backgroundColor: colors.bg.card,
       borderRadius: 20,
       padding: 20,
+      width: "92%",
+      maxWidth: 440,
+      maxHeight: "88%",
+      alignSelf: "center",
     },
     simulatingBody: {
       alignItems: "center",

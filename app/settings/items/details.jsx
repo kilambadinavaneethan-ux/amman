@@ -14,6 +14,7 @@ import {
 import { useContext, useEffect, useMemo, useState } from "react";
 import {
     ActivityIndicator,
+    KeyboardAvoidingView,
     Modal,
     Pressable,
     ScrollView,
@@ -33,6 +34,7 @@ import { RawMaterialSupplierContext } from "../../context/RawMaterialSupplierCon
 import { DeliveryPartnerContext } from "../../context/DeliveryPartnerContext";
 import { useTheme } from "../../context/ThemeContext";
 import { UserContext } from "../../context/UserContext";
+import { useResponsive } from "../../../utils/responsive";
 import { db } from "../../../src/config/firebase";
 
 const RATE_TYPE_LABELS = {
@@ -62,6 +64,7 @@ const LOG_TYPE_CONFIG = {
 function ItemDetailsScreen() {
   const { theme } = useTheme();
   const { colors, spacing, radius, shadows } = theme;
+  const { insets, kavBehavior, hp, scrollBottomPadding } = useResponsive();
   const styles = useMemo(() => getStyles(theme), [theme]);
   const router = useRouter();
   const { id } = useLocalSearchParams();
@@ -921,7 +924,12 @@ function ItemDetailsScreen() {
   else if (unitProfit < 0) profitColor = "#ef4444"; // red
 
   return (
-    <ScrollView contentContainerStyle={styles.container}>
+    <ScrollView
+      contentContainerStyle={[
+        styles.container,
+        { paddingTop: Math.max(insets.top + 8, 16), paddingBottom: scrollBottomPadding },
+      ]}
+    >
       {/* Header Navigation */}
       <View style={styles.header}>
         <BackButton
@@ -1923,8 +1931,13 @@ function ItemDetailsScreen() {
       </View>
 
       {/* Delete confirmation modal */}
-      <Modal visible={deleteModalVisible} transparent animationType="fade">
-        <View style={styles.modalBg}>
+      <Modal
+        visible={deleteModalVisible}
+        transparent
+        animationType="fade"
+        onRequestClose={() => !deleting && setDeleteModalVisible(false)}
+      >
+        <KeyboardAvoidingView behavior={kavBehavior} style={styles.modalBg}>
           <View style={styles.modalContent}>
             <View style={styles.modalIconWrapper}>
               <MaterialIcons
@@ -1960,17 +1973,23 @@ function ItemDetailsScreen() {
               </Pressable>
             </View>
           </View>
-        </View>
+        </KeyboardAvoidingView>
       </Modal>
 
       {/* Upgraded Add/Edit Log Modal */}
-      <Modal visible={logModalVisible} transparent animationType="slide">
-        <View style={styles.modalBg}>
-          <View style={[styles.modalContent, { maxWidth: 420, alignItems: "stretch" }]}>
+      <Modal
+        visible={logModalVisible}
+        transparent
+        animationType="slide"
+        onRequestClose={() => !savingLog && setLogModalVisible(false)}
+      >
+        <KeyboardAvoidingView behavior={kavBehavior} style={styles.modalBg}>
+          <View style={[styles.modalContent, { maxWidth: 440, alignItems: "stretch" }]}>
             <Text style={[styles.modalTitle, { alignSelf: "center", marginBottom: 12 }]}>
               {logModalMode === "add" ? "Add Stock Movement Log" : "Edit Stock Movement Log"}
             </Text>
 
+            <ScrollView style={{ maxHeight: Math.round(hp(66)) }} showsVerticalScrollIndicator={false} keyboardShouldPersistTaps="handled">
             {/* Direction Switch Tabs */}
             <Text style={styles.inputLabel}>Direction</Text>
             <View style={styles.directionTabs}>
@@ -2156,14 +2175,20 @@ function ItemDetailsScreen() {
                 )}
               </Pressable>
             </View>
+            </ScrollView>
           </View>
-        </View>
+        </KeyboardAvoidingView>
       </Modal>
 
       {/* Export Report Modal */}
-      <Modal visible={exportModalVisible} transparent animationType="fade">
-        <View style={styles.modalBg}>
-          <View style={[styles.modalContent, { maxWidth: 480, maxHeight: "80%", alignItems: "stretch" }]}>
+      <Modal
+        visible={exportModalVisible}
+        transparent
+        animationType="fade"
+        onRequestClose={() => setExportModalVisible(false)}
+      >
+        <KeyboardAvoidingView behavior={kavBehavior} style={styles.modalBg}>
+          <View style={[styles.modalContent, { maxWidth: 480, maxHeight: "88%", alignItems: "stretch" }]}>
             <View style={{ flexDirection: "row", justifyContent: "space-between", alignItems: "center", marginBottom: 12 }}>
               <View style={{ flexDirection: "row", alignItems: "center", gap: 8 }}>
                 <MaterialIcons name="file-download" size={22} color={colors.accent.primary} />
@@ -2201,12 +2226,17 @@ function ItemDetailsScreen() {
               </Pressable>
             </View>
           </View>
-        </View>
+        </KeyboardAvoidingView>
       </Modal>
 
       {/* Delete Log Confirmation Modal */}
-      <Modal visible={deleteLogModalVisible} transparent animationType="fade">
-        <View style={styles.modalBg}>
+      <Modal
+        visible={deleteLogModalVisible}
+        transparent
+        animationType="fade"
+        onRequestClose={() => !deletingLog && setDeleteLogModalVisible(false)}
+      >
+        <KeyboardAvoidingView behavior={kavBehavior} style={styles.modalBg}>
           <View style={styles.modalContent}>
             <View style={styles.modalIconWrapper}>
               <MaterialIcons
@@ -2241,13 +2271,18 @@ function ItemDetailsScreen() {
               </Pressable>
             </View>
           </View>
-        </View>
+        </KeyboardAvoidingView>
       </Modal>
 
       {/* Manage Opening Stock & Slots Modal */}
-      <Modal visible={slotModalVisible} transparent animationType="slide">
-        <View style={styles.modalBg}>
-          <View style={[styles.modalContent, { maxWidth: 440, alignItems: "stretch" }]}>
+      <Modal
+        visible={slotModalVisible}
+        transparent
+        animationType="slide"
+        onRequestClose={() => !savingSlots && setSlotModalVisible(false)}
+      >
+        <KeyboardAvoidingView behavior={kavBehavior} style={styles.modalBg}>
+          <View style={[styles.modalContent, { maxWidth: 460, alignItems: "stretch" }]}>
             <View style={{ flexDirection: "row", justifyContent: "space-between", alignItems: "center", marginBottom: 2 }}>
               <Text style={[styles.modalTitle, { marginBottom: 0 }]}>
                 Opening Stock & Slots
@@ -2411,7 +2446,7 @@ function ItemDetailsScreen() {
             })()}
 
             {/* Slot List */}
-            <ScrollView style={{ maxHeight: 220 }}>
+            <ScrollView style={{ maxHeight: Math.round(hp(30)) }} nestedScrollEnabled>
               {editingSlots.map((slot, index) => {
                 const total = editingSlots.length;
                 const isFirst = index === 0;
@@ -2524,7 +2559,7 @@ function ItemDetailsScreen() {
               </Pressable>
             </View>
           </View>
-        </View>
+        </KeyboardAvoidingView>
       </Modal>
 
       {/* Calendar Modal for Stock Movement Audit Log Date Filter */}
@@ -2778,8 +2813,9 @@ const getStyles = (theme) => {
       backgroundColor: colors.bg.card,
       borderRadius: 20,
       padding: 24,
-      width: "100%",
-      maxWidth: 360,
+      width: "92%",
+      maxWidth: 420,
+      maxHeight: "88%",
       alignItems: "center",
       shadowColor: "#000",
       shadowOpacity: 0.1,
@@ -2988,6 +3024,7 @@ const getStyles = (theme) => {
     typeGridBtn: {
       flexBasis: "30%",
       flexGrow: 1,
+      minWidth: 92,
       paddingVertical: 8,
       borderRadius: 8,
       borderWidth: 1.5,

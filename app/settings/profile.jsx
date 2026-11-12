@@ -8,6 +8,7 @@ import {
   Pressable,
   ActivityIndicator,
   Alert,
+  KeyboardAvoidingView,
   Modal,
 } from "react-native";
 import { Image } from "expo-image";
@@ -16,6 +17,7 @@ import { MaterialIcons } from "@expo/vector-icons";
 import * as ImagePicker from "expo-image-picker";
 import { UserContext } from "../context/UserContext";
 import { useTheme } from "../context/ThemeContext";
+import { useResponsive } from "../../utils/responsive";
 import ProtectedRoute from "../components/ProtectedRoute";
 import BackButton from "../components/BackButton";
 import { saveImageToLocalFolder } from "../../src/services/localImageStorageService";
@@ -23,6 +25,7 @@ import { saveImageToLocalFolder } from "../../src/services/localImageStorageServ
 function ProfileSettings() {
   const { theme } = useTheme();
   const { colors } = theme;
+  const { insets, kavBehavior, scrollBottomPadding } = useResponsive();
   const styles = useMemo(() => getStyles(theme), [theme]);
   const router = useRouter();
   const { profile, loading, updateProfile, uploadProfileImage } = useContext(UserContext);
@@ -213,7 +216,13 @@ function ProfileSettings() {
 
   return (
     <View style={styles.outerContainer}>
-      <ScrollView contentContainerStyle={styles.container} keyboardShouldPersistTaps="handled">
+      <ScrollView
+        contentContainerStyle={[
+          styles.container,
+          { paddingTop: Math.max(insets.top + 8, theme.spacing.lg), paddingBottom: scrollBottomPadding },
+        ]}
+        keyboardShouldPersistTaps="handled"
+      >
         {/* Navigation Header */}
         <View style={styles.header}>
           <BackButton label="Settings" onPress={() => router.push("/settings")} />
@@ -464,9 +473,10 @@ function ProfileSettings() {
       </ScrollView>
 
       {/* Image Picker Modal */}
-      <Modal visible={showImagePickerModal} transparent animationType="fade">
-        <Pressable style={styles.modalOverlay} onPress={() => setShowImagePickerModal(false)}>
-          <View style={styles.modalCard}>
+      <Modal visible={showImagePickerModal} transparent animationType="fade" onRequestClose={() => setShowImagePickerModal(false)}>
+        <KeyboardAvoidingView behavior={kavBehavior} style={{ flex: 1 }}>
+          <Pressable style={styles.modalOverlay} onPress={() => setShowImagePickerModal(false)}>
+            <View style={styles.modalCard}>
             <Text style={styles.modalTitle}>Choose Profile Image</Text>
             <Text style={styles.modalSub}>Select or take a photo for your account profile & logo</Text>
 
@@ -502,8 +512,9 @@ function ProfileSettings() {
             >
               <Text style={styles.modalCancelText}>Cancel</Text>
             </Pressable>
-          </View>
-        </Pressable>
+            </View>
+          </Pressable>
+        </KeyboardAvoidingView>
       </Modal>
     </View>
   );
@@ -799,8 +810,9 @@ const getStyles = (theme) => {
       borderWidth: 1,
       borderColor: colors.border.subtle,
       padding: spacing.xl,
-      width: "100%",
-      maxWidth: 360,
+      width: "92%",
+      maxWidth: 400,
+      maxHeight: "88%",
       ...shadows.elevated,
     },
     modalTitle: {

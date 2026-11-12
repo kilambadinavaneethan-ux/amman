@@ -1,5 +1,5 @@
 import React, { useEffect } from "react";
-import { StyleSheet, View } from "react-native";
+import { StyleSheet, View, useWindowDimensions } from "react-native";
 import Animated, {
   useSharedValue,
   useAnimatedStyle,
@@ -12,6 +12,9 @@ import Svg, { Circle, Defs, LinearGradient, Stop } from "react-native-svg";
 const AnimatedView = Animated.View;
 
 export const SplashRing: React.FC = () => {
+  const { width } = useWindowDimensions();
+  const ringSize = Math.round(Math.min(300, Math.max(200, width * 0.72)));
+  const wrapperSize = Math.round(ringSize * 1.14);
   const rotation = useSharedValue(0);
 
   useEffect(() => {
@@ -33,8 +36,14 @@ export const SplashRing: React.FC = () => {
 
   return (
     <View style={styles.container} pointerEvents="none">
-      <AnimatedView style={[styles.ringWrapper, animatedStyle]}>
-        <Svg width="280" height="280" viewBox="0 0 280 280">
+      <AnimatedView
+        style={[
+          styles.ringWrapper,
+          { width: wrapperSize, height: wrapperSize },
+          animatedStyle,
+        ]}
+      >
+        <Svg width={ringSize} height={ringSize} viewBox="0 0 280 280">
           <Defs>
             <LinearGradient id="ringGrad" x1="0%" y1="0%" x2="100%" y2="100%">
               <Stop offset="0%" stopColor="#F5D76E" stopOpacity="0.85" />

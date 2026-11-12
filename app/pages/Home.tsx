@@ -4,7 +4,6 @@ import React, { useContext, useMemo, useState, useEffect, useRef } from "react";
 import {
     ActivityIndicator,
     Alert,
-    Dimensions,
     KeyboardAvoidingView,
     Linking,
     Modal,
@@ -53,11 +52,20 @@ import EasyCalendarModal from "../components/EasyCalendarModal";
 
 import { useTheme } from "../context/ThemeContext";
 import { useScrollRestoration } from "../context/ScrollContext";
+import { useResponsive } from "../../utils/responsive";
 
 export default function Home() {
   const router = useRouter();
   const { theme } = useTheme();
   const { colors, spacing, radius, shadows } = theme;
+  const {
+    wp,
+    kavBehavior,
+    bottomFabOffset,
+    scrollBottomPadding,
+    compactBadgeTextProps,
+    insets,
+  } = useResponsive();
   const styles = useMemo(() => getStyles(theme), [theme]);
   const { scrollViewRef, handleScroll, handleContentSizeChange } = useScrollRestoration("/");
   const _deferReady = useDeferredInit();
@@ -2615,7 +2623,7 @@ export default function Home() {
     <AnimatedPage style={{ flex: 1 }}>
       <ScrollView
         ref={scrollViewRef}
-        contentContainerStyle={styles.scrollContainer}
+        contentContainerStyle={[styles.scrollContainer, { paddingBottom: scrollBottomPadding + 68 }]}
         showsVerticalScrollIndicator={false}
         removeClippedSubviews={true}
         scrollEventThrottle={32}
@@ -2632,8 +2640,8 @@ export default function Home() {
         }
       >
         {/* Welcome Section */}
-        <View style={[styles.heroSection, { flexDirection: "row", justifyContent: "space-between", alignItems: "center" }]}>
-          <Animated.View entering={FadeInLeft.duration(500).springify()}>
+        <View style={[styles.heroSection, { flexDirection: "row", justifyContent: "space-between", alignItems: "center", flexWrap: "wrap", gap: 10 }]}>
+          <Animated.View entering={FadeInLeft.duration(500).springify()} style={{ flexShrink: 1 }}>
             <View style={{ flexDirection: "row", alignItems: "center", gap: 6 }}>
               <Text style={styles.welcomeText}>Hello Boss</Text>
               <Animated.Text style={[styles.welcomeEmoji, waveAnimatedStyle]}>
@@ -2663,7 +2671,7 @@ export default function Home() {
             onPress={() => setIsAddCardModalOpen(true)}
           >
             <MaterialIcons name="badge" size={18} color="#8b5cf6" />
-            <Text style={{ fontSize: 13, fontWeight: "700", color: "#8b5cf6" }}>+ Add Card</Text>
+            <Text style={{ fontSize: 13, fontWeight: "700", color: "#8b5cf6" }} {...compactBadgeTextProps}>+ Add Card</Text>
           </Pressable>
         </View>
 
@@ -2674,7 +2682,7 @@ export default function Home() {
           contentContainerStyle={styles.statsRow}
         >
           <Animated.View entering={FadeInDown.duration(200)}>
-            <Pressable style={[styles.statCard, styles.statCardSales]} onPress={() => router.push("/orders" as any)}>
+            <Pressable style={[styles.statCard, { width: Math.max(142, Math.min(185, wp(42))), minWidth: 140 }, styles.statCardSales]} onPress={() => router.push("/orders" as any)}>
               <View style={styles.statIconWrap}>
                 <MaterialIcons name="trending-up" size={22} color={colors.accent.success} />
               </View>
@@ -2687,6 +2695,7 @@ export default function Home() {
             <Pressable
               style={({ pressed }) => [
                 styles.statCard,
+                { width: Math.max(142, Math.min(185, wp(42))), minWidth: 140 },
                 styles.statCardPending,
                 pressed && { opacity: 0.9, transform: [{ scale: 0.98 }] },
               ]}
@@ -2698,7 +2707,7 @@ export default function Home() {
                 </View>
                 <View style={{ flexDirection: "row", alignItems: "center", gap: 2, backgroundColor: "#fee2e2", paddingHorizontal: 6, paddingVertical: 2, borderRadius: 12 }}>
                   <MaterialIcons name="analytics" size={11} color={colors.accent.danger} />
-                  <Text style={{ fontSize: 9.5, fontWeight: "700", color: colors.accent.danger }}>Summary</Text>
+                  <Text style={{ fontSize: 9.5, fontWeight: "700", color: colors.accent.danger }} {...compactBadgeTextProps}>Summary</Text>
                 </View>
               </View>
               <Text style={styles.statLabel}>Pending Balance</Text>
@@ -2707,7 +2716,7 @@ export default function Home() {
           </Animated.View>
 
           <Animated.View entering={FadeInDown.duration(200)}>
-            <Pressable style={[styles.statCard, styles.statCardExpense]} onPress={() => router.push("/expense-balances" as any)}>
+            <Pressable style={[styles.statCard, { width: Math.max(142, Math.min(185, wp(42))), minWidth: 140 }, styles.statCardExpense]} onPress={() => router.push("/expense-balances" as any)}>
               <View style={styles.statIconWrap}>
                 <MaterialIcons name="money-off" size={22} color={colors.accent.warning} />
               </View>
@@ -2720,6 +2729,7 @@ export default function Home() {
             <Pressable
               style={({ pressed }) => [
                 styles.statCard,
+                { width: Math.max(142, Math.min(185, wp(42))), minWidth: 140 },
                 styles.statCardAdvance,
                 pressed && { opacity: 0.9, transform: [{ scale: 0.98 }] },
               ]}
@@ -2730,7 +2740,7 @@ export default function Home() {
                   <MaterialIcons name="account-balance-wallet" size={20} color={colors.accent.success} />
                 </View>
                 <View style={styles.statAdvanceBadge}>
-                  <Text style={styles.statAdvanceBadgeText}>Credit</Text>
+                  <Text style={styles.statAdvanceBadgeText} {...compactBadgeTextProps}>Credit</Text>
                 </View>
               </View>
               <Text style={styles.statLabelAdvance}>Total Advance Paid</Text>
@@ -3648,7 +3658,7 @@ export default function Home() {
       </ScrollView>
 
       {/* Floating Action Bar */}
-      <View style={styles.floatingBar}>
+      <View style={[styles.floatingBar, { bottom: bottomFabOffset }]}>
         <Pressable
           style={({ pressed }) => [
             styles.floatingBtn,
@@ -3660,7 +3670,7 @@ export default function Home() {
             setIsPaymentModalOpen(true);
           }}
         >
-          <Text style={styles.floatingBtnText}>Pending Payment</Text>
+          <Text style={styles.floatingBtnText} numberOfLines={1} adjustsFontSizeToFit minimumFontScale={0.85}>Pending Payment</Text>
         </Pressable>
 
         <Pressable
@@ -3681,7 +3691,7 @@ export default function Home() {
           ]}
           onPress={() => router.push("/create-invoice" as any)}
         >
-          <Text style={styles.floatingBtnText}>+ Bill / Invoice</Text>
+          <Text style={styles.floatingBtnText} numberOfLines={1} adjustsFontSizeToFit minimumFontScale={0.85}>+ Bill / Invoice</Text>
         </Pressable>
       </View>
 
@@ -3692,9 +3702,9 @@ export default function Home() {
         animationType="slide"
         onRequestClose={() => setIsQuickAddOpen(false)}
       >
-        <Pressable style={styles.modalBackdrop} onPress={() => setIsQuickAddOpen(false)}>
-          <View style={{ flex: 1 }} />
-          <Pressable style={styles.quickAddContent} onPress={(e) => e.stopPropagation()}>
+        <KeyboardAvoidingView behavior={kavBehavior} style={styles.modalBackdrop}>
+          <Pressable style={styles.modalFlexSpacer} onPress={() => setIsQuickAddOpen(false)} />
+          <View style={[styles.quickAddContent, { maxHeight: "88%", paddingBottom: Math.max(insets.bottom + 20, 32) }]}>
             <View style={styles.modalHeader}>
               <Text style={styles.modalTitle}>Quick Operations</Text>
               <Pressable style={styles.modalCloseBtn} onPress={() => setIsQuickAddOpen(false)}>
@@ -3702,6 +3712,7 @@ export default function Home() {
               </Pressable>
             </View>
 
+            <ScrollView showsVerticalScrollIndicator={false} keyboardShouldPersistTaps="handled">
             <View style={styles.quickAddGrid}>
               <Pressable
                 style={styles.quickAddGridItem}
@@ -3782,8 +3793,9 @@ export default function Home() {
                 <Text style={styles.quickAddLabel}>Balance Collectors</Text>
               </Pressable>
             </View>
-          </Pressable>
-        </Pressable>
+            </ScrollView>
+          </View>
+        </KeyboardAvoidingView>
       </Modal>
 
       {/* ========== PAYMENT MODAL ========== */}
@@ -3793,13 +3805,13 @@ export default function Home() {
         transparent={true}
         onRequestClose={handleClosePaymentModal}
       >
-        <View style={styles.modalBackdrop}>
+        <KeyboardAvoidingView behavior={kavBehavior} style={styles.modalBackdrop}>
           <Pressable
             style={styles.modalFlexSpacer}
             onPress={handleClosePaymentModal}
           />
 
-          <View style={styles.modalContent}>
+          <View style={[styles.modalContent, { paddingBottom: Math.max(insets.bottom + 12, 20) }]}>
             {/* Header */}
             <View style={styles.modalHeader}>
               <Text style={styles.modalTitle}>💰 Receive Payment</Text>
@@ -4229,7 +4241,7 @@ export default function Home() {
               </ScrollView>
             )}
           </View>
-        </View>
+        </KeyboardAvoidingView>
       </Modal>
 
       {/* Payment Calendar Modal */}
@@ -4251,13 +4263,13 @@ export default function Home() {
         transparent={true}
         onRequestClose={() => setIsReceivedBreakdownOpen(false)}
       >
-        <View style={styles.modalBackdrop}>
+        <KeyboardAvoidingView behavior={kavBehavior} style={styles.modalBackdrop}>
           <Pressable
             style={styles.modalFlexSpacer}
             onPress={() => setIsReceivedBreakdownOpen(false)}
           />
 
-          <View style={[styles.modalContent, { maxHeight: "85%" }]}>
+          <View style={[styles.modalContent, { maxHeight: "88%", paddingBottom: Math.max(insets.bottom + 12, 20) }]}>
             {/* Header */}
             <View style={styles.modalHeader}>
               <View style={{ flexDirection: "row", alignItems: "center", gap: 8 }}>
@@ -4491,7 +4503,7 @@ export default function Home() {
               </Pressable>
             </ScrollView>
           </View>
-        </View>
+        </KeyboardAvoidingView>
       </Modal>
 
       {/* ========== EDIT RECEIVED BREAKDOWN ITEM MODAL ========== */}
@@ -4502,7 +4514,7 @@ export default function Home() {
         onRequestClose={() => setIsEditBreakdownModalOpen(false)}
       >
         <KeyboardAvoidingView
-          behavior={Platform.OS === "ios" ? "padding" : "height"}
+          behavior={kavBehavior}
           style={styles.modalBackdrop}
         >
           <Pressable
@@ -4510,7 +4522,7 @@ export default function Home() {
             onPress={() => setIsEditBreakdownModalOpen(false)}
           />
 
-          <View style={[styles.modalContent, { paddingBottom: 24 }]}>
+          <View style={[styles.modalContent, { paddingBottom: Math.max(insets.bottom + 20, 24) }]}>
             <View style={styles.modalHeader}>
               <View style={{ flexDirection: "row", alignItems: "center", gap: 8 }}>
                 <View style={{
@@ -4902,10 +4914,10 @@ export default function Home() {
         transparent={true}
         onRequestClose={handleCloseAttendanceModal}
       >
-        <View style={styles.modalBackdrop}>
+        <KeyboardAvoidingView behavior={kavBehavior} style={styles.modalBackdrop}>
           <Pressable style={styles.modalFlexSpacer} onPress={handleCloseAttendanceModal} />
 
-          <View style={[styles.modalContent, { minHeight: "85%" }]}>
+          <View style={[styles.modalContent, { minHeight: "75%", maxHeight: "88%", paddingBottom: Math.max(insets.bottom + 12, 20) }]}>
             <View style={styles.modalHeader}>
               <Text style={styles.modalTitle}>👷 Mark Attendance</Text>
               <Pressable style={styles.modalCloseBtn} onPress={handleCloseAttendanceModal}>
@@ -5629,7 +5641,7 @@ export default function Home() {
               </View>
             )}
           </View>
-        </View>
+        </KeyboardAvoidingView>
       </Modal>
 
       {/* OPENING STOCK & SLOTS IN-MODAL QUICK EDITOR */}
@@ -5640,13 +5652,14 @@ export default function Home() {
         onRequestClose={handleCloseStockEditor}
       >
         <KeyboardAvoidingView
-          behavior={Platform.OS === "ios" ? "padding" : undefined}
+          behavior={kavBehavior}
           style={styles.summaryModalCenterBackdrop}
         >
           <Pressable style={StyleSheet.absoluteFill} onPress={handleCloseStockEditor} />
           <View style={[styles.summaryModalCenterCard, {
-            maxHeight: "85%",
-            maxWidth: 540,
+            maxHeight: "88%",
+            width: "92%",
+            maxWidth: 480,
             flex: 1,
             display: "flex",
             flexDirection: "column",
@@ -6116,8 +6129,9 @@ export default function Home() {
         animationType="fade"
         onRequestClose={() => setIsAttendanceCalendarModalOpen(false)}
       >
-        <Pressable style={styles.modalBackdrop} onPress={() => setIsAttendanceCalendarModalOpen(false)}>
-          <Pressable style={styles.calendarModalContent} onPress={(e) => e.stopPropagation()}>
+        <KeyboardAvoidingView behavior={kavBehavior} style={styles.summaryModalCenterBackdrop}>
+          <Pressable style={styles.summaryModalCenterOverlay} onPress={() => setIsAttendanceCalendarModalOpen(false)} />
+          <View style={[styles.calendarModalContent, { maxHeight: "88%" }]}>
             <View style={styles.modalHeader}>
               <View style={{ flexDirection: "row", alignItems: "center", gap: 8 }}>
                 <MaterialIcons name="calendar-today" size={20} color={colors.accent.info} />
@@ -6261,8 +6275,8 @@ export default function Home() {
                 );
               })}
             </ScrollView>
-          </Pressable>
-        </Pressable>
+          </View>
+        </KeyboardAvoidingView>
       </Modal>
 
       {/* DAILY REPORT CALENDAR DATE SELECTION MODAL */}
@@ -6272,8 +6286,9 @@ export default function Home() {
         animationType="fade"
         onRequestClose={() => setIsCalendarModalOpen(false)}
       >
-        <Pressable style={styles.modalBackdrop} onPress={() => setIsCalendarModalOpen(false)}>
-          <Pressable style={styles.calendarModalContent} onPress={(e) => e.stopPropagation()}>
+        <KeyboardAvoidingView behavior={kavBehavior} style={styles.summaryModalCenterBackdrop}>
+          <Pressable style={styles.summaryModalCenterOverlay} onPress={() => setIsCalendarModalOpen(false)} />
+          <View style={[styles.calendarModalContent, { maxHeight: "88%" }]}>
             <View style={styles.modalHeader}>
               <View style={{ flexDirection: "row", alignItems: "center", gap: 8 }}>
                 <MaterialIcons name="calendar-today" size={20} color={colors.accent.primary} />
@@ -6411,8 +6426,8 @@ export default function Home() {
                 );
               })}
             </ScrollView>
-          </Pressable>
-        </Pressable>
+          </View>
+        </KeyboardAvoidingView>
       </Modal>
 
       {/* ========== LOG NEW EXPENSE MODAL ========== */}
@@ -6422,9 +6437,9 @@ export default function Home() {
         transparent={true}
         onRequestClose={() => setIsAddExpenseModalOpen(false)}
       >
-        <View style={styles.modalBackdrop}>
+        <KeyboardAvoidingView behavior={kavBehavior} style={styles.modalBackdrop}>
           <Pressable style={styles.modalFlexSpacer} onPress={() => setIsAddExpenseModalOpen(false)} />
-          <View style={[styles.modalContent, { maxHeight: "90%" }]}>
+          <View style={[styles.modalContent, { maxHeight: "88%", paddingBottom: Math.max(insets.bottom + 12, 20) }]}>
             <View style={styles.modalHeader}>
               <View style={{ flexDirection: "row", alignItems: "center", gap: 8 }}>
                 <MaterialIcons name="receipt-long" size={22} color={colors.accent.danger} />
@@ -6606,7 +6621,7 @@ export default function Home() {
               </Pressable>
             </ScrollView>
           </View>
-        </View>
+        </KeyboardAvoidingView>
       </Modal>
       {/* Full Customer-Wise Summary Details Modal */}
       <Modal
@@ -6616,7 +6631,7 @@ export default function Home() {
         onRequestClose={() => setIsSummaryModalOpen(false)}
       >
         <KeyboardAvoidingView
-          behavior={Platform.OS === "ios" ? "padding" : "height"}
+          behavior={kavBehavior}
           style={styles.summaryModalCenterBackdrop}
         >
           <Pressable style={styles.summaryModalCenterOverlay} onPress={() => setIsSummaryModalOpen(false)} />
@@ -6935,13 +6950,13 @@ export default function Home() {
         transparent={true}
         onRequestClose={() => setIsActivityProfileModalOpen(false)}
       >
-        <View style={styles.modalBackdrop}>
+        <KeyboardAvoidingView behavior={kavBehavior} style={styles.modalBackdrop}>
           <Pressable
             style={styles.modalFlexSpacer}
             onPress={() => setIsActivityProfileModalOpen(false)}
           />
 
-          <View style={[styles.modalContent, { maxHeight: "90%", paddingHorizontal: spacing.lg, paddingBottom: spacing.xl }]}>
+          <View style={[styles.modalContent, { maxHeight: "88%", paddingHorizontal: spacing.lg, paddingBottom: Math.max(insets.bottom + 16, spacing.xl) }]}>
             {/* Drag Handle Indicator */}
             <View style={{ alignItems: "center", marginBottom: 12 }}>
               <View style={{ width: 44, height: 5, borderRadius: 3, backgroundColor: colors.border.subtle }} />
@@ -8187,7 +8202,7 @@ export default function Home() {
               </ScrollView>
             )}
           </View>
-        </View>
+        </KeyboardAvoidingView>
       </Modal>
     </AnimatedPage>
   );
@@ -8341,7 +8356,7 @@ const getStyles = (theme: any) => {
   actionCard: {
     width: "48%",
     flexGrow: 1,
-    minWidth: 140,
+    minWidth: 128,
     backgroundColor: colors.bg.card,
     borderRadius: radius.lg,
     padding: spacing.lg,
@@ -8747,10 +8762,10 @@ const getStyles = (theme: any) => {
     zIndex: 1,
   },
   summaryModalCenterCard: {
-    width: "100%",
-    maxWidth: 500,
-    height: "80%",
-    maxHeight: 700,
+    width: "92%",
+    maxWidth: 480,
+    height: "84%",
+    maxHeight: "88%",
     backgroundColor: colors.bg.card,
     borderRadius: 24,
     padding: 16,
@@ -8770,6 +8785,9 @@ const getStyles = (theme: any) => {
   },
   modalContent: {
     flex: 0.85,
+    width: "100%",
+    maxWidth: 560,
+    alignSelf: "center",
     backgroundColor: colors.bg.card,
     borderTopLeftRadius: 24,
     borderTopRightRadius: 24,
@@ -9225,6 +9243,9 @@ const getStyles = (theme: any) => {
 
   // Quick Add Modal styles
   quickAddContent: {
+    width: "100%",
+    maxWidth: 560,
+    alignSelf: "center",
     backgroundColor: colors.bg.card,
     borderTopLeftRadius: 24,
     borderTopRightRadius: 24,
@@ -9244,6 +9265,8 @@ const getStyles = (theme: any) => {
   },
   quickAddGridItem: {
     width: "48%",
+    flexGrow: 1,
+    minWidth: 128,
     backgroundColor: colors.bg.primary,
     borderRadius: 16,
     padding: 16,

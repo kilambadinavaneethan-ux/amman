@@ -1,17 +1,19 @@
 import React, { useContext, useState, useMemo } from "react";
-import { View, Text, StyleSheet, ScrollView, Pressable, ActivityIndicator, Modal, TextInput } from "react-native";
+import { View, Text, StyleSheet, ScrollView, Pressable, ActivityIndicator, Modal, TextInput, KeyboardAvoidingView } from "react-native";
 import { Image } from "expo-image";
 import { useRouter } from "expo-router";
 import { MaterialIcons } from "@expo/vector-icons";
 import { UserContext } from "../context/UserContext";
 import { changeUserPassword, deleteCurrentUserAccount, logout, normalizeDateValue } from "../../src/config/firebase";
 import { useTheme } from "../context/ThemeContext";
+import { useResponsive } from "../../utils/responsive";
 import ProtectedRoute from "../components/ProtectedRoute";
 import BackButton from "../components/BackButton";
 
 function AccountScreen() {
   const { theme } = useTheme();
   const { colors } = theme;
+  const { insets, kavBehavior, scrollBottomPadding } = useResponsive();
   const styles = useMemo(() => getStyles(theme), [theme]);
   const router = useRouter();
 
@@ -144,7 +146,12 @@ function AccountScreen() {
   }) : "N/A";
 
   return (
-    <ScrollView contentContainerStyle={styles.container}>
+    <ScrollView
+      contentContainerStyle={[
+        styles.container,
+        { paddingTop: Math.max(insets.top + 8, theme.spacing.lg), paddingBottom: scrollBottomPadding },
+      ]}
+    >
       {/* Header bar */}
       <View style={styles.header}>
         <BackButton label="Settings" onPress={() => router.push("/settings")} />
@@ -274,8 +281,16 @@ function AccountScreen() {
       </View>
 
       {/* Modal Change Password */}
-      <Modal visible={showPasswordModal} transparent animationType="slide">
-        <View style={styles.modalBg}>
+      <Modal
+        visible={showPasswordModal}
+        transparent
+        animationType="slide"
+        onRequestClose={() => {
+          setShowPasswordModal(false);
+          setPasswordError("");
+        }}
+      >
+        <KeyboardAvoidingView behavior={kavBehavior} style={styles.modalBg}>
           <View style={styles.modalContent}>
             <Text style={styles.modalTitle}>Change Password</Text>
             <Text style={styles.modalSubtitle}>Please enter password details below</Text>
@@ -334,12 +349,20 @@ function AccountScreen() {
               </Pressable>
             </View>
           </View>
-        </View>
+        </KeyboardAvoidingView>
       </Modal>
 
       {/* Modal Delete Account */}
-      <Modal visible={showDeleteModal} transparent animationType="slide">
-        <View style={styles.modalBg}>
+      <Modal
+        visible={showDeleteModal}
+        transparent
+        animationType="slide"
+        onRequestClose={() => {
+          setShowDeleteModal(false);
+          setDeleteError("");
+        }}
+      >
+        <KeyboardAvoidingView behavior={kavBehavior} style={styles.modalBg}>
           <View style={styles.modalContent}>
             <Text style={[styles.modalTitle, { color: colors.accent.danger }]}>Delete Account?</Text>
             <Text style={styles.modalSubtitle}>
@@ -394,12 +417,12 @@ function AccountScreen() {
               </Pressable>
             </View>
           </View>
-        </View>
+        </KeyboardAvoidingView>
       </Modal>
 
       {/* Modal Logout Confirmation */}
-      <Modal visible={showLogoutModal} transparent animationType="fade">
-        <View style={styles.modalBg}>
+      <Modal visible={showLogoutModal} transparent animationType="fade" onRequestClose={() => setShowLogoutModal(false)}>
+        <KeyboardAvoidingView behavior={kavBehavior} style={styles.modalBg}>
           <View style={styles.dialogCard}>
             <Text style={styles.dialogTitle}>Logout</Text>
             <Text style={styles.dialogDesc}>Are you sure you want to log out?</Text>
@@ -412,7 +435,7 @@ function AccountScreen() {
               </Pressable>
             </View>
           </View>
-        </View>
+        </KeyboardAvoidingView>
       </Modal>
 
     </ScrollView>
@@ -633,8 +656,9 @@ const getStyles = (theme) => {
       backgroundColor: colors.bg.card,
       borderRadius: radius.xl,
       padding: spacing.xl,
-      width: "100%",
-      maxWidth: 400,
+      width: "92%",
+      maxWidth: 440,
+      maxHeight: "88%",
       borderWidth: 1,
       borderColor: colors.border.subtle,
       ...shadows.elevated,

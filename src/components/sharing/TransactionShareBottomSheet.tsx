@@ -2,14 +2,17 @@ import React, { useEffect, useMemo, useRef, useState } from 'react';
 import {
   ActivityIndicator,
   Animated,
-  useWindowDimensions,
+  KeyboardAvoidingView,
   Modal,
+  Platform,
   Pressable,
   ScrollView,
   StyleSheet,
   Text,
+  useWindowDimensions,
   View,
 } from 'react-native';
+import { useSafeAreaInsets } from 'react-native-safe-area-context';
 import { MaterialIcons } from '@expo/vector-icons';
 import { ShareSettings, TransactionData, InvoiceTemplate, DEFAULT_INVOICE_TEMPLATE } from '../../types/sharing';
 import { shareSettingsService } from '../../services/sharing/shareSettingsService';
@@ -31,7 +34,8 @@ export function TransactionShareBottomSheet({
   isDark = false,
   onClose,
 }: Props) {
-  const { height: windowHeight } = useWindowDimensions();
+  const { width: windowWidth, height: windowHeight } = useWindowDimensions();
+  const insets = useSafeAreaInsets();
   const [settings, setSettings] = useState<ShareSettings | null>(null);
   const [template, setTemplate] = useState<InvoiceTemplate | null>(null);
   const [showSettingsModal, setShowSettingsModal] = useState(false);
@@ -283,17 +287,21 @@ export function TransactionShareBottomSheet({
         </View>
 
         {/* Bottom Sheet Animated Panel */}
-        <Animated.View
-          style={[
-            styles.sheetContainer,
-            {
-              backgroundColor: sheetBg,
-              borderColor,
-              maxHeight: Math.min(windowHeight * 0.9, 740),
-              transform: [{ translateY }],
-            },
-          ]}
+        <KeyboardAvoidingView
+          behavior={Platform.OS === 'ios' ? 'padding' : 'height'}
+          style={{ width: '100%', alignItems: 'center' }}
         >
+          <Animated.View
+            style={[
+              styles.sheetContainer,
+              {
+                backgroundColor: sheetBg,
+                borderColor,
+                maxHeight: Math.min(windowHeight * 0.9, 740),
+                transform: [{ translateY }],
+              },
+            ]}
+          >
           {/* Drag Handle Indicator */}
           <View style={styles.dragHandleContainer}>
             <View style={[styles.dragHandle, { backgroundColor: isDark ? '#475569' : '#CBD5E1' }]} />
@@ -343,7 +351,11 @@ export function TransactionShareBottomSheet({
           <ScrollView
             showsVerticalScrollIndicator={false}
             bounces={false}
-            contentContainerStyle={styles.sheetScrollContent}
+            keyboardShouldPersistTaps="handled"
+            contentContainerStyle={[
+              styles.sheetScrollContent,
+              { paddingBottom: Math.max(insets.bottom + 16, 24) },
+            ]}
           >
             {/* Client Title / Salutation (Mr. / Mrs.) & Suffix (அவர்கள்) Bar */}
             <View style={styles.clientTitleContainer}>
@@ -539,6 +551,7 @@ export function TransactionShareBottomSheet({
             </View>
           )}
         </Animated.View>
+        </KeyboardAvoidingView>
       </View>
 
       {/* Share Settings Modal */}
@@ -574,6 +587,9 @@ const styles = StyleSheet.create({
     zIndex: -999,
   },
   sheetContainer: {
+    width: '100%',
+    maxWidth: 560,
+    alignSelf: 'center',
     borderTopLeftRadius: 28,
     borderTopRightRadius: 28,
     borderTopWidth: 1,
@@ -675,6 +691,8 @@ const styles = StyleSheet.create({
   },
   gridCard: {
     width: '48.5%',
+    flexGrow: 1,
+    minWidth: 140,
     flexDirection: 'row',
     alignItems: 'center',
     gap: 8,

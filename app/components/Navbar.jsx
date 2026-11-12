@@ -40,7 +40,7 @@ function Navbar() {
       <View style={styles.leftCol}>
         <View style={styles.brandRow}>
           <Pressable onPress={() => router.replace("/")} style={styles.brandPressable}>
-            <Text style={styles.title} numberOfLines={1} ellipsizeMode="tail">
+            <Text style={styles.title} numberOfLines={1} ellipsizeMode="tail" maxFontSizeMultiplier={1.15}>
               {businessName}
             </Text>
           </Pressable>
@@ -66,6 +66,7 @@ function Navbar() {
                 zoomPercent !== 100 && styles.zoomResetTextActive,
               ]}
               numberOfLines={1}
+              maxFontSizeMultiplier={1.15}
             >
               {zoomPercent}%
             </Text>
@@ -74,7 +75,12 @@ function Navbar() {
 
         <View style={styles.subtitleRow}>
           <View style={styles.syncDot} />
-          <Text style={styles.subtitle} numberOfLines={1} ellipsizeMode="tail">
+          <Text
+            style={styles.subtitle}
+            numberOfLines={1}
+            ellipsizeMode="tail"
+            maxFontSizeMultiplier={1.15}
+          >
             {getScreenTitle()}
           </Text>
         </View>
@@ -95,7 +101,9 @@ function Navbar() {
             />
           ) : (
             <View style={styles.avatarPlaceholder}>
-              <Text style={styles.avatarText}>{initials}</Text>
+              <Text style={styles.avatarText} maxFontSizeMultiplier={1.15}>
+                {initials}
+              </Text>
             </View>
           )}
         </Pressable>

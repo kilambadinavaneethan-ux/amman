@@ -1,5 +1,5 @@
 import React, { useContext, useState, useMemo } from "react";
-import { View, Text, StyleSheet, ScrollView, Pressable, ActivityIndicator, Modal, TextInput, Linking } from "react-native";
+import { View, Text, StyleSheet, ScrollView, Pressable, ActivityIndicator, Modal, TextInput, Linking, KeyboardAvoidingView } from "react-native";
 import { useRouter, useLocalSearchParams } from "expo-router";
 import { MaterialIcons } from "@expo/vector-icons";
 import { CollectorContext } from "../../context/CollectorContext";
@@ -8,10 +8,12 @@ import { PaymentContext } from "../../context/PaymentContext";
 import ProtectedRoute from "../../components/ProtectedRoute";
 import BackButton from "../../components/BackButton";
 import { useTheme } from "../../context/ThemeContext";
+import { useResponsive } from "../../../utils/responsive";
 
 function CollectorDetailsScreen() {
   const { theme } = useTheme();
   const { colors, spacing, radius, shadows } = theme;
+  const { insets, kavBehavior, scrollBottomPadding } = useResponsive();
   const styles = useMemo(() => getStyles(theme), [theme]);
   const router = useRouter();
   const { id } = useLocalSearchParams(); // Collector ID
@@ -155,7 +157,12 @@ function CollectorDetailsScreen() {
 
   return (
     <View style={styles.root}>
-      <ScrollView contentContainerStyle={styles.container}>
+      <ScrollView
+        contentContainerStyle={[
+          styles.container,
+          { paddingTop: Math.max(insets.top + 8, 16), paddingBottom: scrollBottomPadding },
+        ]}
+      >
         {/* Header */}
         <View style={styles.header}>
           <BackButton label="Collectors" onPress={() => router.push("/settings/collectors")} />
@@ -381,8 +388,8 @@ function CollectorDetailsScreen() {
       </ScrollView>
 
       {/* Delete Confirmation Modal */}
-      <Modal visible={deleteModalVisible} transparent animationType="fade">
-        <View style={styles.modalBg}>
+      <Modal visible={deleteModalVisible} transparent animationType="fade" onRequestClose={() => setDeleteModalVisible(false)}>
+        <KeyboardAvoidingView behavior={kavBehavior} style={styles.modalBg}>
           <View style={styles.modalContent}>
             <MaterialIcons name="warning" size={48} color={colors.accent.danger} />
             <Text style={styles.modalTitle}>Delete Collector?</Text>
@@ -410,12 +417,12 @@ function CollectorDetailsScreen() {
               </Pressable>
             </View>
           </View>
-        </View>
+        </KeyboardAvoidingView>
       </Modal>
 
       {/* Manage Customer Assignments Modal */}
-      <Modal visible={assignModalVisible} animationType="slide">
-        <View style={styles.assignModalRoot}>
+      <Modal visible={assignModalVisible} animationType="slide" onRequestClose={() => setAssignModalVisible(false)}>
+        <KeyboardAvoidingView behavior={kavBehavior} style={[styles.assignModalRoot, { paddingTop: insets.top, paddingBottom: insets.bottom }]}>
           {/* Header */}
           <View style={styles.assignModalHeader}>
             <Pressable onPress={() => setAssignModalVisible(false)}>
@@ -496,7 +503,7 @@ function CollectorDetailsScreen() {
               })
             )}
           </ScrollView>
-        </View>
+        </KeyboardAvoidingView>
       </Modal>
     </View>
   );
@@ -888,8 +895,9 @@ const getStyles = (theme) => {
     backgroundColor: colors.bg.card,
     borderRadius: 20,
     padding: 24,
-    width: "100%",
-    maxWidth: 360,
+    width: "92%",
+    maxWidth: 440,
+    maxHeight: "88%",
     alignItems: "center",
   },
   modalTitle: {

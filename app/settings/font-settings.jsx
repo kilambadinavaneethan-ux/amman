@@ -165,6 +165,8 @@ function FontSettingsHome() {
       },
       presetCard: {
         width: "48%",
+        flexGrow: 1,
+        minWidth: 132,
         backgroundColor: colors.bg.card,
         borderRadius: radius.md,
         padding: spacing.md,

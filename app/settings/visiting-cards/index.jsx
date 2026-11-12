@@ -27,6 +27,7 @@ import {
 import BackButton from "../../components/BackButton";
 import ProtectedRoute from "../../components/ProtectedRoute";
 import { useTheme } from "../../context/ThemeContext";
+import { useResponsive } from "../../../utils/responsive";
 import { db, normalizeDateValue } from "../../../src/config/firebase";
 
 const CARD_CATEGORIES = [
@@ -53,6 +54,7 @@ const CATEGORY_COLORS = {
 export default function VisitingCardsManager() {
   const { theme } = useTheme();
   const { colors } = theme;
+  const { insets, kavBehavior, hp, scrollBottomPadding } = useResponsive();
   const styles = useMemo(() => getStyles(theme), [theme]);
   const router = useRouter();
 
@@ -280,7 +282,7 @@ export default function VisitingCardsManager() {
 
   return (
     <ProtectedRoute>
-      <View style={styles.container}>
+      <View style={[styles.container, { paddingTop: Math.max(insets.top + 8, 16) }]}>
         {/* Top Header */}
         <View style={styles.header}>
           <BackButton label="Settings" onPress={() => router.back()} />
@@ -369,7 +371,7 @@ export default function VisitingCardsManager() {
             </Text>
           </View>
         ) : (
-          <ScrollView contentContainerStyle={styles.cardsGrid}>
+          <ScrollView contentContainerStyle={[styles.cardsGrid, { paddingBottom: scrollBottomPadding }]}>
             {filteredCards.map((card) => {
               const catColor = CATEGORY_COLORS[card.category] || "#64748b";
               const catLabel =
@@ -459,9 +461,9 @@ export default function VisitingCardsManager() {
         )}
 
         {/* Add / Edit Form Modal */}
-        <Modal visible={showFormModal} transparent animationType="fade">
+        <Modal visible={showFormModal} transparent animationType="fade" onRequestClose={() => setShowFormModal(false)}>
           <KeyboardAvoidingView
-            behavior={Platform.OS === "ios" ? "padding" : "height"}
+            behavior={kavBehavior}
             style={styles.modalBg}
           >
             <View style={styles.modalContent}>
@@ -474,7 +476,7 @@ export default function VisitingCardsManager() {
                 </Pressable>
               </View>
 
-              <ScrollView style={{ maxHeight: 440 }} showsVerticalScrollIndicator={false} keyboardShouldPersistTaps="handled">
+              <ScrollView style={{ maxHeight: Math.round(hp(55)) }} showsVerticalScrollIndicator={false} keyboardShouldPersistTaps="handled">
                 <Text style={styles.label}>Category / Role *</Text>
                 <View style={styles.categoryPickerRow}>
                   {CARD_CATEGORIES.filter((c) => c.id !== "All").map((c) => {
@@ -664,8 +666,8 @@ export default function VisitingCardsManager() {
 
         {/* View Card Detail Modal */}
         {selectedCard && (
-          <Modal visible={showDetailModal} transparent animationType="fade">
-            <View style={styles.modalBg}>
+          <Modal visible={showDetailModal} transparent animationType="fade" onRequestClose={() => setShowDetailModal(false)}>
+            <KeyboardAvoidingView behavior={kavBehavior} style={styles.modalBg}>
               <View style={[styles.modalContent, { padding: 0, overflow: "hidden" }]}>
                 {/* Visual Digital Business Card Header */}
                 <View
@@ -686,11 +688,11 @@ export default function VisitingCardsManager() {
                 </View>
 
                 {/* Card Information Body */}
-                <ScrollView style={{ padding: 16, maxHeight: 350 }}>
+                <ScrollView style={{ padding: 16, maxHeight: Math.round(hp(48)) }} showsVerticalScrollIndicator={false}>
                   {selectedCard.contactPerson ? (
                     <View style={styles.detailRow}>
                       <MaterialIcons name="person" size={18} color={colors.accent.primary} />
-                      <View>
+                      <View style={{ flex: 1 }}>
                         <Text style={styles.detailLabel}>Contact Person</Text>
                         <Text style={styles.detailValue}>{selectedCard.contactPerson}</Text>
                       </View>
@@ -699,7 +701,7 @@ export default function VisitingCardsManager() {
 
                   <View style={styles.detailRow}>
                     <MaterialIcons name="phone" size={18} color={colors.accent.primary} />
-                    <View>
+                    <View style={{ flex: 1 }}>
                       <Text style={styles.detailLabel}>Primary Mobile</Text>
                       <Text style={[styles.detailValue, { fontWeight: "700" }]}>{selectedCard.mobile}</Text>
                     </View>
@@ -708,7 +710,7 @@ export default function VisitingCardsManager() {
                   {selectedCard.altMobile ? (
                     <View style={styles.detailRow}>
                       <MaterialIcons name="phone-android" size={18} color={colors.accent.primary} />
-                      <View>
+                      <View style={{ flex: 1 }}>
                         <Text style={styles.detailLabel}>Alternate / WhatsApp</Text>
                         <Text style={styles.detailValue}>{selectedCard.altMobile}</Text>
                       </View>
@@ -728,7 +730,7 @@ export default function VisitingCardsManager() {
                   {selectedCard.address ? (
                     <View style={styles.detailRow}>
                       <MaterialIcons name="place" size={18} color={colors.accent.primary} />
-                      <View>
+                      <View style={{ flex: 1 }}>
                         <Text style={styles.detailLabel}>Address / Location</Text>
                         <Text style={styles.detailValue}>{selectedCard.address}</Text>
                       </View>
@@ -738,7 +740,7 @@ export default function VisitingCardsManager() {
                   {selectedCard.notes ? (
                     <View style={styles.detailRow}>
                       <MaterialIcons name="notes" size={18} color={colors.accent.primary} />
-                      <View>
+                      <View style={{ flex: 1 }}>
                         <Text style={styles.detailLabel}>Notes & Remarks</Text>
                         <Text style={styles.detailValue}>{selectedCard.notes}</Text>
                       </View>
@@ -788,7 +790,7 @@ export default function VisitingCardsManager() {
                   </Pressable>
                 </View>
               </View>
-            </View>
+            </KeyboardAvoidingView>
           </Modal>
         )}
       </View>
@@ -978,8 +980,9 @@ const getStyles = (theme) => {
       padding: 16,
     },
     modalContent: {
-      width: "100%",
-      maxWidth: 440,
+      width: "92%",
+      maxWidth: 460,
+      maxHeight: "88%",
       backgroundColor: colors.bg.card,
       borderRadius: 16,
       padding: 16,

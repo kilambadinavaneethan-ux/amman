@@ -6,8 +6,11 @@ import {
   Pressable,
   Modal,
   ScrollView,
+  KeyboardAvoidingView,
+  Platform,
 } from "react-native";
 import { MaterialIcons } from "@expo/vector-icons";
+import { useSafeAreaInsets } from "react-native-safe-area-context";
 import { useTheme } from "../context/ThemeContext";
 
 interface EasyCalendarModalProps {
@@ -33,6 +36,7 @@ export default function EasyCalendarModal({
   title = "Select Date",
 }: EasyCalendarModalProps) {
   const { theme } = useTheme();
+  const insets = useSafeAreaInsets();
   const { colors } = theme;
   const styles = useMemo(() => getStyles(theme), [theme]);
 
@@ -229,8 +233,20 @@ export default function EasyCalendarModal({
 
   return (
     <Modal visible={visible} transparent animationType="fade" onRequestClose={onClose}>
-      <Pressable style={styles.backdrop} onPress={onClose}>
-        <Pressable style={styles.modalCard} onPress={e => e.stopPropagation()}>
+      <KeyboardAvoidingView
+        behavior={Platform.OS === "ios" ? "padding" : "height"}
+        style={{ flex: 1 }}
+      >
+        <Pressable style={styles.backdrop} onPress={onClose}>
+          <Pressable
+            style={[styles.modalCard, { marginBottom: Math.max(insets.bottom, 8) }]}
+            onPress={e => e.stopPropagation()}
+          >
+            <ScrollView
+              showsVerticalScrollIndicator={false}
+              keyboardShouldPersistTaps="handled"
+              bounces={false}
+            >
           {/* Top Hero Banner */}
           <View style={styles.heroBanner}>
             <View style={styles.heroRow}>
@@ -324,8 +340,10 @@ export default function EasyCalendarModal({
               <Text style={styles.footerBtnCloseText}>Close</Text>
             </Pressable>
           </View>
+            </ScrollView>
         </Pressable>
       </Pressable>
+      </KeyboardAvoidingView>
     </Modal>
   );
 }
@@ -341,8 +359,9 @@ function getStyles(theme: any) {
       padding: 20,
     },
     modalCard: {
-      width: "100%",
-      maxWidth: 360,
+      width: "92%",
+      maxWidth: 420,
+      maxHeight: "88%",
       backgroundColor: colors.bg.card || "#FFFFFF",
       borderRadius: 22,
       overflow: "hidden",

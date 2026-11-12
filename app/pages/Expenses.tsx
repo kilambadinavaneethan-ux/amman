@@ -8,7 +8,8 @@ import {
   TextInput,
   Modal,
   Alert,
-  Dimensions,
+  KeyboardAvoidingView,
+  Platform,
   ActivityIndicator,
   RefreshControl,
 } from "react-native";
@@ -29,6 +30,7 @@ import AnimatedPage from "../components/AnimatedPage";
 import EasyCalendarModal from "../components/EasyCalendarModal";
 import { useTheme } from "../context/ThemeContext";
 import { useScrollRestoration } from "../context/ScrollContext";
+import { useResponsive } from "../../utils/responsive";
 import { uploadImage } from "../../services/storage";
 import { STORAGE_FOLDERS } from "../../constants/storageFolders";
 import { TransactionShareBottomSheet } from "../../src/components/sharing/TransactionShareBottomSheet";
@@ -42,6 +44,14 @@ export default function Expenses() {
 
   const { theme } = useTheme();
   const { colors, spacing, radius, shadows } = theme;
+  const {
+    wp,
+    kavBehavior,
+    bottomFabOffset,
+    scrollBottomPadding,
+    currencyKpiTextProps,
+    insets,
+  } = useResponsive();
   const styles = useMemo(() => getStyles(theme), [theme]);
   const { scrollViewRef, handleScroll, handleContentSizeChange } = useScrollRestoration("/expenses");
   const CATEGORY_CONFIG: Record<string, { icon: string; color: string; label: string }> = {
@@ -567,7 +577,7 @@ export default function Expenses() {
 
       <ScrollView
         ref={scrollViewRef}
-        contentContainerStyle={styles.scrollContainer}
+        contentContainerStyle={[styles.scrollContainer, { paddingBottom: scrollBottomPadding + 68 }]}
         showsVerticalScrollIndicator={false}
         removeClippedSubviews={true}
         scrollEventThrottle={32}
@@ -583,44 +593,44 @@ export default function Expenses() {
           showsHorizontalScrollIndicator={false}
           contentContainerStyle={styles.summaryCarousel}
         >
-          <View style={styles.summaryCard}>
+          <View style={[styles.summaryCard, { width: Math.max(142, Math.min(185, wp(42))), minWidth: 140 }]}>
             <View style={[styles.summaryIconWrapper, { backgroundColor: "#f0fdf4" }]}>
               <MaterialIcons name="today" size={20} color="#059669" />
             </View>
             <Text style={styles.summaryLabel}>{"Today's Total"}</Text>
-            <Text style={styles.summaryValue}>₹{todayExpensesSum.toLocaleString("en-IN")}</Text>
+            <Text style={styles.summaryValue} {...currencyKpiTextProps}>₹{todayExpensesSum.toLocaleString("en-IN")}</Text>
           </View>
 
-          <View style={styles.summaryCard}>
+          <View style={[styles.summaryCard, { width: Math.max(142, Math.min(185, wp(42))), minWidth: 140 }]}>
             <View style={[styles.summaryIconWrapper, { backgroundColor: "#ecfdf5" }]}>
               <MaterialIcons name="date-range" size={20} color="#047857" />
             </View>
             <Text style={styles.summaryLabel}>This Week</Text>
-            <Text style={styles.summaryValue}>₹{weekExpensesSum.toLocaleString("en-IN")}</Text>
+            <Text style={styles.summaryValue} {...currencyKpiTextProps}>₹{weekExpensesSum.toLocaleString("en-IN")}</Text>
           </View>
 
-          <View style={styles.summaryCard}>
+          <View style={[styles.summaryCard, { width: Math.max(142, Math.min(185, wp(42))), minWidth: 140 }]}>
             <View style={[styles.summaryIconWrapper, { backgroundColor: "#6C5CE720" }]}>
               <MaterialIcons name="calendar-month" size={20} color={colors.accent.primary} />
             </View>
             <Text style={styles.summaryLabel}>This Month</Text>
-            <Text style={styles.summaryValue}>₹{monthExpensesSum.toLocaleString("en-IN")}</Text>
+            <Text style={styles.summaryValue} {...currencyKpiTextProps}>₹{monthExpensesSum.toLocaleString("en-IN")}</Text>
           </View>
 
-          <View style={styles.summaryCard}>
+          <View style={[styles.summaryCard, { width: Math.max(142, Math.min(185, wp(42))), minWidth: 140 }]}>
             <View style={[styles.summaryIconWrapper, { backgroundColor: "#fef3c7" }]}>
               <MaterialIcons name="payments" size={20} color="#d97706" />
             </View>
             <Text style={styles.summaryLabel}>Total Expenses</Text>
-            <Text style={styles.summaryValue}>₹{totalExpensesSum.toLocaleString("en-IN")}</Text>
+            <Text style={styles.summaryValue} {...currencyKpiTextProps}>₹{totalExpensesSum.toLocaleString("en-IN")}</Text>
           </View>
 
-          <View style={styles.summaryCard}>
+          <View style={[styles.summaryCard, { width: Math.max(142, Math.min(185, wp(42))), minWidth: 140 }]}>
             <View style={[styles.summaryIconWrapper, { backgroundColor: "#fef2f2" }]}>
               <MaterialIcons name="pending-actions" size={20} color={colors.accent.danger} />
             </View>
             <Text style={styles.summaryLabel}>Due Amount</Text>
-            <Text style={[styles.summaryValue, { color: colors.accent.danger }]}>₹{dueExpensesSum.toLocaleString("en-IN")}</Text>
+            <Text style={[styles.summaryValue, { color: colors.accent.danger }]} {...currencyKpiTextProps}>₹{dueExpensesSum.toLocaleString("en-IN")}</Text>
           </View>
         </ScrollView>
 
@@ -1223,15 +1233,15 @@ export default function Expenses() {
 
       {/* FLOATING ACTION BUTTON */}
       {activeTab === "list" && (
-        <Pressable style={styles.fab} onPress={handleOpenAddExpense}>
+        <Pressable style={[styles.fab, { bottom: bottomFabOffset }]} onPress={handleOpenAddExpense}>
           <MaterialIcons name="add" size={28} color={colors.bg.card} />
           <Text style={styles.fabText}>Add Expense</Text>
         </Pressable>
       )}
 
       {/* ADD / EDIT FORM MODAL */}
-      <Modal visible={isFormModalOpen} animationType="slide" presentationStyle="pageSheet">
-        <View style={styles.formContainer}>
+      <Modal visible={isFormModalOpen} animationType="slide" presentationStyle="pageSheet" onRequestClose={() => setIsFormModalOpen(false)}>
+        <KeyboardAvoidingView behavior={kavBehavior} style={[styles.formContainer, { paddingTop: insets.top, paddingBottom: insets.bottom }]}>
           <View style={styles.formHeader}>
             <Text style={styles.formHeaderTitle}>
               {editingExpenseId ? "✏️ Edit Expense" : "➕ Add Expense"}
@@ -1241,7 +1251,7 @@ export default function Expenses() {
             </Pressable>
           </View>
 
-          <ScrollView style={styles.formScrollView} contentContainerStyle={styles.formContent}>
+          <ScrollView style={styles.formScrollView} contentContainerStyle={styles.formContent} keyboardShouldPersistTaps="handled">
             {/* Title */}
             <View style={styles.inputGroup}>
               <Text style={styles.inputLabel}>Expense Title *</Text>
@@ -1485,16 +1495,16 @@ export default function Expenses() {
               )}
             </Pressable>
           </ScrollView>
-        </View>
+        </KeyboardAvoidingView>
       </Modal>
 
       {/* EXPENSE DETAIL MODAL */}
-      <Modal visible={isDetailModalOpen} animationType="slide" presentationStyle="pageSheet">
+      <Modal visible={isDetailModalOpen} animationType="slide" presentationStyle="pageSheet" onRequestClose={() => setIsDetailModalOpen(false)}>
         {selectedExpense && (() => {
           const expDate = selectedExpense.expenseDate instanceof Date ? selectedExpense.expenseDate : new Date(selectedExpense.expenseDate);
           const catInfo = CATEGORY_CONFIG[selectedExpense.category] || CATEGORY_CONFIG["Miscellaneous"];
           return (
-            <View style={styles.detailContainer}>
+            <KeyboardAvoidingView behavior={kavBehavior} style={[styles.detailContainer, { paddingTop: insets.top, paddingBottom: insets.bottom }]}>
               <View style={styles.detailHeader}>
                 <Text style={styles.detailHeaderTitle}>Details</Text>
                 <Pressable onPress={() => setIsDetailModalOpen(false)}>
@@ -1610,14 +1620,14 @@ export default function Expenses() {
                    </Pressable>
                  </View>
               </ScrollView>
-            </View>
+            </KeyboardAvoidingView>
           );
         })()}
       </Modal>
 
       {/* COMPILED REPORTS SUMMARY MODAL */}
-      <Modal visible={isReportsModalOpen} animationType="slide" presentationStyle="pageSheet">
-        <View style={styles.detailContainer}>
+      <Modal visible={isReportsModalOpen} animationType="slide" presentationStyle="pageSheet" onRequestClose={() => setIsReportsModalOpen(false)}>
+        <KeyboardAvoidingView behavior={kavBehavior} style={[styles.detailContainer, { paddingTop: insets.top, paddingBottom: insets.bottom }]}>
           <View style={styles.detailHeader}>
             <Text style={styles.detailHeaderTitle}>Compiled Report Summary</Text>
             <Pressable onPress={() => setIsReportsModalOpen(false)}>
@@ -1684,13 +1694,14 @@ export default function Expenses() {
               <Text style={styles.exportBtnText}>Download PDF Report</Text>
             </Pressable>
           </ScrollView>
-        </View>
+        </KeyboardAvoidingView>
       </Modal>
 
       {/* BUDGET LIMIT MODAL */}
-      <Modal visible={isBudgetModalOpen} transparent animationType="fade">
-        <View style={styles.modalBackdrop}>
-          <View style={styles.budgetModalContent}>
+      <Modal visible={isBudgetModalOpen} transparent animationType="fade" onRequestClose={() => setIsBudgetModalOpen(false)}>
+        <KeyboardAvoidingView behavior={kavBehavior} style={styles.modalBackdrop}>
+          <View style={[styles.budgetModalContent, { maxHeight: "88%" }]}>
+            <ScrollView showsVerticalScrollIndicator={false} keyboardShouldPersistTaps="handled">
             <View style={styles.budgetModalHeader}>
               <Text style={styles.budgetModalTitle}>Set Monthly Budget</Text>
               <Pressable onPress={() => setIsBudgetModalOpen(false)}>
@@ -1754,13 +1765,14 @@ export default function Expenses() {
                 <Text style={styles.submitBtnText}>Save Budget Limit</Text>
               )}
             </Pressable>
+            </ScrollView>
           </View>
-        </View>
+        </KeyboardAvoidingView>
       </Modal>
 
       {/* RECURRING EXPENSE ADD/EDIT MODAL */}
-      <Modal visible={isRecurringModalOpen} animationType="slide" presentationStyle="pageSheet">
-        <View style={styles.formContainer}>
+      <Modal visible={isRecurringModalOpen} animationType="slide" presentationStyle="pageSheet" onRequestClose={() => setIsRecurringModalOpen(false)}>
+        <KeyboardAvoidingView behavior={kavBehavior} style={[styles.formContainer, { paddingTop: insets.top, paddingBottom: insets.bottom }]}>
           <View style={styles.formHeader}>
             <Text style={styles.formHeaderTitle}>
               {editingRecurringId ? "✏️ Edit Recurring" : "🔄 Add Recurring Expense"}
@@ -1770,7 +1782,7 @@ export default function Expenses() {
             </Pressable>
           </View>
 
-          <ScrollView style={styles.formScrollView} contentContainerStyle={styles.formContent}>
+          <ScrollView style={styles.formScrollView} contentContainerStyle={styles.formContent} keyboardShouldPersistTaps="handled">
             <View style={styles.inputGroup}>
               <Text style={styles.inputLabel}>Template Title *</Text>
               <TextInput
@@ -1937,7 +1949,7 @@ export default function Expenses() {
               )}
             </Pressable>
           </ScrollView>
-        </View>
+        </KeyboardAvoidingView>
       </Modal>
 
       <EasyCalendarModal
@@ -2806,8 +2818,9 @@ const getStyles = (theme: any) => {
     backgroundColor: colors.bg.card,
     borderRadius: 20,
     padding: 16,
-    width: "85%",
-    maxWidth: 340,
+    width: "92%",
+    maxWidth: 420,
+    maxHeight: "88%",
     shadowColor: "#000",
     shadowOffset: { width: 0, height: 4 },
     shadowOpacity: 0.1,
@@ -3185,8 +3198,8 @@ const getStyles = (theme: any) => {
     backgroundColor: colors.bg.card,
     borderRadius: 20,
     padding: 20,
-    width: "90%",
-    maxWidth: 400,
+    width: "92%",
+    maxWidth: 420,
     shadowColor: "#000",
     shadowOffset: { width: 0, height: 4 },
     shadowOpacity: 0.1,

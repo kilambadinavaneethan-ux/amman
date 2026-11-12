@@ -4,6 +4,7 @@ import {
   Text,
   StyleSheet,
   ScrollView,
+  FlatList,
   Pressable,
   ActivityIndicator,
   Linking,
@@ -31,6 +32,7 @@ import EasyCalendarModal from "../components/EasyCalendarModal";
 import { LedgerItemCard } from "../components/LedgerItemCard";
 import { useTheme } from "../context/ThemeContext";
 import { UserContext } from "../context/UserContext";
+import { useResponsive } from "../../utils/responsive";
 import { TransactionShareBottomSheet } from "../../src/components/sharing/TransactionShareBottomSheet";
 import { CustomerShareBottomSheet } from "../../src/components/sharing/CustomerShareBottomSheet";
 import { adaptToTransactionData } from "../../src/utils/transactionAdapter";
@@ -39,12 +41,142 @@ import { PRESET_MARKINGS, getMarkingConfig, normalizeMarkings, useCustomMarkings
 import { collection, doc, updateDoc, addDoc, query, where, getDoc } from "firebase/firestore";
 import { db, normalizeDateValue } from "../../src/config/firebase";
 import { getDocsOfflineSafe } from "../../src/utils/offlineHelpers";
+import { roundCurrency } from "../../utils/currency";
+import {
+  computeCustomerLedgerEntries,
+  computeDailyLedgerSummary,
+  computeOverallDailyMetrics,
+  DailyLedgerSummaryItem,
+} from "../../utils/ledgerCalculations";
 
 const PAYMENT_METHODS = ["Cash", "UPI", "Bank Transfer", "Cheque", "Card", "Online", "Wallet", "Other"];
+
+type ProfileStyles = ReturnType<typeof getStyles>;
+
+type CustomerLedgerFeedItem =
+  | { kind: "dailySummary"; id: string; day: DailyLedgerSummaryItem }
+  | {
+      kind: "ledgerEntry";
+      id: string;
+      entry: any;
+      daySummary: DailyLedgerSummaryItem | null;
+      isFirstDayHeader: boolean;
+    };
+
+interface DailySummaryRowProps {
+  day: DailyLedgerSummaryItem;
+  styles: ProfileStyles;
+  colors: any;
+}
+
+const DailySummaryRow = React.memo(function DailySummaryRow({ day, styles, colors }: DailySummaryRowProps) {
+  return (
+  <View style={styles.dailySummaryRow}>
+    <View style={styles.dailyDateCol}>
+      <Text style={styles.dailyDateText}>{day.formattedDate}</Text>
+      {day.orderCount > 0 && (
+        <Text style={styles.dailyOrderCountText}>
+          📦 {day.orderCount} {day.orderCount === 1 ? "order" : "orders"}
+        </Text>
+      )}
+    </View>
+    <Text
+      style={[
+        styles.dailyFirstOrdersCol,
+        { color: day.firstOrders > 0 ? colors.accent.primary : colors.text.muted },
+      ]}
+    >
+      {day.firstOrders > 0 ? `₹${day.firstOrders.toLocaleString("en-IN")}` : "—"}
+    </Text>
+    <Text
+      style={[
+        styles.dailyPaymentsCol,
+        { color: day.totalPayments > 0 ? colors.accent.success : colors.text.muted },
+      ]}
+    >
+      {day.totalPayments > 0 ? `₹${day.totalPayments.toLocaleString("en-IN")}` : "—"}
+    </Text>
+    <Text style={styles.dailyLastAmtCol}>₹{day.lastAmount.toLocaleString("en-IN")}</Text>
+  </View>
+  );
+});
+
+interface AllLedgerRowProps {
+  entry: any;
+  daySummary: DailyLedgerSummaryItem | null;
+  isFirstDayHeader: boolean;
+  colors: any;
+  styles: ProfileStyles;
+  onPress: (entry: any) => void;
+  onOpenEditProfile: () => void;
+}
+
+const AllLedgerRow = React.memo(function AllLedgerRow({
+    entry,
+    daySummary,
+    isFirstDayHeader,
+    colors,
+    styles,
+    onPress,
+    onOpenEditProfile,
+  }: AllLedgerRowProps) {
+    return (
+    <View>
+      {daySummary && (
+        <View
+          style={[
+            styles.dayHeaderBanner,
+            isFirstDayHeader ? styles.dayHeaderBannerFirst : styles.dayHeaderBannerNext,
+          ]}
+        >
+          <View style={styles.dayHeaderLeft}>
+            <MaterialIcons name="event" size={14} color={colors.accent.primary} />
+            <Text style={styles.dayHeaderDateText}>{daySummary.formattedDate}</Text>
+            {daySummary.orderCount > 0 && (
+              <View style={styles.dayHeaderCountBadge}>
+                <Text style={styles.dayHeaderCountText}>
+                  {daySummary.orderCount} {daySummary.orderCount === 1 ? "order" : "orders"}
+                </Text>
+              </View>
+            )}
+          </View>
+          <View style={styles.dayHeaderRight}>
+            <Text style={styles.dayHeaderMetaText}>
+              First Orders:{" "}
+              <Text style={styles.dayHeaderFirstAmt}>
+                ₹{daySummary.firstOrders.toLocaleString("en-IN")}
+              </Text>
+            </Text>
+            <Text style={styles.dayHeaderMetaText}>
+              Last Amt:{" "}
+              <Text
+                style={[
+                  styles.dayHeaderLastAmt,
+                  { color: daySummary.lastAmount < 0 ? colors.accent.success : colors.accent.danger },
+                ]}
+              >
+                {daySummary.lastAmount < 0
+                  ? `Adv: ₹${Math.abs(daySummary.lastAmount).toLocaleString("en-IN")}`
+                  : `₹${daySummary.lastAmount.toLocaleString("en-IN")}`}
+              </Text>
+            </Text>
+          </View>
+        </View>
+      )}
+      <LedgerItemCard
+        entry={entry}
+        colors={colors}
+        onPress={onPress}
+        onOpenEditProfile={onOpenEditProfile}
+      />
+    </View>
+    );
+  });
 
 export default function CustomerProfile() {
   const { theme } = useTheme();
   const { colors, spacing, radius, shadows } = theme;
+  const { scrollBottomPadding, compactBadgeTextProps, currencyKpiTextProps } = useResponsive();
   const styles = useMemo(() => getStyles(theme), [theme]);
   const router = useRouter();
   const navigation = useNavigation();
@@ -464,7 +596,7 @@ export default function CustomerProfile() {
   ), [payments, id]);
 
   const totalSpent = useMemo(
-    () => customerOrders.reduce((sum: number, o: any) => o.status === "cancelled" ? sum : sum + (o.total || 0), 0),
+    () => roundCurrency(customerOrders.reduce((sum: number, o: any) => o.status === "cancelled" ? sum : sum + Number(o.total || 0), 0)),
     [customerOrders]
   );
 
@@ -510,294 +642,39 @@ export default function CustomerProfile() {
     return new Date();
   };
 
-  const resolvePaymentDateTime = (payment: any): Date => {
-    const rawPayDate = payment.paymentDate ? normalizeDateValue(payment.paymentDate) : null;
-    const rawDate = payment.date ? normalizeDateValue(payment.date) : null;
-    const rawCreated = payment.createdAt ? normalizeDateValue(payment.createdAt) : null;
+  // Compute consolidated chronological ledger entries via pure helper
+  const ledgerEntries = React.useMemo(
+    () =>
+      computeCustomerLedgerEntries({
+        customer,
+        customerOrders,
+        customerPayments,
+        partners,
+      }),
+    [customerOrders, customerPayments, customer, partners]
+  );
 
-    const targetDate = rawPayDate || rawDate;
-
-    if (targetDate && !isDateOnlyValue(targetDate)) {
-      return targetDate;
-    }
-
-    if (targetDate) {
-      const timeSource = (rawCreated && !isDateOnlyValue(rawCreated)) ? rawCreated : null;
-      if (timeSource) {
-        const merged = new Date(targetDate);
-        merged.setHours(
-          timeSource.getHours(),
-          timeSource.getMinutes(),
-          timeSource.getSeconds(),
-          timeSource.getMilliseconds()
-        );
-        return merged;
-      }
-      return targetDate;
-    }
-
-    if (rawCreated) return rawCreated;
-    return new Date();
-  };
-
-  // Compute consolidated chronological ledger entries
-  const ledgerEntries = React.useMemo(() => {
-    const entries: any[] = [];
-
-    // Create Map for O(1) partner lookup
-    const partnerMap = new Map((partners || []).map((p: any) => [p.id, p.name]));
-
-    customerOrders.forEach((order: any) => {
-      const isCancelled = order.status === "cancelled";
-      const orderDateObj = resolveOrderDateTime(order);
-      let deliveryDateObj = null;
-      if (order.deliveryDate) {
-        deliveryDateObj = normalizeDateValue(order.deliveryDate);
-      } else if (order.status === "completed") {
-        deliveryDateObj = normalizeDateValue(order.updatedAt || order.createdAt);
-      }
-
-      // Look up delivery partner name in O(1) time
-      const deliveryPartnerName = order.deliveryPartnerId ? (partnerMap.get(order.deliveryPartnerId) || null) : null;
-
-      // Construct detailed description for multiple items if present
-      let itemDescription = "";
-      if (order.items && order.items.length > 0) {
-        itemDescription = order.items.map((itm: any) => `${itm.itemName} (${itm.quantity} qty)`).join(", ");
-      } else {
-        itemDescription = order.itemName ? `${order.itemName} (${order.quantity} qty)` : "Invoice Created";
-      }
-
-      // 1. Original Order entry
-      const orderPaid = Number(order.paidAmount || 0);
-      const orderTotal = Number(order.total || 0);
-      const orderExcess = Math.max(0, orderPaid - orderTotal);
-      const orderUnpaid = order.balanceDue !== undefined
-        ? Number(order.balanceDue)
-        : Math.max(0, orderTotal - orderPaid);
-      const balChange = isCancelled
-        ? 0
-        : (orderExcess > 0 ? -orderExcess : orderUnpaid);
-
-      entries.push({
-        id: order.id,
-        date: orderDateObj,
-        orderDate: orderDateObj,
-        deliveryDate: deliveryDateObj,
-        type: "order",
-        description: isCancelled ? `[CANCELLED] ${itemDescription}` : itemDescription,
-        notes: order.notes !== undefined ? order.notes : (order.description || ""),
-        orderAmount: order.total || 0,
-        paymentReceived: order.paidAmount || 0,
-        balanceChange: balChange,
-        advanceAmount: orderExcess > 0 ? orderExcess : (Number(order.advanceAmount || 0) || 0),
-        deliveryPartnerName,
-        original: order,
-        isCancelled,
-      });
-
-      // 2. Cancellation Reversal entry if order was cancelled AND it had completed status
-      const wasCompletedBeforeCancel = !!order.completedAt || order.deliveredQuantity > 0;
-      if (isCancelled && wasCompletedBeforeCancel) {
-        const cancelDateObj = order.updatedAt
-          ? normalizeDateValue(order.updatedAt)
-          : new Date(orderDateObj.getTime() + 1000);
-
-        entries.push({
-          id: `${order.id}-cancellation`,
-          date: cancelDateObj,
-          orderDate: cancelDateObj,
-          deliveryDate: null,
-          type: "cancellation",
-          description: `🚫 Cancelled Reversal: ${itemDescription}`,
-          orderAmount: 0,
-          paymentReceived: 0,
-          balanceChange: -(order.balanceDue || 0),
-          deliveryPartnerName: null,
-          original: order,
-          isCancelled: true,
-        });
-      }
-    });
-
-    customerPayments.forEach((payment: any) => {
-      const isOrderPayment = !!payment.orderId || (payment.notes && (
-        payment.notes.toLowerCase().includes("order payment") ||
-        payment.notes.toLowerCase().includes("payment for order") ||
-        payment.notes.toLowerCase().includes("order #")
-      ));
-      if (isOrderPayment) return;
-
-      const payDate = resolvePaymentDateTime(payment);
-      const amtRec = Number(payment.amountReceived !== undefined ? payment.amountReceived : (payment.amount || 0));
-      const discAmt = Number(payment.discountAmount || 0);
-      const totalBalanceReduction = amtRec + discAmt;
-
-      const isRefund = payment.type === "advance_refund" || (payment.refundAmount && payment.refundAmount > 0);
-      if (isRefund) {
-        const refAmt = Number(payment.refundAmount || Math.abs(payment.amountReceived || 0));
-        entries.push({
-          id: payment.id,
-          date: payDate,
-          orderDate: payDate,
-          deliveryDate: null,
-          type: "refund",
-          description: payment.notes ? `Refund: ${payment.notes}` : `Advance Refund (${payment.paymentMethod || "Cash"})`,
-          notes: payment.notes || "",
-          orderAmount: 0,
-          paymentReceived: -refAmt,
-          refundAmount: refAmt,
-          discountAmount: 0,
-          balanceChange: refAmt,
-          original: payment,
-        });
-        return;
-      }
-
-      let desc = `Payment: ${payment.paymentMethod || "Cash"}`;
-      if (discAmt > 0) {
-        if (amtRec > 0) {
-          desc = `Payment: ${payment.paymentMethod || "Cash"} (Disc: ₹${discAmt.toLocaleString("en-IN")})`;
-        } else {
-          desc = `Balance Discount: ₹${discAmt.toLocaleString("en-IN")}`;
-        }
-      }
-
-      entries.push({
-        id: payment.id,
-        date: payDate,
-        orderDate: payDate,
-        deliveryDate: null,
-        type: "payment",
-        description: desc,
-        notes: payment.notes || "",
-        orderAmount: 0,
-        paymentReceived: amtRec,
-        discountAmount: discAmt,
-        balanceChange: -totalBalanceReduction,
-        original: payment,
-      });
-    });
-
-    // Sort by exact date and time ascending to compute running balance and show chronological flow (Oldest -> Newest)
-    entries.sort((a, b) => {
-      const timeA = a.date instanceof Date ? a.date.getTime() : new Date(a.date).getTime();
-      const timeB = b.date instanceof Date ? b.date.getTime() : new Date(b.date).getTime();
-      const diff = timeA - timeB;
-      if (diff !== 0) return diff;
-      if (a.type === "order" && b.type === "payment") return -1;
-      if (a.type === "payment" && b.type === "order") return 1;
-      const idA = String(a.id || "");
-      const idB = String(b.id || "");
-      return idA.localeCompare(idB);
-    });
-
-    // Calculate opening balance
-    const sumChanges = entries.reduce((sum: number, entry: any) => sum + (entry.balanceChange || 0), 0);
-    const customerPending = Number(customer.totalPending !== undefined ? customer.totalPending : (customer.balance || 0));
-    const hasStoredOpening = customer.openingBalance !== undefined && customer.openingBalance !== null;
-    const openingBalance = hasStoredOpening ? Number(customer.openingBalance) : (customerPending - sumChanges);
-
-    let runningBalance = openingBalance;
-    const ledger = entries.map((entry) => {
-      runningBalance += entry.balanceChange;
-      return {
-        ...entry,
-        runningBalance,
-      };
-    });
-
-    // If opening balance exists (positive or negative), show it at the top
-    if (Math.abs(openingBalance) > 0.001) {
-      const openingDate = customer.createdAt
-        ? normalizeDateValue(customer.createdAt)
-        : new Date(Date.now() - 365 * 24 * 60 * 60 * 1000);
-      ledger.unshift({
-        id: "opening-bal",
-        date: openingDate,
-        orderDate: openingDate,
-        deliveryDate: null,
-        type: "opening",
-        description: openingBalance < 0 ? "Opening Advance Balance" : "Opening Balance",
-        orderAmount: openingBalance > 0 ? openingBalance : 0,
-        paymentReceived: openingBalance < 0 ? Math.abs(openingBalance) : 0,
-        balanceChange: openingBalance,
-        runningBalance: openingBalance,
-      });
-    }
-
-    return ledger;
-  }, [customerOrders, customerPayments, customer, partners]);
-
-  // Compute daily rollup summaries for Customer Transaction Ledger (First Orders & Last Amount per day)
-  const dailyLedgerSummary = React.useMemo(() => {
-    if (!ledgerEntries || ledgerEntries.length === 0) return [];
-
-    const dayMap = new Map<string, {
-      dateKey: string;
-      dateObj: Date;
-      formattedDate: string;
-      firstOrders: number;      // Total order amount for the day
-      orderCount: number;       // Number of orders on that day
-      firstOrderAmount: number; // Amount of the very first order of the day
-      totalPayments: number;   // Total payment received on that day
-      dayOpeningBalance: number; // Balance before the first entry of the day
-      lastAmount: number;       // Closing running balance at end of the day
-      entries: any[];
-    }>();
-
-    ledgerEntries.forEach((entry: any) => {
-      if (!entry.date) return;
-      const d = entry.date instanceof Date ? entry.date : new Date(entry.date);
-      if (isNaN(d.getTime())) return;
-
-      const dateKey = `${d.getFullYear()}-${String(d.getMonth() + 1).padStart(2, '0')}-${String(d.getDate()).padStart(2, '0')}`;
-      const formattedDate = d.toLocaleDateString("en-IN", { day: "2-digit", month: "2-digit", year: "numeric" });
-
-      if (!dayMap.has(dateKey)) {
-        const prevBal = (entry.type === "opening") ? entry.runningBalance : (entry.runningBalance - (entry.balanceChange || 0));
-        dayMap.set(dateKey, {
-          dateKey,
-          dateObj: d,
-          formattedDate,
-          firstOrders: 0,
-          orderCount: 0,
-          firstOrderAmount: 0,
-          totalPayments: 0,
-          dayOpeningBalance: prevBal,
-          lastAmount: entry.runningBalance,
-          entries: [],
-        });
-      }
-
-      const dayGroup = dayMap.get(dateKey)!;
-      dayGroup.entries.push(entry);
-      dayGroup.lastAmount = entry.runningBalance;
-
-      if (entry.type === "order" && !entry.isCancelled) {
-        if (dayGroup.orderCount === 0) {
-          dayGroup.firstOrderAmount = entry.orderAmount || 0;
-        }
-        dayGroup.firstOrders += (entry.orderAmount || 0);
-        dayGroup.orderCount += 1;
-        dayGroup.totalPayments += (entry.paymentReceived || 0);
-      } else if (entry.type === "payment") {
-        dayGroup.totalPayments += (entry.paymentReceived || 0);
-      }
-    });
-
-    return Array.from(dayMap.values());
-  }, [ledgerEntries]);
+  // Compute daily rollup summaries for Customer Transaction Ledger
+  const dailyLedgerSummary = React.useMemo(
+    () => computeDailyLedgerSummary(ledgerEntries),
+    [ledgerEntries]
+  );
 
 
   const customerShareData: CustomerShareData | null = useMemo(() => {
     if (!customer) return null;
-    const currentPending = customer.totalPending !== undefined ? Number(customer.totalPending) : Number(customer.balance || 0);
+    const currentPending = roundCurrency(
+      customer.totalPending !== undefined ? customer.totalPending : (customer.balance || 0)
+    );
     const openingEntry = (ledgerEntries || []).find((l: any) => l.type === 'opening');
-    const oldBalance = openingEntry ? Number(openingEntry.runningBalance) : Number(customer.openingBalance || customer.previousBalance || 0);
-    const totalPaid = (ledgerEntries || []).reduce(
-      (sum: number, l: any) => sum + (Number(l.paymentReceived || 0) + Number(l.discountAmount || 0)),
-      0
+    const oldBalance = openingEntry
+      ? roundCurrency(openingEntry.runningBalance)
+      : roundCurrency(customer.openingBalance || customer.previousBalance || 0);
+    const totalPaid = roundCurrency(
+      (ledgerEntries || []).reduce(
+        (sum: number, l: any) => sum + (Number(l.paymentReceived || 0) + Number(l.discountAmount || 0)),
+        0
+      )
     );
 
     return {
@@ -838,10 +715,10 @@ export default function CustomerProfile() {
             }))
           : undefined;
 
-        const discAmt = Number(l.discountAmount || orig.discountAmount || 0);
-        const basePaid = Number(l.paymentReceived || (l.type === 'payment' ? (l.amount || l.paid) : l.paid) || 0);
-        const rawPaid = basePaid + discAmt;
-        const rawAmount = Number(l.orderAmount || (l.type === 'order' ? l.amount : 0) || 0);
+        const discAmt = roundCurrency(l.discountAmount || orig.discountAmount || 0);
+        const basePaid = roundCurrency(l.paymentReceived || (l.type === 'payment' ? (l.amount || l.paid) : l.paid) || 0);
+        const rawPaid = roundCurrency(basePaid + discAmt);
+        const rawAmount = roundCurrency(l.orderAmount || (l.type === 'order' ? l.amount : 0) || 0);
 
         const resolvedNotes = (() => {
           if (l.notes !== undefined && l.notes !== null) return String(l.notes).trim();
@@ -860,7 +737,7 @@ export default function CustomerProfile() {
           notes: resolvedNotes,
           amount: rawAmount,
           paid: rawPaid,
-          balance: Number(l.runningBalance || 0),
+          balance: roundCurrency(l.runningBalance || 0),
           items: rawItems,
           rate: Number(orig.unitPrice || orig.rate || orig.price || (rawItems && rawItems[0]?.rate) || 0),
           quantity: Number(orig.quantity || (rawItems && rawItems[0]?.quantity) || 0),
@@ -1008,7 +885,7 @@ export default function CustomerProfile() {
 
   const itemWiseOverall = React.useMemo(() => {
     const totalQty = itemWiseTotals.reduce((sum, i) => sum + i.totalQuantity, 0);
-    const totalAmt = itemWiseTotals.reduce((sum, i) => sum + i.totalAmount, 0);
+    const totalAmt = roundCurrency(itemWiseTotals.reduce((sum, i) => sum + i.totalAmount, 0));
     return { totalQty, totalAmt };
   }, [itemWiseTotals]);
 
@@ -1045,21 +922,15 @@ export default function CustomerProfile() {
     return result;
   }, [dailyLedgerSummary, checkDateFilter, ledgerSortOrder]);
 
-  const dailyMetricsOverall = React.useMemo(() => {
-    const totalDays = displayDailySummary.length;
-    const totalFirstOrders = displayDailySummary.reduce((sum, d) => sum + d.firstOrders, 0);
-    const totalPaymentsRec = displayDailySummary.reduce((sum, d) => sum + d.totalPayments, 0);
-    const latestLastAmount = displayDailySummary.length > 0
-      ? (ledgerSortOrder === "desc" ? displayDailySummary[0].lastAmount : displayDailySummary[displayDailySummary.length - 1].lastAmount)
-      : (customer?.totalPending !== undefined ? Number(customer.totalPending) : Number(customer?.balance || 0));
-
-    return {
-      totalDays,
-      totalFirstOrders,
-      totalPaymentsRec,
-      latestLastAmount,
-    };
-  }, [displayDailySummary, ledgerSortOrder, customer]);
+  const dailyMetricsOverall = React.useMemo(
+    () =>
+      computeOverallDailyMetrics({
+        displayDailySummary,
+        ledgerSortOrder,
+        customer,
+      }),
+    [displayDailySummary, ledgerSortOrder, customer]
+  );
 
 
   // Calculate last due date (upcoming pending, or latest completed)
@@ -1188,10 +1059,12 @@ export default function CustomerProfile() {
       : (customer.phone ? [customer.phone] : [""]);
     setEditProfilePhoneNumbers(existingNumbers);
 
-    const sumChanges = customerOrders.reduce((sum: number, o: any) => sum + (o.status !== "cancelled" ? (o.balanceDue !== undefined ? Number(o.balanceDue) : Math.max(0, (o.total || 0) - (o.paidAmount || 0))) : 0), 0) - 
-                       customerPayments.reduce((sum: number, p: any) => sum + (p.amountReceived !== undefined ? Number(p.amountReceived) : (p.amount || 0)), 0);
-    const customerPending = Number(customer.totalPending !== undefined ? customer.totalPending : (customer.balance || 0));
-    const openingBalance = customerPending - sumChanges;
+    const sumChanges = roundCurrency(
+      customerOrders.reduce((sum: number, o: any) => sum + (o.status !== "cancelled" ? (o.balanceDue !== undefined ? Number(o.balanceDue) : Math.max(0, Number(o.total || 0) - Number(o.paidAmount || 0))) : 0), 0) -
+      customerPayments.reduce((sum: number, p: any) => sum + (p.amountReceived !== undefined ? Number(p.amountReceived) : Number(p.amount || 0)) + Number(p.discountAmount || 0), 0)
+    );
+    const customerPending = roundCurrency(customer.totalPending !== undefined ? customer.totalPending : (customer.balance || 0));
+    const openingBalance = roundCurrency(customerPending - sumChanges);
     setEditProfileOpeningBalance(String(openingBalance));
 
     setIsEditProfileOpen(true);
@@ -1202,16 +1075,18 @@ export default function CustomerProfile() {
       Alert.alert("Required", "Client name is required.");
       return;
     }
-    const newOpeningBal = parseFloat(editProfileOpeningBalance) || 0;
+    const newOpeningBal = roundCurrency(parseFloat(editProfileOpeningBalance) || 0);
     if (isNaN(newOpeningBal)) {
       Alert.alert("Invalid Balance", "Opening balance must be a valid number.");
       return;
     }
     setIsSavingProfile(true);
     try {
-      const sumChanges = customerOrders.reduce((sum: number, o: any) => sum + (o.status !== "cancelled" ? (o.balanceDue !== undefined ? Number(o.balanceDue) : Math.max(0, (o.total || 0) - (o.paidAmount || 0))) : 0), 0) - 
-                         customerPayments.reduce((sum: number, p: any) => sum + (p.amountReceived !== undefined ? Number(p.amountReceived) : (p.amount || 0)), 0);
-      const newPendingBalance = newOpeningBal + sumChanges;
+      const sumChanges = roundCurrency(
+        customerOrders.reduce((sum: number, o: any) => sum + (o.status !== "cancelled" ? (o.balanceDue !== undefined ? Number(o.balanceDue) : Math.max(0, Number(o.total || 0) - Number(o.paidAmount || 0))) : 0), 0) -
+        customerPayments.reduce((sum: number, p: any) => sum + (p.amountReceived !== undefined ? Number(p.amountReceived) : Number(p.amount || 0)) + Number(p.discountAmount || 0), 0)
+      );
+      const newPendingBalance = roundCurrency(newOpeningBal + sumChanges);
 
       const cleanedPhones = editProfilePhoneNumbers.map(p => p.trim()).filter(Boolean);
       const primaryPhone = cleanedPhones[0] || "";
@@ -1489,8 +1364,8 @@ export default function CustomerProfile() {
 
   const handleSavePayment = async () => {
     if (!customer || isSavingPayment) return;
-    const amt = parseFloat(payAmount) || 0;
-    const disc = parseFloat(payDiscount) || 0;
+    const amt = roundCurrency(parseFloat(payAmount) || 0);
+    const disc = roundCurrency(parseFloat(payDiscount) || 0);
 
     if (amt <= 0 && disc <= 0) {
       Alert.alert("Invalid Entry", "Please enter a payment amount or a balance discount amount.");
@@ -1502,7 +1377,7 @@ export default function CustomerProfile() {
       return;
     }
 
-    const pending = Number(customer.totalPending !== undefined ? customer.totalPending : customer.balance || 0);
+    const pending = roundCurrency(customer.totalPending !== undefined ? customer.totalPending : customer.balance || 0);
     if (disc > 0 && pending <= 0) {
       Alert.alert("Invalid Discount", "Discounts cannot be applied when there is no pending balance.");
       return;
@@ -1755,8 +1630,8 @@ export default function CustomerProfile() {
     
     try {
       if (selectedEntry.type === "payment") {
-        const amt = parseFloat(editPaymentAmt) || 0;
-        const disc = parseFloat(editPaymentDiscount) || 0;
+        const amt = roundCurrency(parseFloat(editPaymentAmt) || 0);
+        const disc = roundCurrency(parseFloat(editPaymentDiscount) || 0);
         if (amt <= 0 && disc <= 0) {
           Alert.alert("Invalid Amount", "Please enter a valid payment amount or discount amount.");
           setSavingEditLedger(false);
@@ -1781,10 +1656,10 @@ export default function CustomerProfile() {
           Alert.alert("Error", "Failed to update payment.");
         }
       } else if (selectedEntry.type === "order") {
-        const paidAmt = parseFloat(editOrderPaidAmt) || 0;
-        const shipment = parseFloat(editOrderShipment) || 0;
-        const extra = parseFloat(editOrderExtra) || 0;
-        const taxVal = parseFloat(editOrderTax) || 0;
+        const paidAmt = roundCurrency(parseFloat(editOrderPaidAmt) || 0);
+        const shipment = roundCurrency(parseFloat(editOrderShipment) || 0);
+        const extra = roundCurrency(parseFloat(editOrderExtra) || 0);
+        const taxVal = roundCurrency(parseFloat(editOrderTax) || 0);
         
         if (paidAmt < 0 || shipment < 0 || extra < 0 || taxVal < 0) {
           Alert.alert("Invalid Amount", "Values must be greater than or equal to zero.");
@@ -1835,7 +1710,7 @@ export default function CustomerProfile() {
         } else if (loadingWorker) {
           autoCalcLoading = totalQty * Number(loadingWorker.loadingCost || 0);
         }
-        const finalLoadingCharge = isLoadingCustomized ? (parseFloat(editOrderLoadingCharge) || 0) : autoCalcLoading;
+        const finalLoadingCharge = roundCurrency(isLoadingCustomized ? (parseFloat(editOrderLoadingCharge) || 0) : autoCalcLoading);
 
         const unloadingWorker = workers.find((w: any) => w.id === editOrderUnloadingWorkerId);
         const unloadingWorkerName = (editUnloadingByPartner && partner?.hasUnloading) ? null : (unloadingWorker ? unloadingWorker.name : null);
@@ -1848,25 +1723,29 @@ export default function CustomerProfile() {
         } else if (unloadingWorker) {
           autoCalcUnloading = totalQty * Number(unloadingWorker.unloadingCost || 0);
         }
-        const finalUnloadingCharge = isUnloadingCustomized ? (parseFloat(editOrderUnloadingCharge) || 0) : autoCalcUnloading;
+        const finalUnloadingCharge = roundCurrency(isUnloadingCustomized ? (parseFloat(editOrderUnloadingCharge) || 0) : autoCalcUnloading);
 
-        const calculatedGrossTotal = editOrderItems.reduce((sum, item) => sum + (Number(item.quantity || 0) * Number(item.rate || 0)), 0);
+        const calculatedGrossTotal = roundCurrency(
+          editOrderItems.reduce((sum, item) => sum + (Number(item.quantity || 0) * Number(item.rate || 0)), 0)
+        );
 
-        const subtotalBeforeDiscount = calculatedGrossTotal + shipment + extra + taxVal + finalLoadingCharge + finalUnloadingCharge;
+        const subtotalBeforeDiscount = roundCurrency(
+          calculatedGrossTotal + shipment + extra + taxVal + finalLoadingCharge + finalUnloadingCharge
+        );
         
-        const discountVal = parseFloat(editOrderDiscount) || 0;
+        const discountVal = roundCurrency(parseFloat(editOrderDiscount) || 0);
         let calculatedDiscount = 0;
         if (editOrderDiscountType === "percent") {
-          calculatedDiscount = (subtotalBeforeDiscount * discountVal) / 100;
+          calculatedDiscount = roundCurrency((subtotalBeforeDiscount * discountVal) / 100);
         } else if (editOrderDiscountType === "per_brick") {
-          calculatedDiscount = discountVal * totalQty;
+          calculatedDiscount = roundCurrency(discountVal * totalQty);
         } else {
           calculatedDiscount = discountVal;
         }
 
-        const newTotal = Math.max(0, subtotalBeforeDiscount - calculatedDiscount);
-        const newBalanceDue = Math.max(0, newTotal - paidAmt);
-        const excessAdv = Math.max(0, paidAmt - newTotal);
+        const newTotal = roundCurrency(Math.max(0, subtotalBeforeDiscount - calculatedDiscount));
+        const newBalanceDue = roundCurrency(Math.max(0, newTotal - paidAmt));
+        const excessAdv = roundCurrency(Math.max(0, paidAmt - newTotal));
         
         const primaryItem = editOrderItems[0];
         const trimmedOrderNotes = editOrderNotes.trim();
@@ -4637,9 +4516,116 @@ export default function CustomerProfile() {
     );
   };
 
+  const daySummaryMap = useMemo(
+    () => new Map((dailyLedgerSummary || []).map((s) => [s.dateKey, s])),
+    [dailyLedgerSummary]
+  );
+
+  const ledgerFeedItems = useMemo<CustomerLedgerFeedItem[]>(() => {
+    if (ledgerViewMode === "daily") {
+      return (displayDailySummary || []).map((day) => ({
+        kind: "dailySummary",
+        id: `daily-${day.dateKey}`,
+        day,
+      }));
+    }
+
+    let prevKey = "";
+    return (displayLedgerEntries || []).map((entry: any, index: number) => {
+      const d = entry.date ? (entry.date instanceof Date ? entry.date : new Date(entry.date)) : null;
+      const dateKey =
+        d && !isNaN(d.getTime())
+          ? `${d.getFullYear()}-${String(d.getMonth() + 1).padStart(2, "0")}-${String(d.getDate()).padStart(2, "0")}`
+          : "";
+      const showDayHeader = Boolean(dateKey && (index === 0 || dateKey !== prevKey));
+      if (dateKey) {
+        prevKey = dateKey;
+      }
+      const daySummary = showDayHeader ? daySummaryMap.get(dateKey) || null : null;
+
+      return {
+        kind: "ledgerEntry",
+        id: `entry-${String(entry.id || index)}-${index}`,
+        entry,
+        daySummary,
+        isFirstDayHeader: index === 0,
+      };
+    });
+  }, [ledgerViewMode, displayDailySummary, displayLedgerEntries, daySummaryMap]);
+
+  const ledgerFeedKeyExtractor = useCallback((item: CustomerLedgerFeedItem) => item.id, []);
+
+  const renderLedgerFeedItem = useCallback(
+    ({ item }: { item: CustomerLedgerFeedItem }) => (
+      <View style={styles.ledgerCardItemContainer}>
+        {item.kind === "dailySummary" ? (
+          <DailySummaryRow day={item.day} styles={styles} colors={colors} />
+        ) : (
+          <AllLedgerRow
+            entry={item.entry}
+            daySummary={item.daySummary}
+            isFirstDayHeader={item.isFirstDayHeader}
+            colors={colors}
+            styles={styles}
+            onPress={handleOpenEditLedger}
+            onOpenEditProfile={handleOpenEditProfile}
+          />
+        )}
+      </View>
+    ),
+    [styles, colors, handleOpenEditLedger, handleOpenEditProfile]
+  );
+
+  const ledgerColumnHeader =
+    ledgerFeedItems.length === 0 ? null : ledgerViewMode === "daily" ? (
+      <View style={styles.ledgerTable}>
+        <View style={styles.ledgerHeaderRow}>
+          <Text style={[styles.ledgerHeaderCell, { flex: 1.5 }]} {...compactBadgeTextProps}>Date</Text>
+          <Text style={[styles.ledgerHeaderCell, { flex: 2, textAlign: "right" }]} {...compactBadgeTextProps}>First Orders</Text>
+          <Text style={[styles.ledgerHeaderCell, { flex: 1.8, textAlign: "right" }]} {...compactBadgeTextProps}>Payments</Text>
+          <Text style={[styles.ledgerHeaderCell, { flex: 2, textAlign: "right" }]} {...compactBadgeTextProps}>Last Amount</Text>
+        </View>
+      </View>
+    ) : (
+      <View style={styles.ledgerTable}>
+        <View style={styles.ledgerHeaderRow}>
+          <Text style={[styles.ledgerHeaderCell, { flex: 1.5 }]} {...compactBadgeTextProps}>Date & Time</Text>
+          <Text style={[styles.ledgerHeaderCell, { flex: 2.1 }]} {...compactBadgeTextProps}>Details</Text>
+          <Text style={[styles.ledgerHeaderCell, { flex: 1.5, textAlign: "right" }]} {...compactBadgeTextProps}>Order Amt</Text>
+          <Text style={[styles.ledgerHeaderCell, { flex: 1.5, textAlign: "right" }]} {...compactBadgeTextProps}>Payment</Text>
+          <Text style={[styles.ledgerHeaderCell, { flex: 1.5, textAlign: "right" }]} {...compactBadgeTextProps}>Balance</Text>
+        </View>
+      </View>
+    );
+
+  const ledgerEmptyComponent = (
+    <View style={styles.ledgerCardItemContainer}>
+      <Text style={styles.emptyText}>
+        {ledgerViewMode === "daily"
+          ? "No daily data recorded matching the selected date filters."
+          : "No transactions recorded matching the selected filters."}
+      </Text>
+    </View>
+  );
+
+  const ledgerFooterComponent = <View style={styles.ledgerCardFooter} />;
+
   return (
     <AnimatedPage>
-      <ScrollView contentContainerStyle={styles.container} showsVerticalScrollIndicator={false}>
+      <FlatList
+        data={ledgerFeedItems}
+        keyExtractor={ledgerFeedKeyExtractor}
+        renderItem={renderLedgerFeedItem}
+        contentContainerStyle={[styles.container, { paddingBottom: scrollBottomPadding }]}
+        showsVerticalScrollIndicator={false}
+        keyboardShouldPersistTaps="handled"
+        initialNumToRender={12}
+        maxToRenderPerBatch={12}
+        windowSize={7}
+        ListEmptyComponent={ledgerEmptyComponent}
+        ListFooterComponent={ledgerFooterComponent}
+        ListHeaderComponent={
+          <View>
         {/* Header */}
         <View style={styles.header}>
           <View style={{ flexDirection: "row", alignItems: "center", justifyContent: "space-between", marginBottom: 12 }}>
@@ -5114,20 +5100,20 @@ export default function CustomerProfile() {
               styles.metricValue,
               Number(customer.balance || 0) > 0 && { color: "#EF4444" },
               Number(customer.balance || 0) < 0 && { color: colors.accent.success },
-            ]}>
+            ]} {...currencyKpiTextProps}>
               ₹{Math.abs(Number(customer.balance || 0)).toLocaleString("en-IN")}
             </Text>
-            <Text style={{ fontSize: 9.5, fontWeight: "700", color: colors.accent.primary, marginTop: 2 }}>
+            <Text style={{ fontSize: 9.5, fontWeight: "700", color: colors.accent.primary, marginTop: 2 }} {...compactBadgeTextProps}>
               + Pay / Discount ↗
             </Text>
           </Pressable>
           <View style={styles.metricCard}>
-            <Text style={styles.metricLabel}>Total Invoices</Text>
-            <Text style={styles.metricValue}>{customerOrders.length}</Text>
+            <Text style={styles.metricLabel} {...compactBadgeTextProps}>Total Invoices</Text>
+            <Text style={styles.metricValue} {...currencyKpiTextProps}>{customerOrders.length}</Text>
           </View>
           <View style={styles.metricCard}>
-            <Text style={styles.metricLabel}>Total Spent</Text>
-            <Text style={[styles.metricValue, { color: colors.accent.success }]}>
+            <Text style={styles.metricLabel} {...compactBadgeTextProps}>Total Spent</Text>
+            <Text style={[styles.metricValue, { color: colors.accent.success }]} {...currencyKpiTextProps}>
               ₹{totalSpent.toLocaleString("en-IN")}
             </Text>
           </View>
@@ -5135,9 +5121,9 @@ export default function CustomerProfile() {
 
         {/* Meta Info */}
         <View style={styles.section}>
-          <View style={{ flexDirection: "row", justifyContent: "space-between", alignItems: "center", borderBottomWidth: 1, borderBottomColor: colors.border.subtle, paddingBottom: 8, marginBottom: 14 }}>
-            <Text style={{ fontSize: 14, fontWeight: "700", color: colors.text.primary, textTransform: "uppercase", letterSpacing: 0.5 }}>Client Profile Info</Text>
-            <View style={{ flexDirection: "row", alignItems: "center", gap: 8 }}>
+          <View style={{ flexDirection: "row", justifyContent: "space-between", alignItems: "center", flexWrap: "wrap", gap: 8, borderBottomWidth: 1, borderBottomColor: colors.border.subtle, paddingBottom: 8, marginBottom: 14 }}>
+            <Text style={{ fontSize: 14, fontWeight: "700", color: colors.text.primary, textTransform: "uppercase", letterSpacing: 0.5, flexShrink: 1 }}>Client Profile Info</Text>
+            <View style={{ flexDirection: "row", alignItems: "center", gap: 8, flexWrap: "wrap" }}>
               <Pressable
                 disabled={isResettingProfile}
                 style={{
@@ -5592,8 +5578,8 @@ export default function CustomerProfile() {
           )}
         </View>
 
-        {/* Customer Ledger Section */}
-        <View style={styles.section}>
+        {/* Customer Ledger Section Header Card Cap */}
+        <View style={styles.ledgerCardTop}>
           <View style={{ flexDirection: "row", justifyContent: "space-between", alignItems: "center", borderBottomWidth: 1, borderBottomColor: colors.border.subtle, paddingBottom: 8, marginBottom: 12 }}>
             <Text style={{ fontSize: 13, fontWeight: "700", color: colors.text.primary, textTransform: "uppercase", letterSpacing: 0.5 }}>
               Customer Transaction Ledger
@@ -5624,28 +5610,28 @@ export default function CustomerProfile() {
           </View>
 
           {/* Daily Calculation Overview KPI Cards */}
-          <View style={{ flexDirection: "row", gap: 8, marginBottom: 12 }}>
-            <View style={{ flex: 1, backgroundColor: colors.bg.primary, padding: 10, borderRadius: 8, borderWidth: 1, borderColor: colors.border.subtle }}>
-              <Text style={{ fontSize: 9.5, fontWeight: "700", color: colors.text.muted, textTransform: "uppercase", letterSpacing: 0.3 }}>
+          <View style={{ flexDirection: "row", flexWrap: "wrap", gap: 8, marginBottom: 12 }}>
+            <View style={{ flex: 1, minWidth: 96, backgroundColor: colors.bg.primary, padding: 10, borderRadius: 8, borderWidth: 1, borderColor: colors.border.subtle }}>
+              <Text style={{ fontSize: 9.5, fontWeight: "700", color: colors.text.muted, textTransform: "uppercase", letterSpacing: 0.3 }} {...compactBadgeTextProps}>
                 First Orders Total
               </Text>
-              <Text style={{ fontSize: 13.5, fontWeight: "800", color: colors.accent.primary, marginTop: 3 }}>
+              <Text style={{ fontSize: 13.5, fontWeight: "800", color: colors.accent.primary, marginTop: 3 }} {...currencyKpiTextProps}>
                 ₹{dailyMetricsOverall.totalFirstOrders.toLocaleString("en-IN")}
               </Text>
             </View>
-            <View style={{ flex: 1, backgroundColor: colors.bg.primary, padding: 10, borderRadius: 8, borderWidth: 1, borderColor: colors.border.subtle }}>
-              <Text style={{ fontSize: 9.5, fontWeight: "700", color: colors.text.muted, textTransform: "uppercase", letterSpacing: 0.3 }}>
+            <View style={{ flex: 1, minWidth: 96, backgroundColor: colors.bg.primary, padding: 10, borderRadius: 8, borderWidth: 1, borderColor: colors.border.subtle }}>
+              <Text style={{ fontSize: 9.5, fontWeight: "700", color: colors.text.muted, textTransform: "uppercase", letterSpacing: 0.3 }} {...compactBadgeTextProps}>
                 Payments Rec.
               </Text>
-              <Text style={{ fontSize: 13.5, fontWeight: "800", color: colors.accent.success, marginTop: 3 }}>
+              <Text style={{ fontSize: 13.5, fontWeight: "800", color: colors.accent.success, marginTop: 3 }} {...currencyKpiTextProps}>
                 ₹{dailyMetricsOverall.totalPaymentsRec.toLocaleString("en-IN")}
               </Text>
             </View>
-            <View style={{ flex: 1, backgroundColor: colors.bg.primary, padding: 10, borderRadius: 8, borderWidth: 1, borderColor: colors.border.subtle }}>
-              <Text style={{ fontSize: 9.5, fontWeight: "700", color: colors.text.muted, textTransform: "uppercase", letterSpacing: 0.3 }}>
+            <View style={{ flex: 1, minWidth: 96, backgroundColor: colors.bg.primary, padding: 10, borderRadius: 8, borderWidth: 1, borderColor: colors.border.subtle }}>
+              <Text style={{ fontSize: 9.5, fontWeight: "700", color: colors.text.muted, textTransform: "uppercase", letterSpacing: 0.3 }} {...compactBadgeTextProps}>
                 Last Amount (Closing)
               </Text>
-              <Text style={{ fontSize: 13.5, fontWeight: "800", color: colors.accent.danger, marginTop: 3 }}>
+              <Text style={{ fontSize: 13.5, fontWeight: "800", color: colors.accent.danger, marginTop: 3 }} {...currencyKpiTextProps}>
                 ₹{dailyMetricsOverall.latestLastAmount.toLocaleString("en-IN")}
               </Text>
             </View>
@@ -5715,153 +5701,11 @@ export default function CustomerProfile() {
             )}
           </View>
 
-          {ledgerViewMode === "daily" ? (
-            /* Daily Breakdown Mode */
-            displayDailySummary.length === 0 ? (
-              <Text style={styles.emptyText}>No daily data recorded matching the selected date filters.</Text>
-            ) : (
-              <View style={styles.ledgerTable}>
-                {/* Header row */}
-                <View style={styles.ledgerHeaderRow}>
-                  <Text style={[styles.ledgerHeaderCell, { flex: 1.5 }]}>Date</Text>
-                  <Text style={[styles.ledgerHeaderCell, { flex: 2, textAlign: "right" }]}>First Orders</Text>
-                  <Text style={[styles.ledgerHeaderCell, { flex: 1.8, textAlign: "right" }]}>Payments</Text>
-                  <Text style={[styles.ledgerHeaderCell, { flex: 2, textAlign: "right" }]}>Last Amount</Text>
-                </View>
-
-                {/* Daily rows */}
-                {displayDailySummary.map((day: any) => (
-                  <View
-                    key={day.dateKey}
-                    style={{
-                      flexDirection: "row",
-                      alignItems: "center",
-                      paddingVertical: 10,
-                      paddingHorizontal: 8,
-                      borderBottomWidth: 1,
-                      borderBottomColor: colors.border.subtle,
-                    }}
-                  >
-                    <View style={{ flex: 1.5 }}>
-                      <Text style={{ fontSize: 11.5, fontWeight: "700", color: colors.text.primary }}>
-                        {day.formattedDate}
-                      </Text>
-                      {day.orderCount > 0 && (
-                        <Text style={{ fontSize: 9, color: colors.text.muted, marginTop: 1 }}>
-                          📦 {day.orderCount} {day.orderCount === 1 ? "order" : "orders"}
-                        </Text>
-                      )}
-                    </View>
-                    <Text style={{ flex: 2, textAlign: "right", fontSize: 11.5, fontWeight: "700", color: day.firstOrders > 0 ? colors.accent.primary : colors.text.muted }}>
-                      {day.firstOrders > 0 ? `₹${day.firstOrders.toLocaleString("en-IN")}` : "—"}
-                    </Text>
-                    <Text style={{ flex: 1.8, textAlign: "right", fontSize: 11.5, fontWeight: "700", color: day.totalPayments > 0 ? colors.accent.success : colors.text.muted }}>
-                      {day.totalPayments > 0 ? `₹${day.totalPayments.toLocaleString("en-IN")}` : "—"}
-                    </Text>
-                    <Text style={{ flex: 2, textAlign: "right", fontSize: 12, fontWeight: "800", color: colors.accent.danger }}>
-                      ₹{day.lastAmount.toLocaleString("en-IN")}
-                    </Text>
-                  </View>
-                ))}
-              </View>
-            )
-          ) : (
-            /* All Transactions Mode */
-            displayLedgerEntries.length === 0 ? (
-              <Text style={styles.emptyText}>No transactions recorded matching the selected filters.</Text>
-            ) : (
-              <View style={styles.ledgerTable}>
-                {/* Header row */}
-                <View style={styles.ledgerHeaderRow}>
-                  <Text style={[styles.ledgerHeaderCell, { flex: 1.5 }]}>Date & Time</Text>
-                  <Text style={[styles.ledgerHeaderCell, { flex: 2.1 }]}>Details</Text>
-                  <Text style={[styles.ledgerHeaderCell, { flex: 1.5, textAlign: "right" }]}>Order Amt</Text>
-                  <Text style={[styles.ledgerHeaderCell, { flex: 1.5, textAlign: "right" }]}>Payment</Text>
-                  <Text style={[styles.ledgerHeaderCell, { flex: 1.5, textAlign: "right" }]}>Balance</Text>
-                </View>
-
-                {/* Data rows with Daily Headers */}
-                {displayLedgerEntries.map((entry: any, index: number) => {
-                  const d = entry.date ? (entry.date instanceof Date ? entry.date : new Date(entry.date)) : null;
-                  const dateKey = d && !isNaN(d.getTime())
-                    ? `${d.getFullYear()}-${String(d.getMonth() + 1).padStart(2, '0')}-${String(d.getDate()).padStart(2, '0')}`
-                    : "";
-
-                  let showDayHeader = false;
-                  if (dateKey) {
-                    if (index === 0) {
-                      showDayHeader = true;
-                    } else {
-                      const prevEntry = displayLedgerEntries[index - 1];
-                      const prevD = prevEntry?.date ? (prevEntry.date instanceof Date ? prevEntry.date : new Date(prevEntry.date)) : null;
-                      const prevKey = prevD && !isNaN(prevD.getTime())
-                        ? `${prevD.getFullYear()}-${String(prevD.getMonth() + 1).padStart(2, '0')}-${String(prevD.getDate()).padStart(2, '0')}`
-                        : "";
-                      if (dateKey !== prevKey) {
-                        showDayHeader = true;
-                      }
-                    }
-                  }
-
-                  const daySummary = showDayHeader ? dailyLedgerSummary.find((s: any) => s.dateKey === dateKey) : null;
-
-                  return (
-                    <React.Fragment key={entry.id || index}>
-                      {showDayHeader && daySummary && (
-                        <View
-                          style={{
-                            backgroundColor: colors.bg.primary,
-                            borderColor: colors.accent.primary + "30",
-                            borderWidth: 1,
-                            borderRadius: 6,
-                            paddingVertical: 6,
-                            paddingHorizontal: 10,
-                            marginTop: index === 0 ? 4 : 10,
-                            marginBottom: 4,
-                            flexDirection: "row",
-                            justifyContent: "space-between",
-                            alignItems: "center",
-                          }}
-                        >
-                          <View style={{ flexDirection: "row", alignItems: "center", gap: 6 }}>
-                            <MaterialIcons name="event" size={14} color={colors.accent.primary} />
-                            <Text style={{ fontSize: 11, fontWeight: "700", color: colors.text.primary }}>
-                              {daySummary.formattedDate}
-                            </Text>
-                            {daySummary.orderCount > 0 && (
-                              <View style={{ backgroundColor: colors.accent.primary + "18", paddingHorizontal: 6, paddingVertical: 1, borderRadius: 8 }}>
-                                <Text style={{ fontSize: 9, fontWeight: "700", color: colors.accent.primary }}>
-                                  {daySummary.orderCount} {daySummary.orderCount === 1 ? "order" : "orders"}
-                                </Text>
-                              </View>
-                            )}
-                          </View>
-                          <View style={{ flexDirection: "row", alignItems: "center", gap: 10 }}>
-                            <Text style={{ fontSize: 10, color: colors.text.muted }}>
-                              First Orders: <Text style={{ fontWeight: "700", color: colors.text.primary }}>₹{daySummary.firstOrders.toLocaleString("en-IN")}</Text>
-                            </Text>
-                            <Text style={{ fontSize: 10, color: colors.text.muted }}>
-                              Last Amt: <Text style={{ fontWeight: "800", color: daySummary.lastAmount < 0 ? colors.accent.success : colors.accent.danger }}>
-                                {daySummary.lastAmount < 0 ? `Adv: ₹${Math.abs(daySummary.lastAmount).toLocaleString("en-IN")}` : `₹${daySummary.lastAmount.toLocaleString("en-IN")}`}
-                              </Text>
-                            </Text>
-                          </View>
-                        </View>
-                      )}
-                      <LedgerItemCard
-                        entry={entry}
-                        colors={colors}
-                        onPress={handleOpenEditLedger}
-                        onOpenEditProfile={handleOpenEditProfile}
-                      />
-                    </React.Fragment>
-                  );
-                })}
-              </View>
-            )
-          )}
+          {ledgerColumnHeader}
         </View>
-      </ScrollView>
+          </View>
+        }
+      />
 
       {/* Collector Select Modal */}
       <Modal
@@ -6095,11 +5939,13 @@ const getStyles = (theme: any) => {
   },
   metricsGrid: {
     flexDirection: "row",
+    flexWrap: "wrap",
     gap: 10,
     marginBottom: 16,
   },
   metricCard: {
     flex: 1,
+    minWidth: 96,
     backgroundColor: colors.bg.card,
     borderWidth: 1,
     borderColor: colors.border.subtle,
@@ -6411,10 +6257,10 @@ const getStyles = (theme: any) => {
     zIndex: 1,
   },
   modalContent: {
-    width: "100%",
-    maxWidth: 420,
-    maxHeight: "85%",
-    minHeight: 300,
+    width: "92%",
+    maxWidth: 480,
+    maxHeight: "88%",
+    minHeight: 260,
     backgroundColor: colors.bg.card,
     borderRadius: 20,
     padding: 20,
@@ -6668,8 +6514,9 @@ const getStyles = (theme: any) => {
     backgroundColor: colors.bg.card,
     borderRadius: 20,
     padding: 16,
-    width: "85%",
-    maxWidth: 340,
+    width: "92%",
+    maxWidth: 420,
+    maxHeight: "88%",
     shadowColor: "#000",
     shadowOffset: { width: 0, height: 4 },
     shadowOpacity: 0.1,
@@ -6702,6 +6549,128 @@ const getStyles = (theme: any) => {
   partnerNameActive: {
     color: colors.accent.primary,
     fontWeight: "700",
+  },
+  ledgerCardTop: {
+    backgroundColor: colors.bg.card,
+    borderTopLeftRadius: 16,
+    borderTopRightRadius: 16,
+    paddingTop: 16,
+    paddingHorizontal: 16,
+    borderWidth: 1,
+    borderBottomWidth: 0,
+    borderColor: colors.border.subtle,
+  },
+  ledgerCardItemContainer: {
+    backgroundColor: colors.bg.card,
+    paddingHorizontal: 16,
+    borderLeftWidth: 1,
+    borderRightWidth: 1,
+    borderColor: colors.border.subtle,
+  },
+  ledgerCardFooter: {
+    backgroundColor: colors.bg.card,
+    borderBottomLeftRadius: 16,
+    borderBottomRightRadius: 16,
+    paddingBottom: 16,
+    borderWidth: 1,
+    borderTopWidth: 0,
+    borderColor: colors.border.subtle,
+    marginBottom: 16,
+  },
+  dailySummaryRow: {
+    flexDirection: "row",
+    alignItems: "center",
+    paddingVertical: 10,
+    paddingHorizontal: 8,
+    borderBottomWidth: 1,
+    borderBottomColor: colors.border.subtle,
+  },
+  dailyDateCol: {
+    flex: 1.5,
+  },
+  dailyDateText: {
+    fontSize: 11.5,
+    fontWeight: "700",
+    color: colors.text.primary,
+  },
+  dailyOrderCountText: {
+    fontSize: 9,
+    color: colors.text.muted,
+    marginTop: 1,
+  },
+  dailyFirstOrdersCol: {
+    flex: 2,
+    textAlign: "right",
+    fontSize: 11.5,
+    fontWeight: "700",
+  },
+  dailyPaymentsCol: {
+    flex: 1.8,
+    textAlign: "right",
+    fontSize: 11.5,
+    fontWeight: "700",
+  },
+  dailyLastAmtCol: {
+    flex: 2,
+    textAlign: "right",
+    fontSize: 12,
+    fontWeight: "800",
+    color: colors.accent.danger,
+  },
+  dayHeaderBanner: {
+    backgroundColor: colors.bg.primary,
+    borderColor: colors.accent.primary + "30",
+    borderWidth: 1,
+    borderRadius: 6,
+    paddingVertical: 6,
+    paddingHorizontal: 10,
+    marginBottom: 4,
+    flexDirection: "row",
+    justifyContent: "space-between",
+    alignItems: "center",
+  },
+  dayHeaderBannerFirst: {
+    marginTop: 4,
+  },
+  dayHeaderBannerNext: {
+    marginTop: 10,
+  },
+  dayHeaderLeft: {
+    flexDirection: "row",
+    alignItems: "center",
+    gap: 6,
+  },
+  dayHeaderDateText: {
+    fontSize: 11,
+    fontWeight: "700",
+    color: colors.text.primary,
+  },
+  dayHeaderCountBadge: {
+    backgroundColor: colors.accent.primary + "18",
+    paddingHorizontal: 6,
+    paddingVertical: 1,
+    borderRadius: 8,
+  },
+  dayHeaderCountText: {
+    fontSize: 9,
+    fontWeight: "700",
+    color: colors.accent.primary,
+  },
+  dayHeaderRight: {
+    flexDirection: "row",
+    alignItems: "center",
+    gap: 10,
+  },
+  dayHeaderMetaText: {
+    fontSize: 10,
+    color: colors.text.muted,
+  },
+  dayHeaderFirstAmt: {
+    fontWeight: "700",
+    color: colors.text.primary,
+  },
+  dayHeaderLastAmt: {
+    fontWeight: "800",
   },
 })
 };

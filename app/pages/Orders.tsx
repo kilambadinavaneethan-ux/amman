@@ -5,7 +5,10 @@ import React, { useContext, useEffect, useMemo, useCallback, useState } from "re
 import {
     ActivityIndicator,
     Alert,
+    FlatList,
+    KeyboardAvoidingView,
     Modal,
+    Platform,
     Pressable,
     ScrollView,
     StyleSheet,
@@ -33,8 +36,561 @@ import { useScrollRestoration } from "../context/ScrollContext";
 import { TransactionShareBottomSheet } from "../../src/components/sharing/TransactionShareBottomSheet";
 import { adaptToTransactionData } from "../../src/utils/transactionAdapter";
 import { TransactionData } from "../../src/types/sharing";
+import { roundCurrency } from "../../utils/currency";
+import { useResponsive } from "../../utils/responsive";
 
 const PAYMENT_METHODS = ["Cash", "UPI", "Bank Transfer", "Card", "Other"];
+
+const getStatusColor = (status: string): string => {
+  switch (status) {
+    case "completed":
+      return "#00D68F";
+    case "in-transit":
+      return "#3B82F6";
+    case "pending":
+      return "#F59E0B";
+    case "cancelled":
+      return "#EF4444";
+    case "purchase":
+      return "#b45309";
+    default:
+      return "#5A5F72";
+  }
+};
+
+type OrdersStyles = ReturnType<typeof getStyles>;
+
+type OrdersFeedItem =
+  | { kind: "dateHeader"; id: string; dateStr: string; revSum: number; expSum: number; isFirst: boolean }
+  | { kind: "order"; id: string; order: any; customerCurrentPending: number; isTargetOrder: boolean }
+  | { kind: "expense"; id: string; expense: any };
+
+interface OrderTimelineCardProps {
+  order: any;
+  customerCurrentPending: number;
+  isTargetOrder: boolean;
+  deliveryInputVal: string;
+  partnerByIdMap: Map<string, any>;
+  styles: OrdersStyles;
+  colors: any;
+  onOpenCustomerProfile: (order: any) => void;
+  onStartEditDelivery: (
+    orderId: string,
+    deliveryIdx: number,
+    qty: number,
+    date: any,
+    partnerId?: string,
+    notes?: string
+  ) => void;
+  onDeleteDelivery: (order: any, deliveryIndex: number) => void;
+  onChangeDeliveryInput: (orderId: string, val: string) => void;
+  onRecordDelivery: (order: any, remainingQty: number) => void;
+  onOpenShareModal: (item: any, type: "order" | "expense" | "purchase") => void;
+  onOpenPayModal: (order: any) => void;
+  onEditRawMaterialOrder: (order: any) => void;
+  onEditOrder: (order: any) => void;
+  onDeleteRawMaterialOrder: (orderId: string, order: any) => void;
+  onDeleteOrder: (orderId: string, orderData: any) => void;
+  onUpdateOrderStatus: (orderId: string, status: string) => void;
+}
+
+const OrderTimelineCard = React.memo(function OrderTimelineCard({
+    order,
+    customerCurrentPending,
+    isTargetOrder,
+    deliveryInputVal,
+    partnerByIdMap,
+    styles,
+    colors,
+    onOpenCustomerProfile,
+    onStartEditDelivery,
+    onDeleteDelivery,
+    onChangeDeliveryInput,
+    onRecordDelivery,
+    onOpenShareModal,
+    onOpenPayModal,
+    onEditRawMaterialOrder,
+    onEditOrder,
+    onDeleteRawMaterialOrder,
+    onDeleteOrder,
+    onUpdateOrderStatus,
+  }: OrderTimelineCardProps) {
+    const statusColor = getStatusColor(order.status);
+    const thisOrderUnpaid = roundCurrency(order.balanceDue || 0);
+    const oldBalanceDue = roundCurrency(
+      order.previousBalance !== undefined
+        ? Number(order.previousBalance)
+        : customerCurrentPending - thisOrderUnpaid
+    );
+    const thisOrderTotal = roundCurrency(order.total || 0);
+    const totalAmountWithOldDues = roundCurrency(thisOrderTotal + oldBalanceDue);
+    const paidAmountVal = roundCurrency(
+      order.paidAmount !== undefined ? order.paidAmount : thisOrderTotal - thisOrderUnpaid
+    );
+    const totalBalanceUnpaid = roundCurrency(oldBalanceDue + thisOrderUnpaid);
+    const excessAdvance = roundCurrency(Math.max(0, paidAmountVal - totalAmountWithOldDues));
+
+    const totalQty =
+      order.items && order.items.length > 0
+        ? order.items.reduce((sum: number, itm: any) => sum + Number(itm.quantity || 0), 0)
+        : Number(order.quantity || 0);
+    const totalDelivered = Number(order.deliveredQuantity || 0);
+    const remainingQty = Math.max(0, totalQty - totalDelivered);
+
+    return (
+      <View
+        style={[
+          styles.card,
+          { borderLeftWidth: 4, borderLeftColor: statusColor },
+          isTargetOrder && styles.orderCardFocused,
+        ]}
+      >
+        {isTargetOrder && (
+          <View style={styles.selectedBannerBadge}>
+            <MaterialIcons name="stars" size={14} color={colors.accent.primary} />
+            <Text style={styles.selectedBannerText}>Selected from Daily Report</Text>
+          </View>
+        )}
+
+        <Pressable style={styles.cardHeader} onPress={() => onOpenCustomerProfile(order)}>
+          <View style={styles.orderHeaderInfoCol}>
+            <View style={styles.clientTitleRow}>
+              <Text selectable={true} style={styles.clientName} numberOfLines={2}>
+                {order.customerName || (order.isRawMaterialOrder ? "Supplier" : "Client")}
+              </Text>
+              {!order.isRawMaterialOrder && (
+                <MaterialIcons name="chevron-right" size={18} color={colors.accent.primary} />
+              )}
+            </View>
+            {!!order.customerPhone && (
+              <View style={styles.phoneMetaRow}>
+                <MaterialIcons name="call" size={13} color={colors.accent.primary} />
+                <Text selectable={true} style={styles.phoneMetaText}>
+                  {order.customerPhone}
+                </Text>
+              </View>
+            )}
+            <Text style={styles.date}>
+              {order.createdAt
+                ? new Date(order.createdAt).toLocaleTimeString([], {
+                    hour: "2-digit",
+                    minute: "2-digit",
+                  })
+                : "Just now"}
+            </Text>
+            <Text style={[styles.date, styles.orderedDateMeta]}>
+              Ordered:{" "}
+              {new Date(order.orderedDate || order.createdAt).toLocaleDateString("en-IN", {
+                day: "2-digit",
+                month: "short",
+                year: "numeric",
+              })}
+            </Text>
+          </View>
+          <View style={[styles.statusBadge, { backgroundColor: `${statusColor}15` }]}>
+            <Text style={[styles.statusText, { color: statusColor }]}>{order.status}</Text>
+          </View>
+        </Pressable>
+
+        <View style={styles.divider} />
+
+        <View style={styles.cardBody}>
+          {order.items && order.items.length > 0 ? (
+            <View style={styles.itemsGroup}>
+              <Text style={[styles.bodyLabel, styles.itemsGroupHeading]}>Items</Text>
+              {order.items.map((item: any, idx: number) => {
+                const itemTotal =
+                  Number(item.grossTotal) || Number(item.quantity || 0) * Number(item.rate || 0);
+                return (
+                  <View key={idx} style={styles.detailRow}>
+                    <Text style={[styles.bodyValue, styles.itemBulletName]}>• {item.itemName}</Text>
+                    <Text style={[styles.bodyValue, styles.itemMathValue]}>
+                      {item.quantity} x {item.rate} = ₹{itemTotal.toLocaleString("en-IN")}
+                    </Text>
+                  </View>
+                );
+              })}
+            </View>
+          ) : (
+            <>
+              <View style={styles.detailRow}>
+                <Text style={styles.bodyLabel}>Product Name</Text>
+                <Text style={styles.bodyValue}>{order.itemName}</Text>
+              </View>
+              <View style={styles.detailRow}>
+                <Text style={styles.bodyLabel}>Quantity x Price</Text>
+                <Text style={[styles.bodyValue, styles.itemMathWeight]}>
+                  {order.quantity} x {order.rate} = ₹
+                  {(Number(order.quantity || 0) * Number(order.rate || 0)).toLocaleString("en-IN")}
+                </Text>
+              </View>
+            </>
+          )}
+
+          <View style={[styles.divider, styles.smallDivider]} />
+
+          <View style={styles.breakdownCardBox}>
+            <Text style={styles.breakdownTitle}>Full Total Breakdown</Text>
+
+            {order.grossTotal || (order.items && order.items.length > 0) ? (
+              <View style={[styles.detailRow, styles.breakdownRowGap]}>
+                <Text style={styles.bodyLabel}>Items Subtotal</Text>
+                <Text style={[styles.bodyValue, styles.breakdownValSemi]}>
+                  ₹
+                  {(
+                    Number(order.grossTotal) ||
+                    (order.items
+                      ? order.items.reduce(
+                          (s: number, i: any) =>
+                            s + Number(i.quantity || 0) * Number(i.rate || 0),
+                          0
+                        )
+                      : Number(order.quantity || 0) * Number(order.rate || 0))
+                  ).toLocaleString("en-IN")}
+                </Text>
+              </View>
+            ) : null}
+
+            {Number(order.shipmentCharge) > 0 ? (
+              <View style={[styles.detailRow, styles.breakdownRowGap]}>
+                <Text style={styles.bodyLabel}>
+                  Shipment Charge {order.shipmentDistance ? `(${order.shipmentDistance} km)` : ""}
+                </Text>
+                <Text style={[styles.bodyValue, styles.breakdownValAccent]}>
+                  +₹{Number(order.shipmentCharge).toLocaleString("en-IN")}
+                </Text>
+              </View>
+            ) : null}
+
+            {Number(order.loadingCharge) > 0 ? (
+              <View style={[styles.detailRow, styles.breakdownRowGap]}>
+                <Text style={styles.bodyLabel}>
+                  Loading {order.loadingWorkerName ? `(${order.loadingWorkerName})` : ""}
+                </Text>
+                <Text style={[styles.bodyValue, styles.breakdownValAccent]}>
+                  +₹{Number(order.loadingCharge).toLocaleString("en-IN")}
+                </Text>
+              </View>
+            ) : null}
+
+            {Number(order.unloadingCharge) > 0 ? (
+              <View style={[styles.detailRow, styles.breakdownRowGap]}>
+                <Text style={styles.bodyLabel}>
+                  Unloading {order.unloadingWorkerName ? `(${order.unloadingWorkerName})` : ""}
+                </Text>
+                <Text style={[styles.bodyValue, styles.breakdownValAccent]}>
+                  +₹{Number(order.unloadingCharge).toLocaleString("en-IN")}
+                </Text>
+              </View>
+            ) : null}
+
+            {Number(order.extraAmount) > 0 ? (
+              <View style={[styles.detailRow, styles.breakdownRowGap]}>
+                <Text style={styles.bodyLabel}>
+                  Extra Charge {order.extraAmountDescription ? `(${order.extraAmountDescription})` : ""}
+                </Text>
+                <Text style={[styles.bodyValue, styles.breakdownValAccent]}>
+                  +₹{Number(order.extraAmount).toLocaleString("en-IN")}
+                </Text>
+              </View>
+            ) : null}
+
+            {Number(order.discountAmount) > 0 || Number(order.discount) > 0 ? (
+              <View style={[styles.detailRow, styles.breakdownRowGap]}>
+                <Text style={[styles.bodyLabel, styles.breakdownDiscountLabel]}>
+                  Discount{" "}
+                  {order.discountType === "percent"
+                    ? `(${order.discount}%)`
+                    : order.discountType === "per_brick"
+                    ? `(₹${order.discount}/brick)`
+                    : ""}
+                </Text>
+                <Text style={[styles.bodyValue, styles.breakdownDiscountVal]}>
+                  -₹{(Number(order.discountAmount) || Number(order.discount) || 0).toLocaleString("en-IN")}
+                </Text>
+              </View>
+            ) : null}
+
+            <View style={[styles.detailRow, styles.breakdownRowGap]}>
+              <Text style={styles.bodyLabel}>Current Order Subtotal</Text>
+              <Text style={[styles.bodyValue, styles.breakdownValSemi]}>
+                ₹{thisOrderTotal.toLocaleString("en-IN")}
+              </Text>
+            </View>
+
+            {oldBalanceDue > 0 ? (
+              <View style={[styles.detailRow, styles.breakdownRowGap]}>
+                <Text style={[styles.bodyLabel, styles.oldBalLabelDanger]}>
+                  Old Balance Due (Previous)
+                </Text>
+                <Text style={[styles.bodyValue, styles.oldBalValDanger]}>
+                  +₹{oldBalanceDue.toLocaleString("en-IN")}
+                </Text>
+              </View>
+            ) : oldBalanceDue < 0 ? (
+              <View style={[styles.detailRow, styles.breakdownRowGap]}>
+                <Text style={[styles.bodyLabel, styles.advBalLabelSuccess]}>
+                  Advance Balance (Plus Credit)
+                </Text>
+                <Text style={[styles.bodyValue, styles.advBalValSuccess]}>
+                  -₹{Math.abs(oldBalanceDue).toLocaleString("en-IN")}
+                </Text>
+              </View>
+            ) : null}
+
+            <View style={[styles.divider, styles.breakdownDivider]} />
+
+            <View style={[styles.detailRow, styles.breakdownRowGap]}>
+              <Text style={[styles.bodyLabel, styles.totalWithOldLabel]}>
+                {order.isRawMaterialOrder ? "Total Purchase Cost" : "Total Order Amount (incl. Old Dues)"}
+              </Text>
+              <Text style={[styles.totalValue, styles.totalWithOldVal]}>
+                ₹{totalAmountWithOldDues.toLocaleString("en-IN")}
+              </Text>
+            </View>
+
+            <View style={[styles.detailRow, styles.breakdownRowGap]}>
+              <Text style={styles.bodyLabel}>Amount Paid Today</Text>
+              <View style={styles.paidTodayRow}>
+                <Text style={styles.paidTodayText}>₹{paidAmountVal.toLocaleString("en-IN")}</Text>
+                {(order.paymentMethod || order.paymentMode || order.paymentType) && paidAmountVal > 0 && (
+                  <View style={styles.paidMethodChip}>
+                    <Text style={styles.paidMethodChipText}>
+                      {order.paymentMethod || order.paymentMode || order.paymentType}
+                    </Text>
+                  </View>
+                )}
+              </View>
+            </View>
+
+            <View style={styles.detailRow}>
+              <Text style={styles.bodyLabel}>Total Balance Unpaid</Text>
+              <Text
+                style={[
+                  styles.balanceUnpaidText,
+                  { color: totalBalanceUnpaid > 0 ? colors.accent.danger : colors.accent.success },
+                ]}
+              >
+                ₹{totalBalanceUnpaid.toLocaleString("en-IN")}
+              </Text>
+            </View>
+
+            {excessAdvance > 0 && (
+              <View style={[styles.detailRow, styles.advCreditRow]}>
+                <Text style={[styles.bodyLabel, styles.advCreditLabel]}>
+                  ⭐ Advance Credit (To Profile)
+                </Text>
+                <Text style={[styles.bodyValue, styles.advCreditVal]}>
+                  +₹{excessAdvance.toLocaleString("en-IN")}
+                </Text>
+              </View>
+            )}
+
+            {order.description || order.notes ? (
+              <View style={styles.noteBox}>
+                <MaterialIcons name="notes" size={14} color={colors.accent.primary} style={styles.noteIcon} />
+                <Text style={styles.noteBodyText}>
+                  <Text style={styles.noteBoldLabel}>Note: </Text>
+                  {order.description || order.notes}
+                </Text>
+              </View>
+            ) : null}
+          </View>
+
+          {!order.isRawMaterialOrder && (
+            <View style={styles.deliveryTrackBox}>
+              <View style={styles.deliveryTrackHeader}>
+                <Text style={styles.deliveryTrackTitle}>Delivery Progress</Text>
+                <Text
+                  style={[
+                    styles.deliveryTrackStatus,
+                    { color: remainingQty === 0 ? "#10B981" : "#F59E0B" },
+                  ]}
+                >
+                  {remainingQty === 0 ? "Fully Delivered" : `${totalDelivered} / ${totalQty} Delivered`}
+                </Text>
+              </View>
+
+              <View style={styles.deliveryProgressBg}>
+                <View
+                  style={[
+                    styles.deliveryProgressFill,
+                    {
+                      width: `${totalQty > 0 ? Math.min(100, (totalDelivered / totalQty) * 100) : 0}%`,
+                      backgroundColor: remainingQty === 0 ? "#10B981" : colors.accent.primary,
+                    },
+                  ]}
+                />
+              </View>
+
+              {order.deliveries && order.deliveries.length > 0 && (
+                <View style={styles.deliveryHistWrap}>
+                  <Text style={styles.deliveryHistTitle}>Delivery History:</Text>
+                  {order.deliveries.map((del: any, idx: number) => {
+                    const delDate = del.date
+                      ? del.date.toDate
+                        ? del.date.toDate()
+                        : new Date(del.date)
+                      : new Date();
+                    const partnerName = del.deliveryPartnerId
+                      ? partnerByIdMap.get(del.deliveryPartnerId)?.name
+                      : "";
+                    return (
+                      <View
+                        key={idx}
+                        style={[
+                          styles.deliveryHistItem,
+                          idx < order.deliveries.length - 1 && styles.deliveryHistBorder,
+                        ]}
+                      >
+                        <View style={styles.deliveryHistTop}>
+                          <Text style={styles.deliveryHistText}>
+                            ✓ {del.quantity} bricks on {delDate.toLocaleDateString("en-IN")} at{" "}
+                            {delDate.toLocaleTimeString([], { hour: "2-digit", minute: "2-digit" })}
+                          </Text>
+
+                          {!order.isRawMaterialOrder && (
+                            <View style={styles.deliveryHistActions}>
+                              <Pressable
+                                onPress={() =>
+                                  onStartEditDelivery(
+                                    order.id,
+                                    idx,
+                                    del.quantity,
+                                    del.date,
+                                    del.deliveryPartnerId,
+                                    del.notes
+                                  )
+                                }
+                                style={styles.deliveryHistIconBtn}
+                              >
+                                <MaterialIcons name="edit" size={14} color="#3B82F6" />
+                              </Pressable>
+                              <Pressable
+                                onPress={() => onDeleteDelivery(order, idx)}
+                                style={styles.deliveryHistIconBtn}
+                              >
+                                <MaterialIcons name="delete" size={14} color={colors.accent.danger} />
+                              </Pressable>
+                            </View>
+                          )}
+                        </View>
+                        {partnerName ? (
+                          <Text style={styles.deliveryMetaSub}>🚚 Driver: {partnerName}</Text>
+                        ) : null}
+                        {del.notes ? (
+                          <Text style={styles.deliveryMetaNote}>📝 Notes: {del.notes}</Text>
+                        ) : null}
+                      </View>
+                    );
+                  })}
+                </View>
+              )}
+
+              {remainingQty > 0 ? (
+                <View>
+                  <Text style={styles.deliveryRemainingText}>
+                    Remaining: <Text style={styles.deliveryRemainingQty}>{remainingQty} bricks</Text>
+                  </Text>
+                  <View style={styles.deliveryInputRow}>
+                    <TextInput
+                      style={styles.deliveryInputField}
+                      placeholder="Enter delivered qty"
+                      placeholderTextColor={colors.text.muted}
+                      keyboardType="numeric"
+                      value={deliveryInputVal}
+                      onChangeText={(val) => onChangeDeliveryInput(order.id, val)}
+                    />
+                    <Pressable
+                      style={styles.deliveryRecordBtn}
+                      onPress={() => onRecordDelivery(order, remainingQty)}
+                    >
+                      <Text style={styles.deliveryRecordBtnText}>Record Delivery</Text>
+                    </Pressable>
+                  </View>
+                </View>
+              ) : (
+                <Text style={styles.deliveryAllDoneText}>✓ All units successfully delivered.</Text>
+              )}
+            </View>
+          )}
+        </View>
+
+        <View style={styles.cardActions}>
+          <Pressable
+            style={[styles.actionBtn, styles.actionBtnShare]}
+            onPress={() => onOpenShareModal(order, order.isRawMaterialOrder ? "purchase" : "order")}
+          >
+            <MaterialIcons name="share" size={16} color="#FFFFFF" />
+            <Text style={[styles.actionBtnText, styles.actionBtnWhiteText]} numberOfLines={1}>
+              Share
+            </Text>
+          </Pressable>
+
+          <Pressable
+            style={[styles.actionBtn, styles.actionBtnPay]}
+            onPress={() => onOpenPayModal(order)}
+          >
+            <MaterialIcons name="payment" size={16} color="#FFFFFF" />
+            <Text style={[styles.actionBtnText, styles.actionBtnWhiteText]} numberOfLines={1}>
+              Pay
+            </Text>
+          </Pressable>
+
+          <Pressable
+            style={[styles.actionBtn, styles.editBtn]}
+            onPress={() => {
+              if (order.isRawMaterialOrder) {
+                onEditRawMaterialOrder(order);
+              } else {
+                onEditOrder(order);
+              }
+            }}
+          >
+            <MaterialIcons name="edit" size={16} color="#3B82F6" />
+            <Text style={[styles.actionBtnText, styles.actionBtnBlueText]} numberOfLines={1}>
+              Edit
+            </Text>
+          </Pressable>
+          <Pressable
+            style={[styles.actionBtn, styles.deleteBtn]}
+            onPress={() => {
+              if (order.isRawMaterialOrder) {
+                onDeleteRawMaterialOrder(order.id, order);
+              } else {
+                onDeleteOrder(order.id, order);
+              }
+            }}
+          >
+            <MaterialIcons name="delete" size={16} color={colors.accent.danger} />
+            <Text style={[styles.actionBtnText, styles.actionBtnDangerText]} numberOfLines={1}>
+              Delete
+            </Text>
+          </Pressable>
+        </View>
+
+        {!order.isRawMaterialOrder && order.status !== "completed" && order.status !== "cancelled" && (
+          <View style={[styles.cardActions, styles.extraActionsRow]}>
+            <Pressable
+              style={[styles.actionBtn, styles.completeBtn]}
+              onPress={() => onUpdateOrderStatus(order.id, "completed")}
+            >
+              <MaterialIcons name="done" size={16} color={colors.bg.card} />
+              <Text style={styles.actionBtnText}>Complete</Text>
+            </Pressable>
+            <Pressable
+              style={[styles.actionBtn, styles.cancelBtn]}
+              onPress={() => onUpdateOrderStatus(order.id, "cancelled")}
+            >
+              <MaterialIcons name="close" size={16} color={colors.accent.danger} />
+              <Text style={[styles.actionBtnText, styles.actionBtnDangerText]}>Cancel</Text>
+            </Pressable>
+          </View>
+        )}
+      </View>
+    );
+  }
+);
 
 export default function Orders() {
   const router = useRouter();
@@ -52,6 +608,7 @@ export default function Orders() {
 
   const { theme } = useTheme();
   const { colors, spacing, radius, shadows } = theme;
+  const { kavBehavior, scrollBottomPadding, insets } = useResponsive();
   const styles = useMemo(() => getStyles(theme), [theme]);
   const { scrollViewRef, handleScroll, handleContentSizeChange } = useScrollRestoration("/orders");
   const {
@@ -195,6 +752,15 @@ export default function Orders() {
   const itemByIdMap = useMemo(() => new Map<string, any>((items || []).map((i: any) => [i.id, i])), [items]);
   const workerByIdMap = useMemo(() => new Map<string, any>((workers || []).map((w: any) => [w.id, w])), [workers]);
   const supplierByIdMap = useMemo(() => new Map<string, any>((suppliers || []).map((s: any) => [s.id, s])), [suppliers]);
+  const { customerByNameMap, customerByPhoneMap } = useMemo(() => {
+    const byName = new Map<string, any>();
+    const byPhone = new Map<string, any>();
+    (customers || []).forEach((c: any) => {
+      if (c.name) byName.set(c.name.trim().toLowerCase(), c);
+      if (c.phone) byPhone.set(c.phone.trim(), c);
+    });
+    return { customerByNameMap: byName, customerByPhoneMap: byPhone };
+  }, [customers]);
 
   const { expenses, addExpense, updateExpense, deleteExpense } = useContext(
     ExpenseContext,
@@ -429,23 +995,6 @@ export default function Orders() {
   const [payDate, setPayDate] = useState<Date>(new Date());
   const [isPayCalendarOpen, setIsPayCalendarOpen] = useState(false);
   const [isSavingPayment, setIsSavingPayment] = useState(false);
-
-  const getStatusColor = (status: string) => {
-    switch (status) {
-      case "completed":
-        return "#00D68F";
-      case "in-transit":
-        return "#3B82F6";
-      case "pending":
-        return "#F59E0B";
-      case "cancelled":
-        return "#EF4444";
-      case "purchase":
-        return "#b45309";
-      default:
-        return "#5A5F72";
-    }
-  };
 
   const matchesDateFilter = useCallback((rawDate: any) => {
     if (dateFilterPreset === "all" && !selectedFilterDate) return true;
@@ -2099,7 +2648,7 @@ export default function Orders() {
         transparent={true}
         onRequestClose={() => setIsEditDeliveryModalOpen(false)}
       >
-        <View style={styles.modalOverlay}>
+        <KeyboardAvoidingView behavior={kavBehavior} style={styles.modalOverlay}>
           <View style={styles.modalContent}>
             <View style={styles.modalHeader}>
               <Text style={styles.modalTitle}>Edit Delivery Record</Text>
@@ -2254,10 +2803,176 @@ export default function Orders() {
               </Pressable>
             </View>
           </View>
-        </View>
+        </KeyboardAvoidingView>
       </Modal>
     );
   };
+
+  const handleChangeDeliveryInput = useCallback((orderId: string, val: string) => {
+    setDeliveryInputs((prev) => ({
+      ...prev,
+      [orderId]: val,
+    }));
+  }, []);
+
+  const ordersFeedItems = useMemo<OrdersFeedItem[]>(() => {
+    if (!sortedDates || sortedDates.length === 0) return [];
+    const rows: OrdersFeedItem[] = [];
+    sortedDates.slice(0, dateGroupLimit).forEach((dateStr: string, groupIdx: number) => {
+      const group = groupedData[dateStr];
+      if (!group) return;
+      const revSum = roundCurrency(
+        group.orders.reduce(
+          (sum: number, o: any) =>
+            sum + (o.isRawMaterialOrder || o.status === "cancelled" ? 0 : Number(o.total || 0)),
+          0
+        )
+      );
+      const expSum = roundCurrency(
+        group.expenses.reduce(
+          (sum: number, e: any) => sum + Number(e.totalAmount || e.amount || 0),
+          0
+        ) +
+          group.orders.reduce(
+            (sum: number, o: any) =>
+              sum + (o.isRawMaterialOrder && o.status !== "cancelled" ? Number(o.total || 0) : 0),
+            0
+          )
+      );
+
+      rows.push({
+        kind: "dateHeader",
+        id: `date-${dateStr}`,
+        dateStr,
+        revSum,
+        expSum,
+        isFirst: groupIdx === 0,
+      });
+
+      group.orders.forEach((order: any, orderIdx: number) => {
+        const customerObj =
+          (order.customerId && customerByIdMap.get(order.customerId)) ||
+          (order.customerName && customerByNameMap.get(order.customerName.trim().toLowerCase())) ||
+          (order.customerPhone && customerByPhoneMap.get(order.customerPhone.trim())) ||
+          null;
+        const customerCurrentPending = customerObj
+          ? roundCurrency(
+              customerObj.totalPending !== undefined
+                ? Number(customerObj.totalPending)
+                : Number(customerObj.balance || 0)
+            )
+          : 0;
+
+        rows.push({
+          kind: "order",
+          id: `order-${String(order.id || orderIdx)}`,
+          order,
+          customerCurrentPending,
+          isTargetOrder: order.id === focusedOrderId,
+        });
+      });
+
+      group.expenses.forEach((expense: any, expIdx: number) => {
+        rows.push({
+          kind: "expense",
+          id: `expense-${String(expense.id || expIdx)}-${dateStr}`,
+          expense,
+        });
+      });
+    });
+    return rows;
+  }, [
+    sortedDates,
+    dateGroupLimit,
+    groupedData,
+    customerByIdMap,
+    customerByNameMap,
+    customerByPhoneMap,
+    focusedOrderId,
+  ]);
+
+  const ordersFeedKeyExtractor = useCallback((item: OrdersFeedItem) => item.id, []);
+
+  const renderOrdersFeedItem = useCallback(
+    ({ item }: { item: OrdersFeedItem }) => {
+      if (item.kind === "dateHeader") {
+        return (
+          <View style={!item.isFirst ? styles.dateGroupSpacing : undefined}>
+            {renderDateHeader(item.dateStr, item.revSum, item.expSum)}
+          </View>
+        );
+      }
+      if (item.kind === "expense") {
+        return renderExpenseTimelineCard(item.expense);
+      }
+      return (
+        <OrderTimelineCard
+          order={item.order}
+          customerCurrentPending={item.customerCurrentPending}
+          isTargetOrder={item.isTargetOrder}
+          deliveryInputVal={deliveryInputs[item.order.id] || ""}
+          partnerByIdMap={partnerByIdMap}
+          styles={styles}
+          colors={colors}
+          onOpenCustomerProfile={handleOpenCustomerProfile}
+          onStartEditDelivery={handleStartEditDelivery}
+          onDeleteDelivery={handleDeleteDelivery}
+          onChangeDeliveryInput={handleChangeDeliveryInput}
+          onRecordDelivery={handleRecordDelivery}
+          onOpenShareModal={handleOpenShareModal}
+          onOpenPayModal={handleOpenPayModal}
+          onEditRawMaterialOrder={handleEditRawMaterialOrder}
+          onEditOrder={handleEditOrder}
+          onDeleteRawMaterialOrder={handleDeleteRawMaterialOrder}
+          onDeleteOrder={handleDeleteOrder}
+          onUpdateOrderStatus={updateOrderStatus}
+        />
+      );
+    },
+    [
+      styles,
+      colors,
+      renderDateHeader,
+      renderExpenseTimelineCard,
+      deliveryInputs,
+      partnerByIdMap,
+      handleOpenCustomerProfile,
+      handleStartEditDelivery,
+      handleDeleteDelivery,
+      handleChangeDeliveryInput,
+      handleRecordDelivery,
+      handleOpenShareModal,
+      handleOpenPayModal,
+      handleEditRawMaterialOrder,
+      handleEditOrder,
+      handleDeleteRawMaterialOrder,
+      handleDeleteOrder,
+      updateOrderStatus,
+    ]
+  );
+
+  const ordersEmptyComponent = (
+    <View style={styles.emptyState}>
+      <MaterialIcons name="receipt" size={48} color={colors.border.medium} />
+      <Text style={styles.emptyTitle}>No Transactions Registered</Text>
+      <Text style={styles.emptyDesc}>
+        No sales bookings or operations expense logs found matching your criteria.
+      </Text>
+    </View>
+  );
+
+  const ordersFooterComponent =
+    sortedDates.length > dateGroupLimit ? (
+      <Pressable
+        style={({ pressed }) => [styles.loadMoreBtn, pressed && styles.loadMoreBtnPressed]}
+        onPress={() => setDateGroupLimit((prev) => prev + 15)}
+      >
+        <MaterialIcons name="expand-more" size={20} color={colors.accent.primary} />
+        <Text style={styles.loadMoreText}>
+          Load Earlier Transactions ({sortedDates.length - dateGroupLimit} remaining)
+        </Text>
+      </Pressable>
+    ) : undefined;
 
   if (loading) {
     return (
@@ -2270,15 +2985,26 @@ export default function Orders() {
 
   return (
     <AnimatedPage>
-      <ScrollView
+      <FlatList
         ref={scrollViewRef}
-        contentContainerStyle={styles.container}
+        data={ordersFeedItems}
+        keyExtractor={ordersFeedKeyExtractor}
+        renderItem={renderOrdersFeedItem}
+        extraData={deliveryInputs}
+        ListEmptyComponent={ordersEmptyComponent}
+        ListFooterComponent={ordersFooterComponent}
+        contentContainerStyle={[styles.container, { paddingBottom: scrollBottomPadding }]}
         showsVerticalScrollIndicator={false}
         removeClippedSubviews={true}
         scrollEventThrottle={32}
         onScroll={handleScroll}
         onContentSizeChange={handleContentSizeChange}
-      >
+        keyboardShouldPersistTaps="handled"
+        initialNumToRender={10}
+        maxToRenderPerBatch={10}
+        windowSize={7}
+        ListHeaderComponent={
+          <View>
         <View style={styles.header}>
           <View
             style={{
@@ -2508,728 +3234,9 @@ export default function Orders() {
             })}
           </View>
         </ScrollView>
-
-        {/* Order List */}
-        <View style={styles.list}>
-          {sortedDates.length === 0 ? (
-            <View style={styles.emptyState}>
-              <MaterialIcons
-                name="receipt"
-                size={48}
-                color={colors.border.medium}
-              />
-              <Text style={styles.emptyTitle}>No Transactions Registered</Text>
-              <Text style={styles.emptyDesc}>
-                No sales bookings or operations expense logs found matching your
-                criteria.
-              </Text>
-            </View>
-          ) : (
-            sortedDates.slice(0, dateGroupLimit).map((dateStr) => {
-              const group = groupedData[dateStr];
-              const revSum = group.orders.reduce(
-                (sum, o) => sum + (o.isRawMaterialOrder || o.status === "cancelled" ? 0 : Number(o.total || 0)),
-                0,
-              );
-              const expSum =
-                group.expenses.reduce(
-                  (sum, e) => sum + Number(e.totalAmount || e.amount || 0),
-                  0,
-                ) +
-                group.orders.reduce(
-                  (sum, o) => sum + (o.isRawMaterialOrder && o.status !== "cancelled" ? Number(o.total || 0) : 0),
-                  0,
-                );
-
-              return (
-                <View key={dateStr} style={{ marginBottom: 12 }}>
-                  {renderDateHeader(dateStr, revSum, expSum)}
-
-                  {group.orders.map((order: any) => {
-                    const customerObj =
-                      (order.customerId && entityByIdMap.get(order.customerId)) ||
-                      (order.customerName && entityByNameMap.get(order.customerName.trim().toLowerCase())) ||
-                      (order.customerPhone && entityByPhoneMap.get(order.customerPhone.trim())) ||
-                      null;
-
-                    const customerTotalPending = customerObj
-                      ? (customerObj.totalPending !== undefined ? Number(customerObj.totalPending) : Number(customerObj.balance || 0))
-                      : Number(order.balanceDue || 0);
-
-                    const isTargetOrder = order.id === focusedOrderId;
-                    return (
-                      <View
-                        key={order.id}
-                        style={[
-                          styles.card,
-                          {
-                            borderLeftWidth: 4,
-                            borderLeftColor: getStatusColor(order.status),
-                          },
-                          isTargetOrder && {
-                            borderColor: colors.accent.primary,
-                            borderWidth: 2,
-                            backgroundColor: `${colors.accent.primary}05`,
-                          },
-                        ]}
-                      >
-                        {isTargetOrder && (
-                          <View style={{
-                            flexDirection: "row",
-                            alignItems: "center",
-                            gap: 5,
-                            backgroundColor: `${colors.accent.primary}18`,
-                            paddingHorizontal: 8,
-                            paddingVertical: 4,
-                            borderRadius: 6,
-                            alignSelf: "flex-start",
-                            marginBottom: 8,
-                          }}>
-                            <MaterialIcons name="stars" size={14} color={colors.accent.primary} />
-                            <Text style={{ fontSize: 11, fontWeight: "800", color: colors.accent.primary }}>
-                              Selected from Daily Report
-                            </Text>
-                          </View>
-                        )}
-                        <Pressable
-                          style={styles.cardHeader}
-                          onPress={() => handleOpenCustomerProfile(order)}
-                        >
-                        <View style={{ flex: 1, marginRight: 8 }}>
-                          <View
-                            style={{
-                              flexDirection: "row",
-                              alignItems: "center",
-                              gap: 4,
-                            }}
-                          >
-                            <Text
-                              selectable={true}
-                              style={styles.clientName}
-                              numberOfLines={2}
-                            >
-                              {order.customerName ||
-                                (order.isRawMaterialOrder ? "Supplier" : "Client")}
-                            </Text>
-                            {!order.isRawMaterialOrder && (
-                              <MaterialIcons
-                                name="chevron-right"
-                                size={18}
-                                color={colors.accent.primary}
-                              />
-                            )}
-                          </View>
-                          {!!order.customerPhone && (
-                            <View
-                              style={{
-                                flexDirection: "row",
-                                alignItems: "center",
-                                gap: 4,
-                                marginTop: 2,
-                                marginBottom: 2,
-                              }}
-                            >
-                              <MaterialIcons
-                                name="call"
-                                size={13}
-                                color={colors.accent.primary}
-                              />
-                              <Text
-                                selectable={true}
-                                style={{
-                                  fontSize: 13,
-                                  fontWeight: "600",
-                                  color: colors.text.secondary,
-                                }}
-                              >
-                                {order.customerPhone}
-                              </Text>
-                            </View>
-                          )}
-                          <Text style={styles.date}>
-                            {order.createdAt
-                              ? new Date(order.createdAt).toLocaleTimeString(
-                                  [],
-                                  { hour: "2-digit", minute: "2-digit" },
-                                )
-                              : "Just now"}
-                          </Text>
-                          <Text
-                            style={[
-                              styles.date,
-                              { marginTop: 2, fontSize: 11, opacity: 0.8 },
-                            ]}
-                          >
-                            Ordered:{" "}
-                            {new Date(
-                              order.orderedDate || order.createdAt,
-                            ).toLocaleDateString("en-IN", {
-                              day: "2-digit",
-                              month: "short",
-                              year: "numeric",
-                            })}
-                          </Text>
-                        </View>
-                        <View
-                          style={[
-                            styles.statusBadge,
-                            {
-                              backgroundColor: `${getStatusColor(order.status)}15`,
-                            },
-                          ]}
-                        >
-                          <Text
-                            style={[
-                              styles.statusText,
-                              { color: getStatusColor(order.status) },
-                            ]}
-                          >
-                            {order.status}
-                          </Text>
-                        </View>
-                      </Pressable>
-
-                      <View style={styles.divider} />
-
-                      <View style={styles.cardBody}>
-                        {order.items && order.items.length > 0 ? (
-                          <View style={{ gap: 6 }}>
-                            <Text
-                              style={[
-                                styles.bodyLabel,
-                                {
-                                  fontWeight: "700",
-                                  color: colors.text.primary,
-                                },
-                              ]}
-                            >
-                              Items
-                            </Text>
-                            {order.items.map((item: any, idx: number) => {
-                              const itemTotal = Number(item.grossTotal) || (Number(item.quantity || 0) * Number(item.rate || 0));
-                              return (
-                                <View key={idx} style={styles.detailRow}>
-                                  <Text
-                                    style={[
-                                      styles.bodyValue,
-                                      {
-                                        fontWeight: "500",
-                                        color: colors.text.primary,
-                                        flex: 1,
-                                        marginRight: 8,
-                                      },
-                                    ]}
-                                  >
-                                    • {item.itemName}
-                                  </Text>
-                                  <Text style={[styles.bodyValue, { fontWeight: "700", color: colors.text.primary }]}>
-                                    {item.quantity} x {item.rate} = ₹{itemTotal.toLocaleString("en-IN")}
-                                  </Text>
-                                </View>
-                              );
-                            })}
-                          </View>
-                        ) : (
-                          <>
-                            <View style={styles.detailRow}>
-                              <Text style={styles.bodyLabel}>Product Name</Text>
-                              <Text style={styles.bodyValue}>
-                                {order.itemName}
-                              </Text>
-                            </View>
-                            <View style={styles.detailRow}>
-                              <Text style={styles.bodyLabel}>
-                                Quantity x Price
-                              </Text>
-                              <Text style={[styles.bodyValue, { fontWeight: "700" }]}>
-                                {order.quantity} x {order.rate} = ₹{(Number(order.quantity || 0) * Number(order.rate || 0)).toLocaleString("en-IN")}
-                              </Text>
-                            </View>
-                          </>
-                        )}
-
-                        <View style={[styles.divider, { marginVertical: 8 }]} />
-
-                        {/* Full Total Breakdown Details Card */}
-                        {(() => {
-                          const customerObj = (order.customerId && customerByIdMap.get(order.customerId)) ||
-                            (customers || []).find((c: any) =>
-                              (c.name && order.customerName && c.name.trim().toLowerCase() === order.customerName.trim().toLowerCase()) ||
-                              (c.phone && order.customerPhone && c.phone.trim() === order.customerPhone.trim())
-                            );
-
-                          const customerCurrentPending = customerObj
-                            ? (customerObj.totalPending !== undefined ? Number(customerObj.totalPending) : Number(customerObj.balance || 0))
-                            : 0;
-
-                          const thisOrderUnpaid = Number(order.balanceDue || 0);
-
-                          const oldBalanceDue = order.previousBalance !== undefined
-                            ? Number(order.previousBalance)
-                            : (customerCurrentPending - thisOrderUnpaid);
-
-                          const thisOrderTotal = Number(order.total || 0);
-                          const totalAmountWithOldDues = thisOrderTotal + oldBalanceDue;
-                          const paidAmountVal = Number(order.paidAmount !== undefined ? order.paidAmount : (thisOrderTotal - thisOrderUnpaid) || 0);
-                          const totalBalanceUnpaid = oldBalanceDue + thisOrderUnpaid;
-                          const excessAdvance = Math.max(0, paidAmountVal - totalAmountWithOldDues);
-
-                          return (
-                            <View style={{ padding: 10, backgroundColor: colors.bg.primary, borderRadius: 10, borderWidth: 1, borderColor: colors.border.subtle }}>
-                              <Text style={{ fontSize: 11, fontWeight: "700", color: colors.text.primary, marginBottom: 8 }}>
-                                Full Total Breakdown
-                              </Text>
-
-                              {/* Items Subtotal */}
-                              {(order.grossTotal || (order.items && order.items.length > 0)) ? (
-                                <View style={[styles.detailRow, { marginBottom: 4 }]}>
-                                  <Text style={styles.bodyLabel}>Items Subtotal</Text>
-                                  <Text style={[styles.bodyValue, { fontWeight: "600" }]}>
-                                    ₹{(Number(order.grossTotal) || (order.items ? order.items.reduce((s: number, i: any) => s + (Number(i.quantity || 0) * Number(i.rate || 0)), 0) : (Number(order.quantity || 0) * Number(order.rate || 0)))).toLocaleString("en-IN")}
-                                  </Text>
-                                </View>
-                              ) : null}
-
-                              {/* Shipment Charge */}
-                              {Number(order.shipmentCharge) > 0 ? (
-                                <View style={[styles.detailRow, { marginBottom: 4 }]}>
-                                  <Text style={styles.bodyLabel}>
-                                    Shipment Charge {order.shipmentDistance ? `(${order.shipmentDistance} km)` : ""}
-                                  </Text>
-                                  <Text style={[styles.bodyValue, { fontWeight: "600", color: colors.accent.primary }]}>
-                                    +₹{Number(order.shipmentCharge).toLocaleString("en-IN")}
-                                  </Text>
-                                </View>
-                              ) : null}
-
-                              {/* Loading Charge */}
-                              {Number(order.loadingCharge) > 0 ? (
-                                <View style={[styles.detailRow, { marginBottom: 4 }]}>
-                                  <Text style={styles.bodyLabel}>
-                                    Loading {order.loadingWorkerName ? `(${order.loadingWorkerName})` : ""}
-                                  </Text>
-                                  <Text style={[styles.bodyValue, { fontWeight: "600", color: colors.accent.primary }]}>
-                                    +₹{Number(order.loadingCharge).toLocaleString("en-IN")}
-                                  </Text>
-                                </View>
-                              ) : null}
-
-                              {/* Unloading Charge */}
-                              {Number(order.unloadingCharge) > 0 ? (
-                                <View style={[styles.detailRow, { marginBottom: 4 }]}>
-                                  <Text style={styles.bodyLabel}>
-                                    Unloading {order.unloadingWorkerName ? `(${order.unloadingWorkerName})` : ""}
-                                  </Text>
-                                  <Text style={[styles.bodyValue, { fontWeight: "600", color: colors.accent.primary }]}>
-                                    +₹{Number(order.unloadingCharge).toLocaleString("en-IN")}
-                                  </Text>
-                                </View>
-                              ) : null}
-
-                              {/* Extra Amount */}
-                              {Number(order.extraAmount) > 0 ? (
-                                <View style={[styles.detailRow, { marginBottom: 4 }]}>
-                                  <Text style={styles.bodyLabel}>
-                                    Extra Charge {order.extraAmountDescription ? `(${order.extraAmountDescription})` : ""}
-                                  </Text>
-                                  <Text style={[styles.bodyValue, { fontWeight: "600", color: colors.accent.primary }]}>
-                                    +₹{Number(order.extraAmount).toLocaleString("en-IN")}
-                                  </Text>
-                                </View>
-                              ) : null}
-
-                              {/* Discount Amount */}
-                              {(Number(order.discountAmount) > 0 || Number(order.discount) > 0) ? (
-                                <View style={[styles.detailRow, { marginBottom: 4 }]}>
-                                  <Text style={[styles.bodyLabel, { color: colors.accent.success, fontWeight: "600" }]}>
-                                    Discount {order.discountType === "percent" ? `(${order.discount}%)` : order.discountType === "per_brick" ? `(₹${order.discount}/brick)` : ""}
-                                  </Text>
-                                  <Text style={[styles.bodyValue, { fontWeight: "700", color: colors.accent.success }]}>
-                                    -₹{(Number(order.discountAmount) || Number(order.discount) || 0).toLocaleString("en-IN")}
-                                  </Text>
-                                </View>
-                              ) : null}
-
-                              {/* Current Order Total */}
-                              <View style={[styles.detailRow, { marginBottom: 4 }]}>
-                                <Text style={styles.bodyLabel}>Current Order Subtotal</Text>
-                                <Text style={[styles.bodyValue, { fontWeight: "600" }]}>
-                                  ₹{thisOrderTotal.toLocaleString("en-IN")}
-                                </Text>
-                              </View>
-
-                              {/* Old Balance Due or Advance */}
-                              {oldBalanceDue > 0 ? (
-                                <View style={[styles.detailRow, { marginBottom: 4 }]}>
-                                  <Text style={[styles.bodyLabel, { color: colors.accent.danger, fontWeight: "600" }]}>
-                                    Old Balance Due (Previous)
-                                  </Text>
-                                  <Text style={[styles.bodyValue, { fontWeight: "700", color: colors.accent.danger }]}>
-                                    +₹{oldBalanceDue.toLocaleString("en-IN")}
-                                  </Text>
-                                </View>
-                              ) : oldBalanceDue < 0 ? (
-                                <View style={[styles.detailRow, { marginBottom: 4 }]}>
-                                  <Text style={[styles.bodyLabel, { color: colors.accent.success, fontWeight: "600" }]}>
-                                    Advance Balance (Plus Credit)
-                                  </Text>
-                                  <Text style={[styles.bodyValue, { fontWeight: "700", color: colors.accent.success }]}>
-                                    -₹{Math.abs(oldBalanceDue).toLocaleString("en-IN")}
-                                  </Text>
-                                </View>
-                              ) : null}
-
-                              <View style={[styles.divider, { marginVertical: 6 }]} />
-
-                              {/* Net Total with Old Dues */}
-                              <View style={[styles.detailRow, { marginBottom: 4 }]}>
-                                <Text style={[styles.bodyLabel, { fontWeight: "800", color: colors.text.primary }]}>
-                                  {order.isRawMaterialOrder ? "Total Purchase Cost" : "Total Order Amount (incl. Old Dues)"}
-                                </Text>
-                                <Text style={[styles.totalValue, { fontSize: 16, fontWeight: "800", color: colors.accent.primary }]}>
-                                  ₹{totalAmountWithOldDues.toLocaleString("en-IN")}
-                                </Text>
-                              </View>
-
-                              {/* Amount Paid */}
-                              <View style={[styles.detailRow, { marginBottom: 4 }]}>
-                                <Text style={styles.bodyLabel}>Amount Paid Today</Text>
-                                <View style={{ flexDirection: "row", alignItems: "center", gap: 6 }}>
-                                  <Text style={{ fontSize: 13, fontWeight: "700", color: colors.accent.success }}>
-                                    ₹{paidAmountVal.toLocaleString("en-IN")}
-                                  </Text>
-                                  {(order.paymentMethod || order.paymentMode || order.paymentType) && paidAmountVal > 0 && (
-                                    <View style={{ backgroundColor: `${colors.accent.primary}18`, paddingHorizontal: 6, paddingVertical: 2, borderRadius: 4 }}>
-                                      <Text style={{ fontSize: 10, fontWeight: "700", color: colors.accent.primary }}>
-                                        {order.paymentMethod || order.paymentMode || order.paymentType}
-                                      </Text>
-                                    </View>
-                                  )}
-                                </View>
-                              </View>
-
-                              {/* Balance Due */}
-                              <View style={styles.detailRow}>
-                                <Text style={styles.bodyLabel}>Total Balance Unpaid</Text>
-                                <Text style={{ fontSize: 14, fontWeight: "800", color: totalBalanceUnpaid > 0 ? colors.accent.danger : colors.accent.success }}>
-                                  ₹{totalBalanceUnpaid.toLocaleString("en-IN")}
-                                </Text>
-                              </View>
-
-                              {excessAdvance > 0 && (
-                                <View style={[styles.detailRow, { marginTop: 6, paddingVertical: 5, paddingHorizontal: 8, backgroundColor: colors.accent.success + "15", borderRadius: 6, borderColor: colors.accent.success + "30", borderWidth: 1 }]}>
-                                  <Text style={[styles.bodyLabel, { color: colors.accent.success, fontWeight: "700" }]}>
-                                    ⭐ Advance Credit (To Profile)
-                                  </Text>
-                                  <Text style={[styles.bodyValue, { fontSize: 13, fontWeight: "800", color: colors.accent.success }]}>
-                                    +₹{excessAdvance.toLocaleString("en-IN")}
-                                  </Text>
-                                </View>
-                              )}
-
-                              {(order.description || order.notes) ? (
-                                <View style={{ marginTop: 6, paddingVertical: 6, paddingHorizontal: 8, backgroundColor: colors.bg.primary, borderRadius: 6, borderWidth: 1, borderColor: colors.border.subtle, flexDirection: "row", alignItems: "flex-start", gap: 5 }}>
-                                  <MaterialIcons name="notes" size={14} color={colors.accent.primary} style={{ marginTop: 1 }} />
-                                  <Text style={{ fontSize: 11, color: colors.text.secondary, flex: 1, lineHeight: 16 }}>
-                                    <Text style={{ fontWeight: "700", color: colors.text.primary }}>Note: </Text>
-                                    {order.description || order.notes}
-                                  </Text>
-                                </View>
-                              ) : null}
-                            </View>
-                          );
-                        })()}
-
-                        {/* Delivery Tracking Section */}
-                        {!order.isRawMaterialOrder && (() => {
-                          const totalQty = order.items && order.items.length > 0
-                            ? order.items.reduce((sum: number, itm: any) => sum + Number(itm.quantity || 0), 0)
-                            : Number(order.quantity || 0);
-                          const totalDelivered = Number(order.deliveredQuantity || 0);
-                          const remainingQty = Math.max(0, totalQty - totalDelivered);
-                          return (
-                            <View style={{ marginTop: 10, padding: 10, backgroundColor: colors.bg.primary, borderRadius: 8, borderWidth: 1, borderColor: colors.border.subtle }}>
-                              <View style={{ flexDirection: "row", justifyContent: "space-between", marginBottom: 6 }}>
-                                <Text style={{ fontSize: 11, fontWeight: "700", color: colors.text.primary }}>Delivery Progress</Text>
-                                <Text style={{ fontSize: 11, fontWeight: "700", color: remainingQty === 0 ? "#10B981" : "#F59E0B" }}>
-                                  {remainingQty === 0 ? "Fully Delivered" : `${totalDelivered} / ${totalQty} Delivered`}
-                                </Text>
-                              </View>
-
-                              {/* Progress Bar */}
-                              <View style={{ height: 6, backgroundColor: colors.border.medium, borderRadius: 3, overflow: "hidden", marginBottom: 8 }}>
-                                <View style={{ height: "100%", width: `${Math.min(100, (totalDelivered / totalQty) * 100)}%`, backgroundColor: remainingQty === 0 ? "#10B981" : colors.accent.primary }} />
-                              </View>
-
-                              {/* Deliveries History List */}
-                              {order.deliveries && order.deliveries.length > 0 && (
-                                <View style={{ marginBottom: 8 }}>
-                                  <Text style={{ fontSize: 10, fontWeight: "600", color: colors.text.muted, marginBottom: 4 }}>Delivery History:</Text>
-                                  {order.deliveries.map((del: any, idx: number) => {
-                                    const delDate = del.date ? (del.date.toDate ? del.date.toDate() : new Date(del.date)) : new Date();
-                                    const partnerName = del.deliveryPartnerId ? partnerByIdMap.get(del.deliveryPartnerId)?.name : "";
-                                    return (
-                                      <View key={idx} style={{ marginVertical: 4, paddingVertical: 4, borderBottomWidth: idx < order.deliveries.length - 1 ? 0.5 : 0, borderBottomColor: colors.border.subtle }}>
-                                        <View style={{ flexDirection: "row", justifyContent: "space-between", alignItems: "center" }}>
-                                          <Text style={{ fontSize: 11.5, fontWeight: "600", color: colors.text.secondary, flex: 1 }}>
-                                            ✓ {del.quantity} bricks on {delDate.toLocaleDateString("en-IN")} at {delDate.toLocaleTimeString([], { hour: "2-digit", minute: "2-digit" })}
-                                          </Text>
-                                          
-                                          {!order.isRawMaterialOrder && (
-                                            <View style={{ flexDirection: "row", gap: 8, marginLeft: 8 }}>
-                                              <Pressable onPress={() => handleStartEditDelivery(order.id, idx, del.quantity, del.date, del.deliveryPartnerId, del.notes)} style={{ padding: 2 }}>
-                                                <MaterialIcons name="edit" size={14} color="#3B82F6" />
-                                              </Pressable>
-                                              <Pressable onPress={() => handleDeleteDelivery(order, idx)} style={{ padding: 2 }}>
-                                                <MaterialIcons name="delete" size={14} color={colors.accent.danger} />
-                                              </Pressable>
-                                            </View>
-                                          )}
-                                        </View>
-                                        {partnerName ? (
-                                          <Text style={{ fontSize: 9.5, color: colors.text.muted, marginTop: 1 }}>
-                                            🚚 Driver: {partnerName}
-                                          </Text>
-                                        ) : null}
-                                        {del.notes ? (
-                                          <Text style={{ fontSize: 9.5, color: colors.text.muted, fontStyle: "italic", marginTop: 1 }}>
-                                            📝 Notes: {del.notes}
-                                          </Text>
-                                        ) : null}
-                                      </View>
-                                    );
-                                  })}
-                                </View>
-                              )}
-
-                              {remainingQty > 0 ? (
-                                <View>
-                                  <Text style={{ fontSize: 11, color: colors.text.secondary, marginBottom: 6 }}>
-                                    Remaining: <Text style={{ fontWeight: "700", color: colors.accent.danger }}>{remainingQty} bricks</Text>
-                                  </Text>
-                                  <View style={{ flexDirection: "row", gap: 8, alignItems: "center" }}>
-                                    <TextInput
-                                      style={{
-                                        flex: 1,
-                                        height: 36,
-                                        backgroundColor: colors.bg.card,
-                                        borderWidth: 1,
-                                        borderColor: colors.border.medium,
-                                        borderRadius: 6,
-                                        paddingHorizontal: 10,
-                                        fontSize: 13,
-                                        color: colors.text.primary,
-                                      }}
-                                      placeholder="Enter delivered qty"
-                                      placeholderTextColor={colors.text.muted}
-                                      keyboardType="numeric"
-                                      value={deliveryInputs[order.id] || ""}
-                                      onChangeText={(val) =>
-                                        setDeliveryInputs((prev) => ({
-                                          ...prev,
-                                          [order.id]: val,
-                                        }))
-                                      }
-                                    />
-                                    <Pressable
-                                      style={{
-                                        backgroundColor: colors.accent.primary,
-                                        paddingVertical: 8,
-                                        paddingHorizontal: 12,
-                                        borderRadius: 6,
-                                        justifyContent: "center",
-                                        alignItems: "center",
-                                      }}
-                                      onPress={() => handleRecordDelivery(order, remainingQty)}
-                                    >
-                                      <Text style={{ color: "#FFFFFF", fontSize: 12, fontWeight: "700" }}>
-                                        Record Delivery
-                                      </Text>
-                                    </Pressable>
-                                  </View>
-                                </View>
-                              ) : (
-                                <Text style={{ fontSize: 11, color: "#10B981", fontWeight: "600" }}>
-                                  ✓ All units successfully delivered.
-                                </Text>
-                              )}
-                            </View>
-                          );
-                        })()}
-                      </View>
-
-                      <View style={styles.cardActions}>
-                        <Pressable
-                          style={[
-                            styles.actionBtn,
-                            {
-                              backgroundColor: "#2563EB",
-                              borderWidth: 1,
-                              borderColor: "#2563EB",
-                            },
-                          ]}
-                          onPress={() => handleOpenShareModal(order, order.isRawMaterialOrder ? "purchase" : "order")}
-                        >
-                          <MaterialIcons name="share" size={16} color="#FFFFFF" />
-                          <Text style={[styles.actionBtnText, { color: "#FFFFFF", fontWeight: "700" }]} numberOfLines={1}>
-                            Share
-                          </Text>
-                        </Pressable>
-
-                        <Pressable
-                          style={[
-                            styles.actionBtn,
-                            {
-                              backgroundColor: "#16a34a",
-                              borderWidth: 1,
-                              borderColor: "#16a34a",
-                            },
-                          ]}
-                          onPress={() => handleOpenPayModal(order)}
-                        >
-                          <MaterialIcons name="payment" size={16} color="#FFFFFF" />
-                          <Text style={[styles.actionBtnText, { color: "#FFFFFF", fontWeight: "700" }]} numberOfLines={1}>
-                            Pay
-                          </Text>
-                        </Pressable>
-
-                        <Pressable
-                          style={[styles.actionBtn, styles.editBtn]}
-                          onPress={() => {
-                            if (order.isRawMaterialOrder) {
-                              handleEditRawMaterialOrder(order);
-                            } else {
-                              handleEditOrder(order);
-                            }
-                          }}
-                        >
-                          <MaterialIcons
-                            name="edit"
-                            size={16}
-                            color="#3B82F6"
-                          />
-                          <Text
-                            style={[styles.actionBtnText, { color: "#3B82F6" }]}
-                            numberOfLines={1}
-                          >
-                            Edit
-                          </Text>
-                        </Pressable>
-                        <Pressable
-                          style={[styles.actionBtn, styles.deleteBtn]}
-                          onPress={() => {
-                            if (order.isRawMaterialOrder) {
-                              handleDeleteRawMaterialOrder(order.id, order);
-                            } else {
-                              handleDeleteOrder(order.id, order);
-                            }
-                          }}
-                        >
-                          <MaterialIcons
-                            name="delete"
-                            size={16}
-                            color={colors.accent.danger}
-                          />
-                          <Text
-                            style={[
-                              styles.actionBtnText,
-                              { color: colors.accent.danger },
-                            ]}
-                            numberOfLines={1}
-                          >
-                            Delete
-                          </Text>
-                        </Pressable>
-                      </View>
-
-                      {!order.isRawMaterialOrder &&
-                        order.status !== "completed" &&
-                        order.status !== "cancelled" && (
-                          <View
-                            style={[
-                              styles.cardActions,
-                              {
-                                marginTop: 8,
-                                borderTopWidth: 0,
-                                paddingTop: 0,
-                              },
-                            ]}
-                          >
-                            <Pressable
-                              style={[styles.actionBtn, styles.completeBtn]}
-                              onPress={() =>
-                                updateOrderStatus(order.id, "completed")
-                              }
-                            >
-                              <MaterialIcons
-                                name="done"
-                                size={16}
-                                color={colors.bg.card}
-                              />
-                              <Text style={styles.actionBtnText}>Complete</Text>
-                            </Pressable>
-                            <Pressable
-                              style={[styles.actionBtn, styles.cancelBtn]}
-                              onPress={() =>
-                                updateOrderStatus(order.id, "cancelled")
-                              }
-                            >
-                              <MaterialIcons
-                                name="close"
-                                size={16}
-                                color={colors.accent.danger}
-                              />
-                              <Text
-                                style={[
-                                  styles.actionBtnText,
-                                  { color: colors.accent.danger },
-                                ]}
-                              >
-                                Cancel
-                              </Text>
-                            </Pressable>
-                          </View>
-                        )}
-                    </View>
-                  );
-                })}
-
-                  {group.expenses.map((expense: any) =>
-                    renderExpenseTimelineCard(expense),
-                  )}
-                </View>
-              );
-            })
-          )}
-
-          {sortedDates.length > dateGroupLimit && (
-            <Pressable
-              style={({ pressed }) => [
-                {
-                  backgroundColor: colors.bg.card,
-                  borderColor: colors.border.medium,
-                  borderWidth: 1,
-                  borderRadius: 12,
-                  paddingVertical: 12,
-                  alignItems: "center",
-                  justifyContent: "center",
-                  marginTop: 8,
-                  marginBottom: 20,
-                  flexDirection: "row",
-                  gap: 8,
-                },
-                pressed && { opacity: 0.8, backgroundColor: colors.bg.primary },
-              ]}
-              onPress={() => setDateGroupLimit((prev) => prev + 15)}
-            >
-              <MaterialIcons name="expand-more" size={20} color={colors.accent.primary} />
-              <Text style={{ fontSize: 13, fontWeight: "700", color: colors.accent.primary }}>
-                Load Earlier Transactions ({sortedDates.length - dateGroupLimit} remaining)
-              </Text>
-            </Pressable>
-          )}
-        </View>
-      </ScrollView>
+          </View>
+        }
+      />
 
       {/* Edit Order Modal */}
       <Modal
@@ -3238,7 +3245,7 @@ export default function Orders() {
         transparent={true}
         onRequestClose={() => setEditModalVisible(false)}
       >
-        <View style={styles.modalOverlay}>
+        <KeyboardAvoidingView behavior={kavBehavior} style={styles.modalOverlay}>
           <View style={styles.modalContent}>
             {/* Upgraded Modal Header with Badges, Status and Date Selector */}
             <View style={styles.modalHeader}>
@@ -5231,7 +5238,7 @@ export default function Orders() {
               </Pressable>
             </View>
           </View>
-        </View>
+        </KeyboardAvoidingView>
       </Modal>
 
       {/* Calendar Picker Modal */}
@@ -5326,9 +5333,10 @@ export default function Orders() {
             visible={isExpenseCalendarOpen}
             transparent
             animationType="fade"
+            onRequestClose={() => setIsExpenseCalendarOpen(false)}
           >
-            <View style={styles.modalBackdrop}>
-              <View style={styles.calendarCard}>
+            <KeyboardAvoidingView behavior={kavBehavior} style={styles.modalBackdrop}>
+              <View style={[styles.calendarCard, { width: "92%", maxWidth: 420, maxHeight: "88%" }]}>
                 <View style={styles.calendarHeader}>
                   <Pressable
                     onPress={() => {
@@ -5378,7 +5386,7 @@ export default function Orders() {
                   <Text style={styles.calendarCloseText}>Cancel</Text>
                 </Pressable>
               </View>
-            </View>
+            </KeyboardAvoidingView>
           </Modal>
         );
       })()}
@@ -5388,8 +5396,9 @@ export default function Orders() {
         visible={expenseModalVisible}
         animationType="slide"
         presentationStyle="pageSheet"
+        onRequestClose={() => setExpenseModalVisible(false)}
       >
-        <View style={styles.formContainer}>
+        <KeyboardAvoidingView behavior={kavBehavior} style={[styles.formContainer, { paddingTop: insets.top, paddingBottom: insets.bottom }]}>
           <View style={styles.formHeader}>
             <Text style={styles.formHeaderTitle}>
               {editingExpenseId ? "✏️ Edit Expense" : "➕ Add Expense"}
@@ -5726,7 +5735,7 @@ export default function Orders() {
               )}
             </Pressable>
           </View>
-        </View>
+        </KeyboardAvoidingView>
       </Modal>
       <EasyCalendarModal
         visible={isEditOrderCalendarOpen}
@@ -5768,7 +5777,7 @@ export default function Orders() {
         transparent={true}
         onRequestClose={() => setIsPayModalOpen(false)}
       >
-        <View style={styles.modalOverlay}>
+        <KeyboardAvoidingView behavior={kavBehavior} style={styles.modalOverlay}>
           <View style={[styles.modalContent, { maxWidth: 480 }]}>
             <View style={styles.modalHeader}>
               <View style={{ flexDirection: "row", alignItems: "center", gap: 8 }}>
@@ -5990,7 +5999,7 @@ export default function Orders() {
               </Pressable>
             </View>
           </View>
-        </View>
+        </KeyboardAvoidingView>
       </Modal>
 
       {/* Easy Calendar Modal for Payment Date */}
@@ -6312,8 +6321,9 @@ const getStyles = (theme: any) => {
     modalContent: {
       backgroundColor: colors.bg.card,
       borderRadius: 20,
-      width: "100%",
-      maxHeight: "90%",
+      width: "92%",
+      maxWidth: 480,
+      maxHeight: "88%",
       shadowColor: "#000",
       shadowOffset: { width: 0, height: 10 },
       shadowOpacity: 0.1,
@@ -6871,8 +6881,9 @@ const getStyles = (theme: any) => {
       backgroundColor: colors.bg.card,
       borderRadius: 20,
       padding: 16,
-      width: "85%",
-      maxWidth: 340,
+      width: "92%",
+      maxWidth: 420,
+      maxHeight: "88%",
       shadowColor: "#000",
       shadowOffset: { width: 0, height: 4 },
       shadowOpacity: 0.1,
@@ -7056,6 +7067,375 @@ const getStyles = (theme: any) => {
       color: colors.text.primary,
       backgroundColor: colors.bg.card,
       width: 90,
+    },
+    dateGroupSpacing: {
+      marginTop: 14,
+    },
+    orderHeaderInfoCol: {
+      flex: 1,
+      marginRight: 8,
+    },
+    orderCardFocused: {
+      borderColor: colors.accent.primary,
+      borderWidth: 2,
+      backgroundColor: `${colors.accent.primary}05`,
+    },
+    selectedBannerBadge: {
+      flexDirection: "row",
+      alignItems: "center",
+      gap: 5,
+      backgroundColor: `${colors.accent.primary}18`,
+      paddingHorizontal: 8,
+      paddingVertical: 4,
+      borderRadius: 6,
+      alignSelf: "flex-start",
+      marginBottom: 8,
+    },
+    selectedBannerText: {
+      fontSize: 11,
+      fontWeight: "800",
+      color: colors.accent.primary,
+    },
+    clientTitleRow: {
+      flexDirection: "row",
+      alignItems: "center",
+      gap: 4,
+    },
+    phoneMetaRow: {
+      flexDirection: "row",
+      alignItems: "center",
+      gap: 4,
+      marginTop: 2,
+      marginBottom: 2,
+    },
+    phoneMetaText: {
+      fontSize: 13,
+      fontWeight: "600",
+      color: colors.text.secondary,
+    },
+    orderedDateMeta: {
+      marginTop: 2,
+      fontSize: 11,
+      opacity: 0.8,
+    },
+    itemsGroup: {
+      gap: 6,
+    },
+    itemsGroupHeading: {
+      fontWeight: "700",
+      color: colors.text.primary,
+    },
+    itemBulletName: {
+      fontWeight: "500",
+      color: colors.text.primary,
+      flex: 1,
+      marginRight: 8,
+    },
+    itemMathValue: {
+      fontWeight: "700",
+      color: colors.text.primary,
+    },
+    itemMathWeight: {
+      fontWeight: "700",
+    },
+    smallDivider: {
+      marginVertical: 8,
+    },
+    breakdownCardBox: {
+      padding: 10,
+      backgroundColor: colors.bg.primary,
+      borderRadius: 10,
+      borderWidth: 1,
+      borderColor: colors.border.subtle,
+    },
+    breakdownTitle: {
+      fontSize: 11,
+      fontWeight: "700",
+      color: colors.text.primary,
+      marginBottom: 8,
+    },
+    breakdownRowGap: {
+      marginBottom: 4,
+    },
+    breakdownValSemi: {
+      fontWeight: "600",
+    },
+    breakdownValAccent: {
+      fontWeight: "600",
+      color: colors.accent.primary,
+    },
+    breakdownDiscountLabel: {
+      color: colors.accent.success,
+      fontWeight: "600",
+    },
+    breakdownDiscountVal: {
+      fontWeight: "700",
+      color: colors.accent.success,
+    },
+    oldBalLabelDanger: {
+      color: colors.accent.danger,
+      fontWeight: "600",
+    },
+    oldBalValDanger: {
+      fontWeight: "700",
+      color: colors.accent.danger,
+    },
+    advBalLabelSuccess: {
+      color: colors.accent.success,
+      fontWeight: "600",
+    },
+    advBalValSuccess: {
+      fontWeight: "700",
+      color: colors.accent.success,
+    },
+    breakdownDivider: {
+      marginVertical: 6,
+    },
+    totalWithOldLabel: {
+      fontWeight: "800",
+      color: colors.text.primary,
+    },
+    totalWithOldVal: {
+      fontSize: 16,
+      fontWeight: "800",
+      color: colors.accent.primary,
+    },
+    paidTodayRow: {
+      flexDirection: "row",
+      alignItems: "center",
+      gap: 6,
+    },
+    paidTodayText: {
+      fontSize: 13,
+      fontWeight: "700",
+      color: colors.accent.success,
+    },
+    paidMethodChip: {
+      backgroundColor: `${colors.accent.primary}18`,
+      paddingHorizontal: 6,
+      paddingVertical: 2,
+      borderRadius: 4,
+    },
+    paidMethodChipText: {
+      fontSize: 10,
+      fontWeight: "700",
+      color: colors.accent.primary,
+    },
+    balanceUnpaidText: {
+      fontSize: 14,
+      fontWeight: "800",
+    },
+    advCreditRow: {
+      marginTop: 6,
+      paddingVertical: 5,
+      paddingHorizontal: 8,
+      backgroundColor: colors.accent.success + "15",
+      borderRadius: 6,
+      borderColor: colors.accent.success + "30",
+      borderWidth: 1,
+    },
+    advCreditLabel: {
+      color: colors.accent.success,
+      fontWeight: "700",
+    },
+    advCreditVal: {
+      fontSize: 13,
+      fontWeight: "800",
+      color: colors.accent.success,
+    },
+    noteBox: {
+      marginTop: 6,
+      paddingVertical: 6,
+      paddingHorizontal: 8,
+      backgroundColor: colors.bg.primary,
+      borderRadius: 6,
+      borderWidth: 1,
+      borderColor: colors.border.subtle,
+      flexDirection: "row",
+      alignItems: "flex-start",
+      gap: 5,
+    },
+    noteIcon: {
+      marginTop: 1,
+    },
+    noteBodyText: {
+      fontSize: 11,
+      color: colors.text.secondary,
+      flex: 1,
+      lineHeight: 16,
+    },
+    noteBoldLabel: {
+      fontWeight: "700",
+      color: colors.text.primary,
+    },
+    deliveryTrackBox: {
+      marginTop: 10,
+      padding: 10,
+      backgroundColor: colors.bg.primary,
+      borderRadius: 8,
+      borderWidth: 1,
+      borderColor: colors.border.subtle,
+    },
+    deliveryTrackHeader: {
+      flexDirection: "row",
+      justifyContent: "space-between",
+      marginBottom: 6,
+    },
+    deliveryTrackTitle: {
+      fontSize: 11,
+      fontWeight: "700",
+      color: colors.text.primary,
+    },
+    deliveryTrackStatus: {
+      fontSize: 11,
+      fontWeight: "700",
+    },
+    deliveryProgressBg: {
+      height: 6,
+      backgroundColor: colors.border.medium,
+      borderRadius: 3,
+      overflow: "hidden",
+      marginBottom: 8,
+    },
+    deliveryProgressFill: {
+      height: "100%",
+    },
+    deliveryHistWrap: {
+      marginBottom: 8,
+    },
+    deliveryHistTitle: {
+      fontSize: 10,
+      fontWeight: "600",
+      color: colors.text.muted,
+      marginBottom: 4,
+    },
+    deliveryHistItem: {
+      marginVertical: 4,
+      paddingVertical: 4,
+    },
+    deliveryHistBorder: {
+      borderBottomWidth: 0.5,
+      borderBottomColor: colors.border.subtle,
+    },
+    deliveryHistTop: {
+      flexDirection: "row",
+      justifyContent: "space-between",
+      alignItems: "center",
+    },
+    deliveryHistText: {
+      fontSize: 11.5,
+      fontWeight: "600",
+      color: colors.text.secondary,
+      flex: 1,
+    },
+    deliveryHistActions: {
+      flexDirection: "row",
+      gap: 8,
+      marginLeft: 8,
+    },
+    deliveryHistIconBtn: {
+      padding: 2,
+    },
+    deliveryMetaSub: {
+      fontSize: 9.5,
+      color: colors.text.muted,
+      marginTop: 1,
+    },
+    deliveryMetaNote: {
+      fontSize: 9.5,
+      color: colors.text.muted,
+      fontStyle: "italic",
+      marginTop: 1,
+    },
+    deliveryRemainingText: {
+      fontSize: 11,
+      color: colors.text.secondary,
+      marginBottom: 6,
+    },
+    deliveryRemainingQty: {
+      fontWeight: "700",
+      color: colors.accent.danger,
+    },
+    deliveryInputRow: {
+      flexDirection: "row",
+      gap: 8,
+      alignItems: "center",
+    },
+    deliveryInputField: {
+      flex: 1,
+      height: 36,
+      backgroundColor: colors.bg.card,
+      borderWidth: 1,
+      borderColor: colors.border.medium,
+      borderRadius: 6,
+      paddingHorizontal: 10,
+      fontSize: 13,
+      color: colors.text.primary,
+    },
+    deliveryRecordBtn: {
+      backgroundColor: colors.accent.primary,
+      paddingVertical: 8,
+      paddingHorizontal: 12,
+      borderRadius: 6,
+      justifyContent: "center",
+      alignItems: "center",
+    },
+    deliveryRecordBtnText: {
+      color: "#FFFFFF",
+      fontSize: 12,
+      fontWeight: "700",
+    },
+    deliveryAllDoneText: {
+      fontSize: 11,
+      color: "#10B981",
+      fontWeight: "600",
+    },
+    actionBtnShare: {
+      backgroundColor: "#2563EB",
+      borderWidth: 1,
+      borderColor: "#2563EB",
+    },
+    actionBtnPay: {
+      backgroundColor: "#16a34a",
+      borderWidth: 1,
+      borderColor: "#16a34a",
+    },
+    actionBtnWhiteText: {
+      color: "#FFFFFF",
+      fontWeight: "700",
+    },
+    actionBtnBlueText: {
+      color: "#3B82F6",
+    },
+    actionBtnDangerText: {
+      color: colors.accent.danger,
+    },
+    extraActionsRow: {
+      marginTop: 8,
+      borderTopWidth: 0,
+      paddingTop: 0,
+    },
+    loadMoreBtn: {
+      backgroundColor: colors.bg.card,
+      borderColor: colors.border.medium,
+      borderWidth: 1,
+      borderRadius: 12,
+      paddingVertical: 12,
+      alignItems: "center",
+      justifyContent: "center",
+      marginTop: 8,
+      marginBottom: 20,
+      flexDirection: "row",
+      gap: 8,
+    },
+    loadMoreBtnPressed: {
+      opacity: 0.8,
+      backgroundColor: colors.bg.primary,
+    },
+    loadMoreText: {
+      fontSize: 13,
+      fontWeight: "700",
+      color: colors.accent.primary,
     },
   });
 };

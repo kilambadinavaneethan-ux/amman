@@ -1,7 +1,16 @@
 import * as FileSystem from "expo-file-system/legacy";
 import NetInfo from "@react-native-community/netinfo";
 import AsyncStorage from "@react-native-async-storage/async-storage";
-import { ref, uploadBytes, uploadString, getDownloadURL, deleteObject } from "firebase/storage";
+import {
+  ref,
+  uploadBytes,
+  uploadBytesResumable,
+  uploadString,
+  getDownloadURL,
+  deleteObject,
+  StorageReference,
+  UploadTaskSnapshot,
+} from "firebase/storage";
 import { storage } from "../src/config/firebase";
 import { STORAGE_FOLDERS, StorageFolder } from "../constants/storageFolders";
 import { generateUniqueFileName, getFileExtension, isValidImageExtension } from "../utils/fileHelpers";
@@ -27,6 +36,89 @@ export interface StorageUploadResult {
   folder: string;
   error?: string;
   isOfflineQueued?: boolean;
+}
+
+const BASE64_CHARS = "ABCDEFGHIJKLMNOPQRSTUVWXYZabcdefghijklmnopqrstuvwxyz0123456789+/";
+
+/**
+ * Decode a base64 string into Uint8Array without external dependencies.
+ */
+function base64ToUint8Array(base64: string): Uint8Array | null {
+  try {
+    const clean = base64.replace(/^data:[^;]+;base64,/, "").replace(/[\r\n\s]/g, "");
+    if (!clean) return null;
+
+    if (typeof globalThis.atob === "function") {
+      const binary = globalThis.atob(clean);
+      const len = binary.length;
+      const bytes = new Uint8Array(len);
+      for (let i = 0; i < len; i++) {
+        bytes[i] = binary.charCodeAt(i);
+      }
+      return bytes;
+    }
+
+    const padding = clean.endsWith("==") ? 2 : clean.endsWith("=") ? 1 : 0;
+    const outputLength = Math.floor((clean.length * 3) / 4) - padding;
+    const bytes = new Uint8Array(outputLength);
+    let byteIndex = 0;
+
+    for (let i = 0; i < clean.length; i += 4) {
+      const c1 = BASE64_CHARS.indexOf(clean[i]);
+      const c2 = BASE64_CHARS.indexOf(clean[i + 1]);
+      const c3 = clean[i + 2] === "=" ? 0 : BASE64_CHARS.indexOf(clean[i + 2]);
+      const c4 = clean[i + 3] === "=" ? 0 : BASE64_CHARS.indexOf(clean[i + 3]);
+      if (c1 < 0 || c2 < 0 || c3 < 0 || c4 < 0) return null;
+
+      const triplet = (c1 << 18) | (c2 << 12) | (c3 << 6) | c4;
+      if (byteIndex < outputLength) bytes[byteIndex++] = (triplet >> 16) & 0xff;
+      if (clean[i + 2] !== "=" && byteIndex < outputLength) bytes[byteIndex++] = (triplet >> 8) & 0xff;
+      if (clean[i + 3] !== "=" && byteIndex < outputLength) bytes[byteIndex++] = triplet & 0xff;
+    }
+    return bytes;
+  } catch {
+    return null;
+  }
+}
+
+/**
+ * Upload binary payload using uploadBytesResumable when supported so onProgress
+ * reflects real transfer progress, falling back to uploadBytes otherwise.
+ */
+async function uploadWithResumableProgress(
+  storageRef: StorageReference,
+  data: Blob | Uint8Array | ArrayBuffer,
+  contentType: string,
+  onProgress?: (progress: number) => void
+): Promise<void> {
+  if (typeof uploadBytesResumable !== "function") {
+    await uploadBytes(storageRef, data, { contentType });
+    return;
+  }
+
+  await new Promise<void>((resolve, reject) => {
+    const uploadTask = uploadBytesResumable(storageRef, data, { contentType });
+    const unsubscribe = uploadTask.on(
+      "state_changed",
+      (snapshot: UploadTaskSnapshot) => {
+        if (onProgress && snapshot.totalBytes > 0) {
+          const pct = Math.min(
+            99,
+            Math.max(0, Math.round((snapshot.bytesTransferred / snapshot.totalBytes) * 100))
+          );
+          onProgress(pct);
+        }
+      },
+      (err) => {
+        unsubscribe();
+        reject(err);
+      },
+      () => {
+        unsubscribe();
+        resolve();
+      }
+    );
+  });
 }
 
 /**
@@ -64,7 +156,7 @@ export async function uploadImage(options: StorageUploadOptions): Promise<Storag
       };
     }
 
-    if (onProgress) onProgress(10);
+    onProgress?.(0);
 
     // 1. Compress image
     let compressedUri = uri;
@@ -76,8 +168,6 @@ export async function uploadImage(options: StorageUploadOptions): Promise<Storag
       base64Data = comp.base64;
     }
 
-    if (onProgress) onProgress(40);
-
     // Prepare storage path
     const uniqueName = options.fileName || generateUniqueFileName(ext);
     const subPath = entityId ? `${entityId}/${uniqueName}` : uniqueName;
@@ -85,26 +175,29 @@ export async function uploadImage(options: StorageUploadOptions): Promise<Storag
     const storageRef = ref(storage, fullPath);
     const contentType = `image/${ext === "jpg" ? "jpeg" : ext}`;
 
-    if (onProgress) onProgress(60);
-
-    // 2. Upload to Firebase Storage using uploadString or fetch Blob
-    if (base64Data) {
+    // 2. Upload to Firebase Storage using resumable transfer (or uploadString fallback)
+    const binaryData = base64Data ? base64ToUint8Array(base64Data) : null;
+    if (binaryData) {
+      await uploadWithResumableProgress(storageRef, binaryData, contentType, onProgress);
+    } else if (base64Data) {
       await uploadString(storageRef, base64Data, "base64", { contentType });
     } else {
-      const response = await fetch(compressedUri);
-      const blob = await response.blob();
-      await uploadBytes(storageRef, blob, { contentType });
-      if (typeof (blob as any)?.close === "function") {
-        (blob as any).close();
+      let blob: Blob | null = null;
+      try {
+        const response = await fetch(compressedUri);
+        blob = await response.blob();
+        await uploadWithResumableProgress(storageRef, blob, contentType, onProgress);
+      } finally {
+        if (typeof (blob as any)?.close === "function") {
+          (blob as any).close();
+        }
       }
     }
-
-    if (onProgress) onProgress(90);
 
     // 3. Get Download URL
     const publicUrl = await getDownloadURL(storageRef);
 
-    if (onProgress) onProgress(100);
+    onProgress?.(100);
 
     return {
       success: true,

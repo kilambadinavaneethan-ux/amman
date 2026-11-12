@@ -11,7 +11,12 @@ import {
   LayoutChangeEvent,
   GestureResponderEvent,
   PanResponderGestureState,
+  KeyboardAvoidingView,
+  Platform,
+  ScrollView,
+  useWindowDimensions,
 } from 'react-native';
+import { useSafeAreaInsets } from 'react-native-safe-area-context';
 import Svg, { Path, Line } from 'react-native-svg';
 import { captureRef } from 'react-native-view-shot';
 import { MaterialIcons } from '@expo/vector-icons';
@@ -57,6 +62,10 @@ export function SignaturePadModal({
   initialSignatureUri,
   themeColors = {},
 }: SignaturePadModalProps) {
+  const { width: winWidth } = useWindowDimensions();
+  const insets = useSafeAreaInsets();
+  const defaultCanvasW = Math.min(Math.round(winWidth * 0.84), 420);
+  const defaultCanvasH = Math.round(defaultCanvasW * 0.53);
   const [paths, setPaths] = useState<Stroke[]>([]);
   const [currentPath, setCurrentPath] = useState<string>('');
   const [penColor, setPenColor] = useState<string>('#0F2942');
@@ -64,8 +73,8 @@ export function SignaturePadModal({
   const [saving, setSaving] = useState<boolean>(false);
   const [autoSaveStatus, setAutoSaveStatus] = useState<string>('');
   const [canvasDimensions, setCanvasDimensions] = useState<{ width: number; height: number }>({
-    width: 340,
-    height: 180,
+    width: defaultCanvasW,
+    height: defaultCanvasH,
   });
 
   const canvasRef = useRef<any>(null);
@@ -330,8 +339,22 @@ export function SignaturePadModal({
 
   return (
     <Modal visible={visible} transparent animationType="fade" onRequestClose={onClose}>
-      <View style={styles.modalOverlay}>
+      <KeyboardAvoidingView
+        behavior={Platform.OS === 'ios' ? 'padding' : 'height'}
+        style={[
+          styles.modalOverlay,
+          {
+            paddingTop: Math.max(insets.top, 12),
+            paddingBottom: Math.max(insets.bottom, 12),
+          },
+        ]}
+      >
         <View style={[styles.modalCard, { backgroundColor: colors.cardBg, borderColor: colors.borderColor }]}>
+          <ScrollView
+            showsVerticalScrollIndicator={false}
+            keyboardShouldPersistTaps="handled"
+            bounces={false}
+          >
           {/* Header */}
           <View style={[styles.modalHeader, { borderBottomColor: colors.borderColor }]}>
             <View style={{ flexDirection: 'row', alignItems: 'center', gap: 8 }}>
@@ -526,47 +549,48 @@ export function SignaturePadModal({
               style={[styles.toolBtn, { borderColor: colors.borderColor }]}
             >
               <MaterialIcons name="photo-library" size={18} color={colors.primary} />
-              <Text style={[styles.toolBtnText, { color: colors.primary }]}>Upload Image</Text>
-            </Pressable>
-          </View>
+                <Text style={[styles.toolBtnText, { color: colors.primary }]} maxFontSizeMultiplier={1.15}>Upload Image</Text>
+              </Pressable>
+            </View>
 
-          {/* Bottom Actions: Cancel & Save Now */}
-          <View style={[styles.modalFooter, { borderTopColor: colors.borderColor }]}>
-            <Pressable
-              onPress={() => {
-                cancelAutoSave();
-                handleClear();
-                onClose();
-              }}
-              style={[styles.actionBtn, styles.cancelBtn, { borderColor: colors.borderColor }]}
-            >
-              <Text style={[styles.actionBtnText, { color: colors.textColor }]}>Cancel</Text>
-            </Pressable>
+            {/* Bottom Actions: Cancel & Save Now */}
+            <View style={[styles.modalFooter, { borderTopColor: colors.borderColor }]}>
+              <Pressable
+                onPress={() => {
+                  cancelAutoSave();
+                  handleClear();
+                  onClose();
+                }}
+                style={[styles.actionBtn, styles.cancelBtn, { borderColor: colors.borderColor }]}
+              >
+                <Text style={[styles.actionBtnText, { color: colors.textColor }]}>Cancel</Text>
+              </Pressable>
 
-            <Pressable
-              onPress={handleSave}
-              disabled={saving || paths.length === 0}
-              style={[
-                styles.actionBtn,
-                styles.saveBtn,
-                { backgroundColor: colors.primary },
-                (saving || paths.length === 0) && { opacity: 0.5 },
-              ]}
-            >
-              {saving ? (
-                <ActivityIndicator size="small" color="#FFF" />
-              ) : (
-                <>
-                  <MaterialIcons name="save" size={18} color="#FFF" />
-                  <Text style={[styles.actionBtnText, { color: '#FFF' }]}>
-                    Save Now (இப்போது சேமி)
-                  </Text>
-                </>
-              )}
-            </Pressable>
-          </View>
+              <Pressable
+                onPress={handleSave}
+                disabled={saving || paths.length === 0}
+                style={[
+                  styles.actionBtn,
+                  styles.saveBtn,
+                  { backgroundColor: colors.primary },
+                  (saving || paths.length === 0) && { opacity: 0.5 },
+                ]}
+              >
+                {saving ? (
+                  <ActivityIndicator size="small" color="#FFF" />
+                ) : (
+                  <>
+                    <MaterialIcons name="save" size={18} color="#FFF" />
+                    <Text style={[styles.actionBtnText, { color: '#FFF' }]}>
+                      Save Now (இப்போது சேமி)
+                    </Text>
+                  </>
+                )}
+              </Pressable>
+            </View>
+          </ScrollView>
         </View>
-      </View>
+      </KeyboardAvoidingView>
     </Modal>
   );
 }
@@ -580,8 +604,9 @@ const styles = StyleSheet.create({
     padding: 16,
   },
   modalCard: {
-    width: '100%',
-    maxWidth: 420,
+    width: '92%',
+    maxWidth: 480,
+    maxHeight: '88%',
     borderRadius: 16,
     borderWidth: 1,
     overflow: 'hidden',
@@ -612,6 +637,8 @@ const styles = StyleSheet.create({
   },
   toolsBar: {
     flexDirection: 'row',
+    flexWrap: 'wrap',
+    gap: 8,
     justifyContent: 'space-between',
     alignItems: 'center',
     paddingHorizontal: 16,
@@ -663,7 +690,8 @@ const styles = StyleSheet.create({
     alignItems: 'center',
   },
   canvas: {
-    width: 340,
+    width: '100%',
+    maxWidth: 420,
     height: 180,
     backgroundColor: '#FFFFFF',
     borderRadius: 10,
@@ -689,6 +717,8 @@ const styles = StyleSheet.create({
   },
   canvasToolbar: {
     flexDirection: 'row',
+    flexWrap: 'wrap',
+    gap: 8,
     justifyContent: 'space-between',
     alignItems: 'center',
     paddingHorizontal: 16,

@@ -8,11 +8,13 @@ import {
   ActivityIndicator,
   Modal,
   Alert,
-  Dimensions,
+  KeyboardAvoidingView,
+  Platform,
   FlatList,
 } from "react-native";
 import { Image } from "expo-image";
 import { MaterialIcons } from "@expo/vector-icons";
+import { useResponsive } from "../../utils/responsive";
 import { useRouter } from "expo-router";
 import ProtectedRoute from "../../app/components/ProtectedRoute";
 import { useTheme } from "../../app/context/ThemeContext";
@@ -29,16 +31,16 @@ import {
   shareLocalImage,
 } from "../../src/services/localImageStorageService";
 
-const { width } = Dimensions.get("window");
 const GRID_PADDING = 16;
 const GRID_GAP = 12;
-const NUM_COLUMNS = width > 600 ? 4 : 2;
-const CARD_WIDTH = (width - GRID_PADDING * 2 - GRID_GAP * (NUM_COLUMNS - 1)) / NUM_COLUMNS;
 
 function LocalImageStorageScreen() {
   const router = useRouter();
   const { theme } = useTheme();
-  const { colors } = theme;
+  const { width, kavBehavior, scrollBottomPadding, insets } = useResponsive();
+  const numColumns = width > 600 ? 4 : 2;
+  const cardWidth = Math.floor((width - GRID_PADDING * 2 - GRID_GAP * (numColumns - 1)) / numColumns);
+  const { colors, spacing } = theme;
   const styles = useMemo(() => getStyles(theme), [theme]);
 
   const [loading, setLoading] = useState(true);
@@ -178,7 +180,7 @@ function LocalImageStorageScreen() {
   return (
     <View style={styles.container}>
       {/* Header */}
-      <View style={styles.header}>
+      <View style={[styles.header, { paddingTop: Math.max(insets.top + 8, 16) }]}>
         <Pressable
           style={({ pressed }) => [styles.backBtn, pressed && styles.pressed]}
           onPress={() => router.back()}
@@ -198,7 +200,7 @@ function LocalImageStorageScreen() {
       </View>
 
       <ScrollView
-        contentContainerStyle={styles.scrollContent}
+        contentContainerStyle={[styles.scrollContent, { paddingBottom: scrollBottomPadding }]}
         showsVerticalScrollIndicator={false}
       >
         {/* Storage Stats Banner */}
@@ -319,10 +321,10 @@ function LocalImageStorageScreen() {
             {images.map((img) => (
               <Pressable
                 key={img.uri}
-                style={({ pressed }) => [styles.imageCard, pressed && styles.pressed]}
+                style={({ pressed }) => [styles.imageCard, { width: cardWidth }, pressed && styles.pressed]}
                 onPress={() => setSelectedImage(img)}
               >
-                <Image source={{ uri: img.uri }} style={styles.thumbnail} contentFit="cover" cachePolicy="memory-disk" transition={150} />
+                <Image source={{ uri: img.uri }} style={[styles.thumbnail, { height: cardWidth * 0.9 }]} contentFit="cover" cachePolicy="memory-disk" transition={150} />
                 <View style={styles.cardInfo}>
                   <Text style={styles.cardFileName} numberOfLines={1}>
                     {img.fileName}
@@ -345,9 +347,9 @@ function LocalImageStorageScreen() {
         animationType="slide"
         onRequestClose={() => setSelectedImage(null)}
       >
-        <View style={styles.modalOverlay}>
+        <KeyboardAvoidingView behavior={kavBehavior} style={styles.modalOverlay}>
           {selectedImage && (
-            <View style={styles.modalContent}>
+            <View style={[styles.modalContent, { paddingBottom: Math.max(insets.bottom + 12, spacing.lg) }]}>
               {/* Modal Header */}
               <View style={styles.modalHeader}>
                 <Text style={styles.modalTitle} numberOfLines={1}>
@@ -425,7 +427,7 @@ function LocalImageStorageScreen() {
               </View>
             </View>
           )}
-        </View>
+        </KeyboardAvoidingView>
       </Modal>
     </View>
   );
@@ -692,7 +694,6 @@ const getStyles = (theme: any) => {
       gap: GRID_GAP,
     },
     imageCard: {
-      width: CARD_WIDTH,
       backgroundColor: colors.bg.card,
       borderRadius: radius.md,
       borderWidth: 1,
@@ -702,7 +703,6 @@ const getStyles = (theme: any) => {
     },
     thumbnail: {
       width: "100%",
-      height: CARD_WIDTH * 0.9,
       backgroundColor: colors.bg.elevated,
     },
     cardInfo: {
@@ -735,11 +735,14 @@ const getStyles = (theme: any) => {
       justifyContent: "flex-end",
     },
     modalContent: {
+      width: "100%",
+      maxWidth: 560,
+      alignSelf: "center",
       backgroundColor: colors.bg.card,
       borderTopLeftRadius: radius.xl,
       borderTopRightRadius: radius.xl,
       padding: spacing.lg,
-      maxHeight: "90%",
+      maxHeight: "88%",
     },
     modalHeader: {
       flexDirection: "row",

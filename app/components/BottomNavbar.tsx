@@ -129,7 +129,12 @@ function TabButton({ tab, isActive, onPress }: TabButtonProps) {
           style={labelStyle}
         />
       </Animated.View>
-      <Animated.Text style={[styles.label, labelStyle]} numberOfLines={1} ellipsizeMode="tail">
+      <Animated.Text
+        style={[styles.label, labelStyle]}
+        numberOfLines={1}
+        ellipsizeMode="tail"
+        maxFontSizeMultiplier={1.15}
+      >
         {tab.name}
       </Animated.Text>
     </Pressable>

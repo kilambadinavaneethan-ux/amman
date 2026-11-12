@@ -13,6 +13,7 @@ import {
   Switch,
   Animated,
   Platform,
+  KeyboardAvoidingView,
 } from "react-native";
 import { useRouter } from "expo-router";
 import { MaterialIcons } from "@expo/vector-icons";
@@ -28,6 +29,7 @@ import AnimatedPage from "../components/AnimatedPage";
 import BackButton from "../components/BackButton";
 import ProtectedRoute from "../components/ProtectedRoute";
 import { useTheme } from "../context/ThemeContext";
+import { useResponsive } from "../../utils/responsive";
 
 // ─── Constants ───────────────────────────────────────────────────────────────
 
@@ -207,6 +209,7 @@ async function ensureBackupDirExists() {
 function BackupRestore() {
   const { theme } = useTheme();
   const { colors, spacing, radius, shadows } = theme;
+  const { insets, kavBehavior, scrollBottomPadding } = useResponsive();
   const styles = useMemo(() => getStyles(theme), [theme]);
   const router = useRouter();
 
@@ -1026,9 +1029,10 @@ function BackupRestore() {
     <ProtectedRoute>
       <AnimatedPage>
         {/* ── File Inspector Modal ── */}
-        <Modal visible={inspectFile !== null} transparent animationType="slide">
-          <View style={styles.modalBg}>
-            <View style={styles.restoreListModal}>
+        <Modal visible={inspectFile !== null} transparent animationType="slide" onRequestClose={() => setInspectFile(null)}>
+          <KeyboardAvoidingView behavior={kavBehavior} style={{ flex: 1 }}>
+            <View style={styles.modalBg}>
+              <View style={[styles.restoreListModal, { maxHeight: "88%" }]}>
               <View style={styles.restoreModalHeader}>
                 <MaterialIcons name="insert-drive-file" size={26} color={colors.accent.primary} />
                 <Text style={styles.restoreModalTitle} numberOfLines={1}>
@@ -1099,11 +1103,12 @@ function BackupRestore() {
                 </Pressable>
               </View>
             </View>
-          </View>
+            </View>
+          </KeyboardAvoidingView>
         </Modal>
 
         {/* ── Progress Modal ── */}
-        <Modal visible={showProgress} transparent animationType="fade">
+        <Modal visible={showProgress} transparent animationType="fade" onRequestClose={() => { if (progressDone || progressError) setShowProgress(false); }}>
           <Animated.View style={[styles.modalBg, { opacity: progressFadeAnim }]}>
             <View style={styles.progressModal}>
               <View style={styles.progressIconWrap}>
@@ -1159,9 +1164,10 @@ function BackupRestore() {
         </Modal>
 
         {/* ── Restore Backup Selection Modal ── */}
-        <Modal visible={showRestoreModal} transparent animationType="slide">
-          <View style={styles.modalBg}>
-            <View style={styles.restoreListModal}>
+        <Modal visible={showRestoreModal} transparent animationType="slide" onRequestClose={() => setShowRestoreModal(false)}>
+          <KeyboardAvoidingView behavior={kavBehavior} style={{ flex: 1 }}>
+            <View style={styles.modalBg}>
+              <View style={[styles.restoreListModal, { maxHeight: "88%" }]}>
               <View style={styles.restoreModalHeader}>
                 <MaterialIcons name="restore" size={26} color={colors.accent.success} />
                 <Text style={styles.restoreModalTitle}>Restore Backup</Text>
@@ -1248,13 +1254,15 @@ function BackupRestore() {
                 </ScrollView>
               )}
             </View>
-          </View>
+            </View>
+          </KeyboardAvoidingView>
         </Modal>
 
         {/* ── Restore Confirmation & Selective Options Modal ── */}
-        <Modal visible={showRestoreConfirm} transparent animationType="slide">
-          <View style={styles.modalBg}>
-            <View style={[styles.restoreModal, { maxHeight: "88%" }]}>
+        <Modal visible={showRestoreConfirm} transparent animationType="slide" onRequestClose={() => setShowRestoreConfirm(false)}>
+          <KeyboardAvoidingView behavior={kavBehavior} style={{ flex: 1 }}>
+            <View style={styles.modalBg}>
+              <View style={[styles.restoreModal, { maxHeight: "88%" }]}>
               <View style={styles.restoreWarningIcon}>
                 <MaterialIcons name="restore" size={36} color="#f59e0b" />
               </View>
@@ -1372,13 +1380,15 @@ function BackupRestore() {
                 </Pressable>
               </View>
             </View>
-          </View>
+            </View>
+          </KeyboardAvoidingView>
         </Modal>
 
         {/* ── PIN Modal ── */}
-        <Modal visible={showPinModal} transparent animationType="fade">
-          <View style={styles.modalBg}>
-            <View style={styles.pinModal}>
+        <Modal visible={showPinModal} transparent animationType="fade" onRequestClose={() => { setShowPinModal(false); setPinInput(""); setPinConfirm(""); }}>
+          <KeyboardAvoidingView behavior={kavBehavior} style={{ flex: 1 }}>
+            <View style={styles.modalBg}>
+              <View style={[styles.pinModal, { maxHeight: "88%" }]}>
               <View style={styles.pinIconWrap}>
                 <MaterialIcons
                   name={pinAction === "setup" ? "lock" : pinAction === "disable" ? "lock-open" : "vpn-key"}
@@ -1432,11 +1442,12 @@ function BackupRestore() {
                 </Pressable>
               </View>
             </View>
-          </View>
+            </View>
+          </KeyboardAvoidingView>
         </Modal>
 
         {/* ── Main Content ── */}
-        <ScrollView contentContainerStyle={styles.container} showsVerticalScrollIndicator={false}>
+        <ScrollView contentContainerStyle={[styles.container, { paddingTop: Math.max(insets.top + 8, spacing.md), paddingBottom: scrollBottomPadding }]} showsVerticalScrollIndicator={false}>
           {/* Header */}
           <View style={styles.header}>
             <BackButton label="Settings" onPress={() => router.push("/settings")} style={{ marginBottom: 12 }} />
@@ -2283,8 +2294,8 @@ const getStyles = (theme: any) => {
       backgroundColor: colors.bg.card,
       borderRadius: radius.xl,
       padding: spacing.xxl,
-      width: "100%",
-      maxWidth: 340,
+      width: "92%",
+      maxWidth: 400,
       alignItems: "center",
       ...shadows.elevated,
     },
@@ -2344,8 +2355,9 @@ const getStyles = (theme: any) => {
       backgroundColor: colors.bg.card,
       borderRadius: radius.xl,
       padding: spacing.lg,
-      width: "100%",
-      maxWidth: 380,
+      width: "92%",
+      maxWidth: 440,
+      maxHeight: "88%",
       alignItems: "center",
       ...shadows.elevated,
     },
@@ -2471,8 +2483,9 @@ const getStyles = (theme: any) => {
       backgroundColor: colors.bg.card,
       borderRadius: radius.xl,
       padding: spacing.xl,
-      width: "100%",
-      maxWidth: 320,
+      width: "92%",
+      maxWidth: 380,
+      maxHeight: "88%",
       alignItems: "center",
       ...shadows.elevated,
     },
@@ -2550,9 +2563,9 @@ const getStyles = (theme: any) => {
       backgroundColor: colors.bg.card,
       borderRadius: radius.xl,
       padding: spacing.lg,
-      width: "100%",
-      maxWidth: 380,
-      maxHeight: "80%",
+      width: "92%",
+      maxWidth: 460,
+      maxHeight: "88%",
       ...shadows.elevated,
     },
     restoreModalHeader: {

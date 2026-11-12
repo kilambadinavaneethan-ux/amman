@@ -1,7 +1,9 @@
 import React, { useState } from 'react';
 import {
   ActivityIndicator,
+  KeyboardAvoidingView,
   Modal,
+  Platform,
   Pressable,
   ScrollView,
   StyleSheet,
@@ -10,6 +12,7 @@ import {
   TextInput,
   View,
 } from 'react-native';
+import { useSafeAreaInsets } from 'react-native-safe-area-context';
 import { MaterialIcons } from '@expo/vector-icons';
 import { ShareFormat, ShareSettings } from '../../types/sharing';
 import { shareSettingsService } from '../../services/sharing/shareSettingsService';
@@ -29,6 +32,7 @@ export function ShareSettingsModal({
   onClose,
   onSettingsUpdated,
 }: Props) {
+  const insets = useSafeAreaInsets();
   const [localSettings, setLocalSettings] = useState<ShareSettings>(initialSettings);
   const [saving, setSaving] = useState(false);
 
@@ -84,8 +88,20 @@ export function ShareSettingsModal({
 
   return (
     <Modal visible={visible} animationType="slide" transparent onRequestClose={onClose}>
-      <View style={styles.overlay}>
-        <View style={[styles.container, { backgroundColor: cardBg, borderColor }]}>
+      <KeyboardAvoidingView
+        behavior={Platform.OS === 'ios' ? 'padding' : 'height'}
+        style={styles.overlay}
+      >
+        <View
+          style={[
+            styles.container,
+            {
+              backgroundColor: cardBg,
+              borderColor,
+              paddingBottom: Math.max(insets.bottom + 16, 24),
+            },
+          ]}
+        >
           {/* Header */}
           <View style={[styles.header, { borderBottomColor: borderColor }]}>
             <View style={styles.headerLeft}>
@@ -97,7 +113,11 @@ export function ShareSettingsModal({
             </Pressable>
           </View>
 
-          <ScrollView style={styles.scroll} showsVerticalScrollIndicator={false}>
+          <ScrollView
+            style={styles.scroll}
+            showsVerticalScrollIndicator={false}
+            keyboardShouldPersistTaps="handled"
+          >
             {/* Default Format Selection */}
             <Text style={[styles.sectionTitle, { color: subTextColor }]}>DEFAULT SHARE FORMAT</Text>
             <View style={styles.formatRow}>
@@ -376,7 +396,7 @@ export function ShareSettingsModal({
             </Pressable>
           </View>
         </View>
-      </View>
+      </KeyboardAvoidingView>
     </Modal>
   );
 }
@@ -388,7 +408,10 @@ const styles = StyleSheet.create({
     justifyContent: 'flex-end',
   },
   container: {
-    maxHeight: '85%',
+    width: '100%',
+    maxWidth: 560,
+    alignSelf: 'center',
+    maxHeight: '88%',
     borderTopLeftRadius: 24,
     borderTopRightRadius: 24,
     borderWidth: 1,
@@ -427,11 +450,13 @@ const styles = StyleSheet.create({
   },
   formatRow: {
     flexDirection: 'row',
+    flexWrap: 'wrap',
     gap: 10,
     marginBottom: 10,
   },
   formatChip: {
     flex: 1,
+    minWidth: 88,
     flexDirection: 'row',
     alignItems: 'center',
     justifyContent: 'center',

@@ -3,6 +3,9 @@ import React, { useCallback, useContext, useEffect, useMemo, useState } from "re
 import {
   ActivityIndicator,
   Alert,
+  FlatList,
+  KeyboardAvoidingView,
+  ListRenderItem,
   Modal,
   Pressable,
   RefreshControl,
@@ -14,19 +17,21 @@ import {
   View,
 } from "react-native";
 import Animated, { FadeInDown } from "react-native-reanimated";
+import { computeTotalLiquidBalance } from "../../utils/fundFlowCalculations";
 
 // Components & Contexts
+import { useResponsive } from "../../utils/responsive";
 import { BackButton } from "../components/BackButton";
 import EasyCalendarModal from "../components/EasyCalendarModal";
 import ProtectedRoute from "../components/ProtectedRoute";
+import { DeliveryPartnerContext } from "../context/DeliveryPartnerContext";
 import { ExpenseContext } from "../context/ExpenseContext";
 import { PaymentContext } from "../context/PaymentContext";
 import { RawMaterialContext } from "../context/RawMaterialContext";
-import { WorkerContext } from "../context/WorkerContext";
-import { DeliveryPartnerContext } from "../context/DeliveryPartnerContext";
 import { useScrollRestoration } from "../context/ScrollContext";
 import { useTheme } from "../context/ThemeContext";
 import { UserContext } from "../context/UserContext";
+import { WorkerContext } from "../context/WorkerContext";
 
 // Firebase
 import { collection, onSnapshot, orderBy, query } from "firebase/firestore";
@@ -61,14 +66,13 @@ import {
   unifyFundEntries,
 } from "../../src/services/fundFlowService";
 import {
-  DailyCashFlowPoint,
   DateGroupedEntries,
   FundAccount,
   FundAccountType,
   FundFlowFilter,
   FundTransaction,
   ReportPeriod,
-  UnifiedFundEntry,
+  UnifiedFundEntry
 } from "../../src/types/fundFlow";
 
 const PERIOD_LIST: { id: ReportPeriod; label: string }[] = [
@@ -86,9 +90,149 @@ const PERIOD_LIST: { id: ReportPeriod; label: string }[] = [
 
 const PAYMENT_METHODS = ["Cash", "UPI", "Bank Transfer", "Cheque", "Card", "Other"];
 
+interface FundEntryRowProps {
+  item: UnifiedFundEntry;
+  idx?: number;
+  styles: any;
+  colors: any;
+  onSelect: (item: UnifiedFundEntry) => void;
+  isFlat?: boolean;
+}
+
+const FundEntryRow = React.memo(function FundEntryRow({
+  item,
+  idx = 0,
+  styles,
+  colors,
+  onSelect,
+  isFlat = false,
+}: FundEntryRowProps) {
+  const isInflow = item.type === "inflow";
+  const isTransfer = item.type === "transfer";
+  const isBonus =
+    item.sourceType === "worker_bonus" ||
+    item.sourceType === "delivery_bonus" ||
+    item.sourceType === "customer_bonus";
+
+  const color = isInflow
+    ? colors.accent.success
+    : isTransfer
+      ? colors.accent.info
+      : isBonus
+        ? "#F59E0B"
+        : colors.accent.danger;
+
+  const iconName = isInflow
+    ? "arrow-downward"
+    : isTransfer
+      ? "swap-horiz"
+      : isBonus
+        ? "stars"
+        : "arrow-upward";
+
+  return (
+    <Animated.View entering={FadeInDown.delay(Math.min(idx * 15, 150))}>
+      <Pressable
+        style={[styles.entryCard, isFlat && styles.entryCardFlatSpacing]}
+        onPress={() => onSelect(item)}
+      >
+        <View style={[styles.entryIconBox, { backgroundColor: color + "15" }]}>
+          <MaterialIcons name={iconName as any} size={18} color={color} />
+        </View>
+        <View style={styles.entryMain}>
+          <View style={styles.entryRowBetween}>
+            <Text style={styles.entryTitle} numberOfLines={1}>
+              {item.title}
+            </Text>
+            <Text style={[styles.entryAmount, { color }]}>
+              {isInflow ? "+" : isTransfer ? "⇄" : "-"}
+              {formatCurrency(item.amount)}
+            </Text>
+          </View>
+
+          <View style={styles.entryMetaRow}>
+            <Text style={styles.entryMetaCategory}>{item.category}</Text>
+            <Text style={styles.entryDot}>•</Text>
+            <Text style={styles.entryMetaAcc}>
+              {item.accountName || item.paymentMethod}
+            </Text>
+            <Text style={styles.entryDot}>•</Text>
+            <Text style={styles.entryMetaDate}>{formatDate(item.date)}</Text>
+            {item.runningBalance !== undefined && (
+              <>
+                <Text style={styles.entryDot}>•</Text>
+                <View style={styles.runningBalBadge}>
+                  <Text style={styles.runningBalText}>
+                    Bal: {formatCurrency(item.runningBalance)}
+                  </Text>
+                </View>
+              </>
+            )}
+          </View>
+
+          {item.notes ? (
+            <Text style={styles.entryNotes} numberOfLines={1}>
+              {item.notes}
+            </Text>
+          ) : null}
+        </View>
+      </Pressable>
+    </Animated.View>
+  );
+});
+
+interface FundDateGroupCardProps {
+  group: DateGroupedEntries;
+  styles: any;
+  colors: any;
+  onSelectEntry: (item: UnifiedFundEntry) => void;
+}
+
+const FundDateGroupCard = React.memo(function FundDateGroupCard({
+  group,
+  styles,
+  colors,
+  onSelectEntry,
+}: FundDateGroupCardProps) {
+  return (
+    <View style={styles.dateGroupContainer}>
+      <View style={styles.dateGroupHeader}>
+        <View style={styles.dateGroupTitleRow}>
+          <MaterialIcons name="event" size={13} color={colors.text.muted} />
+          <Text style={styles.dateGroupTitle}>{group.dateLabel}</Text>
+          <Text style={styles.dateGroupCount}>({group.entries.length})</Text>
+        </View>
+        <View style={styles.dateGroupTotalsRow}>
+          {group.totalInflow > 0 && (
+            <Text style={styles.dayInflowText}>
+              +{formatCurrency(group.totalInflow)}
+            </Text>
+          )}
+          {group.totalOutflow > 0 && (
+            <Text style={styles.dayOutflowText}>
+              -{formatCurrency(group.totalOutflow)}
+            </Text>
+          )}
+        </View>
+      </View>
+      {group.entries.map((item, i) => (
+        <FundEntryRow
+          key={item.id}
+          item={item}
+          idx={i}
+          styles={styles}
+          colors={colors}
+          onSelect={onSelectEntry}
+        />
+      ))}
+    </View>
+  );
+});
+
 export default function FundFlowManagementScreen() {
   const { theme } = useTheme();
   const { colors, spacing } = theme;
+  const { insets, kavBehavior, scrollBottomPadding, currencyKpiTextProps } = useResponsive();
   const styles = useMemo(() => getStyles(theme), [theme]);
   const { scrollViewRef, handleScroll, handleContentSizeChange } =
     useScrollRestoration("/settings/fund-flow");
@@ -364,9 +508,10 @@ export default function FundFlowManagementScreen() {
     return computeAccountBalances(allEntries, fundAccounts);
   }, [allEntries, fundAccounts]);
 
-  const totalLiquidBalance = useMemo(() => {
-    return Object.values(accountBalances).reduce((sum, item) => sum + item.balance, 0);
-  }, [accountBalances]);
+  const totalLiquidBalance = useMemo(
+    () => computeTotalLiquidBalance(accountBalances),
+    [accountBalances]
+  );
 
   // 1. Compute running balances chronologically across all entries
   const allEntriesWithBalances = useMemo(() => {
@@ -558,8 +703,8 @@ export default function FundFlowManagementScreen() {
       Alert.alert(
         "Auto-Integrated Transaction",
         "This record is automatically synchronized from your active " +
-          entry.sourceLabel +
-          " module. To modify or delete it, please open the respective module in Settings/Finance."
+        entry.sourceLabel +
+        " module. To modify or delete it, please open the respective module in Settings/Finance."
       );
       return;
     }
@@ -623,92 +768,969 @@ export default function FundFlowManagementScreen() {
     }
   };
 
+  const handleSelectEntry = useCallback((item: UnifiedFundEntry) => {
+    setSelectedEntry(item);
+  }, []);
+
   const isLoading =
     loadingCustPayments || loadingExpenses || loadingRawLogs || loadingDirect;
 
-  const renderEntryCard = (item: UnifiedFundEntry, idx: number = 0) => {
-    const isInflow = item.type === "inflow";
-    const isTransfer = item.type === "transfer";
-    const isBonus =
-      item.sourceType === "worker_bonus" ||
-      item.sourceType === "delivery_bonus" ||
-      item.sourceType === "customer_bonus";
+  const isGroupedLedger = ledgerViewMode === "grouped";
 
-    const color = isInflow
-      ? colors.accent.success
-      : isTransfer
-      ? colors.accent.info
-      : isBonus
-      ? "#F59E0B"
-      : colors.accent.danger;
+  const ledgerListData = useMemo<any[]>(() => {
+    if (activeTab !== "ledger" || isLoading) return [];
+    return isGroupedLedger ? dateGroupedEntries : displayedEntries;
+  }, [activeTab, isLoading, isGroupedLedger, dateGroupedEntries, displayedEntries]);
 
-    const iconName = isInflow
-      ? "arrow-downward"
-      : isTransfer
-      ? "swap-horiz"
-      : isBonus
-      ? "stars"
-      : "arrow-upward";
+  const fundKeyExtractor = useCallback((item: any) => {
+    if (item && "dateKey" in item) {
+      return `group-${item.dateKey}`;
+    }
+    return `entry-${item.id}`;
+  }, []);
 
-    return (
-      <Animated.View
-        key={item.id}
-        entering={FadeInDown.delay(Math.min(idx * 15, 150))}
-      >
-        <Pressable
-          style={styles.entryCard}
-          onPress={() => setSelectedEntry(item)}
-        >
-          <View style={[styles.entryIconBox, { backgroundColor: color + "15" }]}>
-            <MaterialIcons name={iconName as any} size={18} color={color} />
-          </View>
-          <View style={styles.entryMain}>
-            <View style={styles.entryRowBetween}>
-              <Text style={styles.entryTitle} numberOfLines={1}>
-                {item.title}
-              </Text>
-              <Text style={[styles.entryAmount, { color }]}>
-                {isInflow ? "+" : isTransfer ? "⇄" : "-"}
-                {formatCurrency(item.amount)}
-              </Text>
-            </View>
+  const renderFundItem: ListRenderItem<any> = useCallback(
+    ({ item, index }) => {
+      if (item && "entries" in item && "dateKey" in item) {
+        return (
+          <FundDateGroupCard
+            group={item as DateGroupedEntries}
+            styles={styles}
+            colors={colors}
+            onSelectEntry={handleSelectEntry}
+          />
+        );
+      }
+      return (
+        <FundEntryRow
+          item={item as UnifiedFundEntry}
+          idx={index}
+          styles={styles}
+          colors={colors}
+          onSelect={handleSelectEntry}
+          isFlat
+        />
+      );
+    },
+    [styles, colors, handleSelectEntry]
+  );
 
-            <View style={styles.entryMetaRow}>
-              <Text style={styles.entryMetaCategory}>{item.category}</Text>
-              <Text style={styles.entryDot}>•</Text>
-              <Text style={styles.entryMetaAcc}>
-                {item.accountName || item.paymentMethod}
-              </Text>
-              <Text style={styles.entryDot}>•</Text>
-              <Text style={styles.entryMetaDate}>{formatDate(item.date)}</Text>
-              {item.runningBalance !== undefined && (
-                <>
-                  <Text style={styles.entryDot}>•</Text>
-                  <View style={styles.runningBalBadge}>
-                    <Text style={styles.runningBalText}>
-                      Bal: {formatCurrency(item.runningBalance)}
-                    </Text>
-                  </View>
-                </>
-              )}
-            </View>
-
-            {item.notes ? (
-              <Text style={styles.entryNotes} numberOfLines={1}>
-                {item.notes}
-              </Text>
-            ) : null}
-          </View>
+  const fundListHeader = (
+    <>
+      {/* Treasury Accounts Carousel */}
+      <View style={styles.sectionHead}>
+        <Text style={styles.sectionTitle}>Treasury & Liquid Balances</Text>
+        <Pressable onPress={() => setIsAccountsModalOpen(true)}>
+          <Text style={styles.sectionActionText}>Manage Accounts</Text>
         </Pressable>
-      </Animated.View>
+      </View>
+
+      <ScrollView
+        horizontal
+        showsHorizontalScrollIndicator={false}
+        contentContainerStyle={styles.treasuryScroll}
+      >
+        {/* Total Liquid Portfolio Card */}
+        <Pressable
+          style={[
+            styles.treasuryCard,
+            selectedAccountId === "all" && styles.treasuryCardActive,
+            { borderLeftColor: colors.accent.primary, borderLeftWidth: 4 },
+          ]}
+          onPress={() => setSelectedAccountId("all")}
+        >
+          <View style={styles.treasuryCardHeader}>
+            <View style={[styles.accIconWrap, { backgroundColor: colors.accent.primary + "15" }]}>
+              <MaterialIcons name="account-balance-wallet" size={18} color={colors.accent.primary} />
+            </View>
+            <Text style={styles.accBadge}>All Funds</Text>
+          </View>
+          <Text style={styles.treasuryTitle}>Total Liquid Cash</Text>
+          <Text
+            style={[
+              styles.treasuryAmount,
+              { color: totalLiquidBalance >= 0 ? colors.accent.primary : colors.accent.danger },
+            ]}
+            {...currencyKpiTextProps}
+          >
+            {formatCurrency(totalLiquidBalance)}
+          </Text>
+          <Text style={styles.treasuryMeta}>{fundAccounts.length} Connected Accounts</Text>
+        </Pressable>
+
+        {/* Individual Accounts */}
+        {fundAccounts.map((acc) => {
+          const accBal = accountBalances[acc.id]?.balance || 0;
+          const isSelected = selectedAccountId === acc.id;
+          const iconName =
+            acc.type === "cash"
+              ? "payments"
+              : acc.type === "upi"
+                ? "qr-code"
+                : "account-balance";
+          const accColor =
+            acc.type === "cash"
+              ? colors.accent.success
+              : acc.type === "upi"
+                ? "#8B5CF6"
+                : colors.accent.info;
+
+          return (
+            <Pressable
+              key={acc.id}
+              style={[
+                styles.treasuryCard,
+                isSelected && styles.treasuryCardActive,
+                { borderLeftColor: accColor, borderLeftWidth: 4 },
+              ]}
+              onPress={() => setSelectedAccountId(isSelected ? "all" : acc.id)}
+            >
+              <View style={styles.treasuryCardHeader}>
+                <View style={[styles.accIconWrap, { backgroundColor: accColor + "15" }]}>
+                  <MaterialIcons name={iconName as any} size={18} color={accColor} />
+                </View>
+                <View style={styles.treasuryBadgeRow}>
+                  {accBal < 5000 && accBal >= 0 && (
+                    <View style={styles.lowBalBadge}>
+                      <MaterialIcons name="warning" size={10} color="#D97706" />
+                      <Text style={styles.lowBalBadgeText}>Low</Text>
+                    </View>
+                  )}
+                  {accBal < 0 && (
+                    <View style={[styles.lowBalBadge, { backgroundColor: colors.accent.danger + "20" }]}>
+                      <MaterialIcons name="error" size={10} color={colors.accent.danger} />
+                      <Text style={[styles.lowBalBadgeText, { color: colors.accent.danger }]}>Negative</Text>
+                    </View>
+                  )}
+                  <Text style={styles.accBadge}>{acc.type.toUpperCase()}</Text>
+                </View>
+              </View>
+              <Text style={styles.treasuryTitle} numberOfLines={1}>
+                {acc.name}
+              </Text>
+              <Text
+                style={[
+                  styles.treasuryAmount,
+                  { color: accBal >= 0 ? colors.text.primary : colors.accent.danger },
+                ]}
+                {...currencyKpiTextProps}
+              >
+                {formatCurrency(accBal)}
+              </Text>
+              <Text style={styles.treasuryMeta}>
+                Opening: {formatCurrency(acc.openingBalance)}
+              </Text>
+            </Pressable>
+          );
+        })}
+      </ScrollView>
+
+      {/* Period Selector Pills */}
+      <ScrollView
+        horizontal
+        showsHorizontalScrollIndicator={false}
+        contentContainerStyle={styles.periodPillsContainer}
+      >
+        {PERIOD_LIST.map((p) => {
+          const active = selectedPeriod === p.id;
+          return (
+            <Pressable
+              key={p.id}
+              style={[styles.periodPill, active && styles.periodPillActive]}
+              onPress={() => {
+                setSelectedPeriod(p.id);
+                if (p.id === "custom") {
+                  setCalendarTarget("start");
+                }
+              }}
+            >
+              <Text style={[styles.periodPillText, active && styles.periodPillTextActive]}>
+                {p.label}
+              </Text>
+            </Pressable>
+          );
+        })}
+      </ScrollView>
+
+      {/* Custom Date Pickers if selected */}
+      {selectedPeriod === "custom" && (
+        <View style={styles.customDateRow}>
+          <Pressable
+            style={styles.customDateBtn}
+            onPress={() => setCalendarTarget("start")}
+          >
+            <MaterialIcons name="event" size={16} color={colors.accent.primary} />
+            <Text style={styles.customDateBtnText}>
+              From: {customStart ? formatDate(customStart) : "Select"}
+            </Text>
+          </Pressable>
+          <Pressable
+            style={styles.customDateBtn}
+            onPress={() => setCalendarTarget("end")}
+          >
+            <MaterialIcons name="event" size={16} color={colors.accent.primary} />
+            <Text style={styles.customDateBtnText}>
+              To: {customEnd ? formatDate(customEnd) : "Select"}
+            </Text>
+          </Pressable>
+        </View>
+      )}
+
+      {/* Key Executive Metrics */}
+      <View style={styles.metricGrid}>
+        {/* Net Fund Flow */}
+        <View
+          style={[
+            styles.metricCard,
+            {
+              borderLeftColor:
+                summary.netFlow >= 0 ? colors.accent.success : colors.accent.danger,
+            },
+          ]}
+        >
+          <View style={styles.metricRowTop}>
+            <Text style={styles.metricLabel}>Net Fund Flow</Text>
+            <View
+              style={[
+                styles.tagBadge,
+                {
+                  backgroundColor:
+                    (summary.netFlow >= 0 ? colors.accent.success : colors.accent.danger) + "20",
+                },
+              ]}
+            >
+              <Text
+                style={[
+                  styles.tagBadgeText,
+                  {
+                    color: summary.netFlow >= 0 ? colors.accent.success : colors.accent.danger,
+                  },
+                ]}
+              >
+                {summary.netFlow >= 0 ? "SURPLUS" : "DEFICIT"}
+              </Text>
+            </View>
+          </View>
+          <Text
+            style={[
+              styles.metricValueLarge,
+              {
+                color: summary.netFlow >= 0 ? colors.accent.success : colors.accent.danger,
+              },
+            ]}
+            {...currencyKpiTextProps}
+          >
+            {summary.netFlow >= 0 ? "+" : ""}
+            {formatCurrency(summary.netFlow)}
+          </Text>
+          <Text style={styles.metricSub}>
+            Coverage: {summary.coverageRatio.toFixed(2)}x inflow vs outflow
+          </Text>
+        </View>
+
+        {/* Inflows, Outflows & Transfers Row */}
+        <View style={styles.metricsRowGrid}>
+          <View
+            style={[
+              styles.metricCardSmall,
+              { borderLeftColor: colors.accent.success, borderLeftWidth: 3 },
+            ]}
+          >
+            <View style={styles.miniIconRow}>
+              <View style={[styles.miniIcon, { backgroundColor: colors.accent.success + "15" }]}>
+                <MaterialIcons name="arrow-downward" size={14} color={colors.accent.success} />
+              </View>
+              <Text style={styles.metricLabelSmall}>Inflows</Text>
+            </View>
+            <Text style={[styles.metricValueSmall, { color: colors.accent.success }]} {...currencyKpiTextProps}>
+              {formatCurrency(summary.totalInflow)}
+            </Text>
+            <Text style={styles.metricCountText}>{summary.inflowCount} Receipts</Text>
+          </View>
+
+          <View
+            style={[
+              styles.metricCardSmall,
+              { borderLeftColor: colors.accent.danger, borderLeftWidth: 3 },
+            ]}
+          >
+            <View style={styles.miniIconRow}>
+              <View style={[styles.miniIcon, { backgroundColor: colors.accent.danger + "15" }]}>
+                <MaterialIcons name="arrow-upward" size={14} color={colors.accent.danger} />
+              </View>
+              <Text style={styles.metricLabelSmall}>Outflows</Text>
+            </View>
+            <Text style={[styles.metricValueSmall, { color: colors.accent.danger }]} {...currencyKpiTextProps}>
+              {formatCurrency(summary.totalOutflow)}
+            </Text>
+            <Text style={styles.metricCountText}>{summary.outflowCount} Payments</Text>
+          </View>
+
+          <View
+            style={[
+              styles.metricCardSmall,
+              { borderLeftColor: colors.accent.info, borderLeftWidth: 3 },
+            ]}
+          >
+            <View style={styles.miniIconRow}>
+              <View style={[styles.miniIcon, { backgroundColor: colors.accent.info + "15" }]}>
+                <MaterialIcons name="swap-horiz" size={14} color={colors.accent.info} />
+              </View>
+              <Text style={styles.metricLabelSmall}>Transfers</Text>
+            </View>
+            <Text style={[styles.metricValueSmall, { color: colors.accent.info }]} {...currencyKpiTextProps}>
+              {formatCurrency(summary.transferVolume)}
+            </Text>
+            <Text style={styles.metricCountText}>{summary.transferCount} Contra</Text>
+          </View>
+        </View>
+      </View>
+
+      {/* Quick Action Buttons */}
+      <View style={styles.quickActionRow}>
+        <Pressable
+          style={[styles.actionBtn, { backgroundColor: colors.accent.success }]}
+          onPress={() => handleOpenInflowModal()}
+        >
+          <MaterialIcons name="add-circle" size={18} color="#FFFFFF" />
+          <Text style={styles.actionBtnText}>+ Inflow</Text>
+        </Pressable>
+
+        <Pressable
+          style={[styles.actionBtn, { backgroundColor: colors.accent.danger }]}
+          onPress={() => handleOpenOutflowModal()}
+        >
+          <MaterialIcons name="remove-circle" size={18} color="#FFFFFF" />
+          <Text style={styles.actionBtnText}>- Outflow</Text>
+        </Pressable>
+
+        <Pressable
+          style={[styles.actionBtn, { backgroundColor: colors.accent.info }]}
+          onPress={() => handleOpenTransferModal()}
+        >
+          <MaterialIcons name="swap-horiz" size={18} color="#FFFFFF" />
+          <Text style={styles.actionBtnText}>Transfer</Text>
+        </Pressable>
+      </View>
+
+      {/* Tab Navigation */}
+      <View style={styles.tabBar}>
+        <Pressable
+          style={[styles.tabItem, activeTab === "ledger" && styles.tabItemActive]}
+          onPress={() => setActiveTab("ledger")}
+        >
+          <MaterialIcons
+            name="receipt-long"
+            size={16}
+            color={activeTab === "ledger" ? colors.accent.primary : colors.text.muted}
+          />
+          <Text
+            style={[styles.tabItemText, activeTab === "ledger" && styles.tabItemTextActive]}
+          >
+            Ledger ({filteredEntries.length})
+          </Text>
+        </Pressable>
+
+        <Pressable
+          style={[styles.tabItem, activeTab === "statement" && styles.tabItemActive]}
+          onPress={() => setActiveTab("statement")}
+        >
+          <MaterialIcons
+            name="analytics"
+            size={16}
+            color={activeTab === "statement" ? colors.accent.primary : colors.text.muted}
+          />
+          <Text
+            style={[styles.tabItemText, activeTab === "statement" && styles.tabItemTextActive]}
+          >
+            Statement & Sources
+          </Text>
+        </Pressable>
+
+        <Pressable
+          style={[styles.tabItem, activeTab === "accounts" && styles.tabItemActive]}
+          onPress={() => setActiveTab("accounts")}
+        >
+          <MaterialIcons
+            name="account-balance"
+            size={16}
+            color={activeTab === "accounts" ? colors.accent.primary : colors.text.muted}
+          />
+          <Text
+            style={[styles.tabItemText, activeTab === "accounts" && styles.tabItemTextActive]}
+          >
+            Accounts ({fundAccounts.length})
+          </Text>
+        </Pressable>
+      </View>
+
+      {/* TAB 1: LEDGER */}
+      {activeTab === "ledger" && (
+        <View style={styles.tabContent}>
+          {/* Search & Movement Type Filter Bar */}
+          <View style={styles.filterBar}>
+            <View style={styles.searchBox}>
+              <MaterialIcons name="search" size={18} color={colors.text.muted} />
+              <TextInput
+                style={styles.searchInput}
+                placeholder="Search by payee, category, notes, ref..."
+                placeholderTextColor={colors.text.muted}
+                value={searchQuery}
+                onChangeText={setSearchQuery}
+              />
+              {searchQuery ? (
+                <Pressable onPress={() => setSearchQuery("")}>
+                  <MaterialIcons name="close" size={16} color={colors.text.muted} />
+                </Pressable>
+              ) : null}
+            </View>
+
+            {/* Inflow / Outflow / Transfer Toggle Chips */}
+            <View style={styles.typeChipsRow}>
+              {(["all", "inflow", "outflow", "transfer"] as const).map((t) => {
+                const isCur = typeFilter === t;
+                const label =
+                  t === "all"
+                    ? "All"
+                    : t === "inflow"
+                      ? "Inflows"
+                      : t === "outflow"
+                        ? "Outflows"
+                        : "Transfers";
+                return (
+                  <Pressable
+                    key={t}
+                    style={[styles.typeChip, isCur && styles.typeChipActive]}
+                    onPress={() => setTypeFilter(t)}
+                  >
+                    <Text
+                      style={[styles.typeChipText, isCur && styles.typeChipTextActive]}
+                    >
+                      {label}
+                    </Text>
+                  </Pressable>
+                );
+              })}
+            </View>
+
+            {/* Dynamic Category Drilldown Chips */}
+            {typeFilter !== "all" && (
+              <ScrollView
+                horizontal
+                showsHorizontalScrollIndicator={false}
+                contentContainerStyle={styles.categoryChipsScroll}
+              >
+                <Pressable
+                  style={[
+                    styles.categoryChip,
+                    selectedCategory === "all" && styles.categoryChipActive,
+                  ]}
+                  onPress={() => setSelectedCategory("all")}
+                >
+                  <Text
+                    style={[
+                      styles.categoryChipText,
+                      selectedCategory === "all" && styles.categoryChipTextActive,
+                    ]}
+                  >
+                    All Categories
+                  </Text>
+                </Pressable>
+                {(typeFilter === "inflow"
+                  ? INFLOW_CATEGORIES
+                  : typeFilter === "outflow"
+                    ? OUTFLOW_CATEGORIES
+                    : TRANSFER_CATEGORIES
+                ).map((cat) => {
+                  const isCatActive = selectedCategory === cat;
+                  return (
+                    <Pressable
+                      key={cat}
+                      style={[styles.categoryChip, isCatActive && styles.categoryChipActive]}
+                      onPress={() => setSelectedCategory(isCatActive ? "all" : cat)}
+                    >
+                      <Text
+                        style={[
+                          styles.categoryChipText,
+                          isCatActive && styles.categoryChipTextActive,
+                        ]}
+                      >
+                        {cat}
+                      </Text>
+                    </Pressable>
+                  );
+                })}
+              </ScrollView>
+            )}
+
+            {/* Ledger Controls Bar: Count & View Switch */}
+            <View style={styles.ledgerControlsRow}>
+              <Text style={styles.ledgerCountText}>
+                {filteredEntries.length} {filteredEntries.length === 1 ? "transaction" : "transactions"}
+                {selectedCategory !== "all" ? ` • ${selectedCategory}` : ""}
+              </Text>
+
+              <View style={styles.viewModeToggleWrap}>
+                <Pressable
+                  style={[
+                    styles.viewModeBtn,
+                    ledgerViewMode === "grouped" && styles.viewModeBtnActive,
+                  ]}
+                  onPress={() => setLedgerViewMode("grouped")}
+                >
+                  <MaterialIcons
+                    name="view-agenda"
+                    size={13}
+                    color={ledgerViewMode === "grouped" ? "#FFFFFF" : colors.text.muted}
+                  />
+                  <Text
+                    style={[
+                      styles.viewModeBtnText,
+                      ledgerViewMode === "grouped" && styles.viewModeBtnTextActive,
+                    ]}
+                  >
+                    By Date
+                  </Text>
+                </Pressable>
+
+                <Pressable
+                  style={[
+                    styles.viewModeBtn,
+                    ledgerViewMode === "flat" && styles.viewModeBtnActive,
+                  ]}
+                  onPress={() => setLedgerViewMode("flat")}
+                >
+                  <MaterialIcons
+                    name="view-list"
+                    size={13}
+                    color={ledgerViewMode === "flat" ? "#FFFFFF" : colors.text.muted}
+                  />
+                  <Text
+                    style={[
+                      styles.viewModeBtnText,
+                      ledgerViewMode === "flat" && styles.viewModeBtnTextActive,
+                    ]}
+                  >
+                    Flat
+                  </Text>
+                </Pressable>
+              </View>
+            </View>
+          </View>
+        </View>
+      )}
+    </>
+  );
+
+  const fundListEmpty =
+    activeTab !== "ledger" ? undefined : isLoading ? (
+      <View style={styles.loadingBox}>
+        <ActivityIndicator size="large" color={colors.accent.primary} />
+        <Text style={styles.loadingText}>Synchronizing Fund Stream...</Text>
+      </View>
+    ) : (
+      <View style={styles.emptyBox}>
+        <MaterialIcons name="inbox" size={48} color={colors.text.muted} />
+        <Text style={styles.emptyTitle}>No Fund Movements Found</Text>
+        <Text style={styles.emptySubtitle}>
+          {searchQuery
+            ? "Try clearing your search query"
+            : "Record an inflow, outflow, or change date period."}
+        </Text>
+      </View>
     );
-  };
+
+  const fundListFooter = (
+    <>
+      {activeTab === "ledger" && !isLoading && (
+        <View style={styles.tabContent}>
+          {/* Load More Button for Pagination */}
+          {filteredEntries.length > displayLimit && (
+            <Pressable
+              style={styles.loadMoreBtn}
+              onPress={() => setDisplayLimit((prev) => prev + 50)}
+            >
+              <MaterialIcons name="expand-more" size={18} color={colors.accent.primary} />
+              <Text style={styles.loadMoreBtnText}>
+                Load More ({filteredEntries.length - displayLimit} remaining)
+              </Text>
+            </Pressable>
+          )}
+
+          {/* Quick Summary Sticky Footer */}
+          {filteredEntries.length > 0 && (
+            <View style={styles.ledgerQuickFooter}>
+              <View style={styles.quickFooterItem}>
+                <Text style={styles.quickFooterLabel}>ITEMS</Text>
+                <Text style={styles.quickFooterValue}>{filteredEntries.length}</Text>
+              </View>
+              <View style={styles.quickFooterItem}>
+                <Text style={styles.quickFooterLabel}>INFLOW</Text>
+                <Text style={[styles.quickFooterValue, { color: colors.accent.success }]}>
+                  +{formatCurrency(summary.totalInflow)}
+                </Text>
+              </View>
+              <View style={styles.quickFooterItem}>
+                <Text style={styles.quickFooterLabel}>OUTFLOW</Text>
+                <Text style={[styles.quickFooterValue, { color: colors.accent.danger }]}>
+                  -{formatCurrency(summary.totalOutflow)}
+                </Text>
+              </View>
+              <View style={styles.quickFooterItem}>
+                <Text style={styles.quickFooterLabel}>NET</Text>
+                <Text
+                  style={[
+                    styles.quickFooterValue,
+                    { color: summary.netFlow >= 0 ? colors.accent.success : colors.accent.danger },
+                  ]}
+                >
+                  {summary.netFlow >= 0 ? "+" : ""}
+                  {formatCurrency(summary.netFlow)}
+                </Text>
+              </View>
+            </View>
+          )}
+        </View>
+      )}
+
+      {/* TAB 2: STATEMENT & SOURCES */}
+      {activeTab === "statement" && (
+        <View style={styles.tabContent}>
+          {/* Liquidity Reconciled Box */}
+          <View style={styles.reconCard}>
+            <Text style={styles.reconTitle}>Reconciliation & Closing Balance</Text>
+            <View style={styles.reconRow}>
+              <Text style={styles.reconLabel}>Opening Liquid Funds:</Text>
+              <Text style={styles.reconVal}>
+                {formatCurrency(summary.openingLiquidFunds)}
+              </Text>
+            </View>
+            <View style={styles.reconRow}>
+              <Text style={styles.reconLabel}>(+) Total Inflow Received:</Text>
+              <Text style={[styles.reconVal, { color: colors.accent.success }]}>
+                +{formatCurrency(summary.totalInflow)}
+              </Text>
+            </View>
+            <View style={styles.reconRow}>
+              <Text style={styles.reconLabel}>(-) Total Outflows Paid:</Text>
+              <Text style={[styles.reconVal, { color: colors.accent.danger }]}>
+                -{formatCurrency(summary.totalOutflow)}
+              </Text>
+            </View>
+            <View style={[styles.reconRow, styles.reconRowTotal]}>
+              <Text style={styles.reconLabelTotal}>(=) Closing Liquid Funds:</Text>
+              <Text
+                style={[
+                  styles.reconValTotal,
+                  {
+                    color:
+                      summary.closingLiquidFunds >= 0
+                        ? colors.accent.primary
+                        : colors.accent.danger,
+                  },
+                ]}
+              >
+                {formatCurrency(summary.closingLiquidFunds)}
+              </Text>
+            </View>
+          </View>
+
+          {/* Daily Cash Flow Movement Trend Chart */}
+          <View style={styles.chartCard}>
+            <View style={styles.chartHeader}>
+              <View>
+                <Text style={styles.chartTitle}>Daily Cash Flow Movement</Text>
+                <Text style={styles.chartSubtitle}>
+                  {dateBounds.label} • Inflow vs Outflow
+                </Text>
+              </View>
+              <View style={styles.chartLegendRow}>
+                <View style={styles.legendItem}>
+                  <View style={[styles.legendDot, { backgroundColor: colors.accent.success }]} />
+                  <Text style={styles.legendText}>Inflow</Text>
+                </View>
+                <View style={styles.legendItem}>
+                  <View style={[styles.legendDot, { backgroundColor: colors.accent.danger }]} />
+                  <Text style={styles.legendText}>Outflow</Text>
+                </View>
+              </View>
+            </View>
+
+            {dailyCashFlowData.length === 0 ||
+              dailyCashFlowData.every((p) => p.inflow === 0 && p.outflow === 0) ? (
+              <Text style={styles.chartEmptyText}>No daily movements recorded in this period.</Text>
+            ) : (
+              (() => {
+                const maxVal = Math.max(
+                  ...dailyCashFlowData.map((p) => Math.max(p.inflow, p.outflow)),
+                  1
+                );
+                const maxHeight = 70;
+
+                return (
+                  <ScrollView
+                    horizontal
+                    showsHorizontalScrollIndicator={false}
+                    contentContainerStyle={styles.chartBarsScroll}
+                  >
+                    {dailyCashFlowData.map((pt, pIdx) => {
+                      const inHeight = Math.max(
+                        pt.inflow > 0 ? 4 : 0,
+                        Math.round((pt.inflow / maxVal) * maxHeight)
+                      );
+                      const outHeight = Math.max(
+                        pt.outflow > 0 ? 4 : 0,
+                        Math.round((pt.outflow / maxVal) * maxHeight)
+                      );
+                      return (
+                        <View key={pIdx} style={styles.chartBarCol}>
+                          <View style={[styles.barsPairWrap, { height: maxHeight }]}>
+                            {/* Inflow Bar */}
+                            <View style={styles.barTrackCol}>
+                              {pt.inflow > 0 && (
+                                <View
+                                  style={[
+                                    styles.chartBarFill,
+                                    {
+                                      height: inHeight,
+                                      backgroundColor: colors.accent.success,
+                                    },
+                                  ]}
+                                />
+                              )}
+                            </View>
+                            {/* Outflow Bar */}
+                            <View style={styles.barTrackCol}>
+                              {pt.outflow > 0 && (
+                                <View
+                                  style={[
+                                    styles.chartBarFill,
+                                    {
+                                      height: outHeight,
+                                      backgroundColor: colors.accent.danger,
+                                    },
+                                  ]}
+                                />
+                              )}
+                            </View>
+                          </View>
+                          <Text style={styles.chartDateLabel} numberOfLines={1}>
+                            {pt.dateLabel}
+                          </Text>
+                        </View>
+                      );
+                    })}
+                  </ScrollView>
+                );
+              })()
+            )}
+          </View>
+
+          {/* Sources of Funds Breakdown */}
+          <View style={styles.sectionHead}>
+            <Text style={[styles.sectionTitle, { color: colors.accent.success }]}>
+              Sources of Funds (Inflows)
+            </Text>
+            <Text style={styles.sectionSubtitleText}>
+              {formatCurrency(summary.totalInflow)}
+            </Text>
+          </View>
+
+          {summary.inflowCategories.length === 0 ? (
+            <Text style={styles.noDataText}>No inflows recorded in this period</Text>
+          ) : (
+            summary.inflowCategories.map((cat) => (
+              <View key={cat.category} style={styles.barItem}>
+                <View style={styles.barItemHeader}>
+                  <Text style={styles.barItemTitle}>{cat.category}</Text>
+                  <Text style={styles.barItemAmount}>{formatCurrency(cat.totalAmount)}</Text>
+                </View>
+                <View style={styles.progressBarTrack}>
+                  <View
+                    style={[
+                      styles.progressBarFill,
+                      {
+                        width: `${Math.min(100, Math.max(2, cat.percentage))}%`,
+                        backgroundColor: colors.accent.success,
+                      },
+                    ]}
+                  />
+                </View>
+                <View style={styles.barItemFooter}>
+                  <Text style={styles.barItemMeta}>{cat.count} items</Text>
+                  <Text style={styles.barItemMeta}>{cat.percentage.toFixed(1)}%</Text>
+                </View>
+              </View>
+            ))
+          )}
+
+          {/* Applications of Funds Breakdown */}
+          <View style={[styles.sectionHead, { marginTop: spacing.lg }]}>
+            <Text style={[styles.sectionTitle, { color: colors.accent.danger }]}>
+              Applications of Funds (Outflows)
+            </Text>
+            <Text style={styles.sectionSubtitleText}>
+              {formatCurrency(summary.totalOutflow)}
+            </Text>
+          </View>
+
+          {summary.outflowCategories.length === 0 ? (
+            <Text style={styles.noDataText}>No outflows recorded in this period</Text>
+          ) : (
+            summary.outflowCategories.map((cat) => (
+              <View key={cat.category} style={styles.barItem}>
+                <View style={styles.barItemHeader}>
+                  <Text style={styles.barItemTitle}>{cat.category}</Text>
+                  <Text style={styles.barItemAmount}>{formatCurrency(cat.totalAmount)}</Text>
+                </View>
+                <View style={styles.progressBarTrack}>
+                  <View
+                    style={[
+                      styles.progressBarFill,
+                      {
+                        width: `${Math.min(100, Math.max(2, cat.percentage))}%`,
+                        backgroundColor: colors.accent.danger,
+                      },
+                    ]}
+                  />
+                </View>
+                <View style={styles.barItemFooter}>
+                  <Text style={styles.barItemMeta}>{cat.count} items</Text>
+                  <Text style={styles.barItemMeta}>{cat.percentage.toFixed(1)}%</Text>
+                </View>
+              </View>
+            ))
+          )}
+        </View>
+      )}
+
+      {/* TAB 3: ACCOUNTS */}
+      {activeTab === "accounts" && (
+        <View style={styles.tabContent}>
+          <View style={styles.sectionHead}>
+            <Text style={styles.sectionTitle}>Connected Accounts & Balances</Text>
+            <Pressable onPress={() => setIsAccountsModalOpen(true)}>
+              <Text style={styles.sectionActionText}>+ New Account</Text>
+            </Pressable>
+          </View>
+
+          {fundAccounts.map((acc) => {
+            const balInfo = accountBalances[acc.id] || { balance: 0, inflowTotal: 0, outflowTotal: 0, count: 0 };
+            const netChange = balInfo.inflowTotal - balInfo.outflowTotal;
+            const isLow = balInfo.balance < 5000 && balInfo.balance >= 0;
+            const isNeg = balInfo.balance < 0;
+
+            return (
+              <View key={acc.id} style={styles.accountFullCard}>
+                <View style={styles.accountFullHeader}>
+                  <View style={styles.accountFullTitleWrap}>
+                    <Text style={styles.accountFullName}>{acc.name}</Text>
+                    <View style={styles.tagBadge}>
+                      <Text style={styles.tagBadgeText}>{acc.type.toUpperCase()}</Text>
+                    </View>
+                    {isLow && (
+                      <View style={styles.lowBalBadge}>
+                        <MaterialIcons name="warning" size={10} color="#D97706" />
+                        <Text style={styles.lowBalBadgeText}>Low Liquidity</Text>
+                      </View>
+                    )}
+                    {isNeg && (
+                      <View style={[styles.lowBalBadge, { backgroundColor: colors.accent.danger + "20" }]}>
+                        <MaterialIcons name="error" size={10} color={colors.accent.danger} />
+                        <Text style={[styles.lowBalBadgeText, { color: colors.accent.danger }]}>Negative</Text>
+                      </View>
+                    )}
+                  </View>
+                  <Text
+                    style={[
+                      styles.accountFullBalance,
+                      {
+                        color:
+                          balInfo.balance >= 0 ? colors.accent.primary : colors.accent.danger,
+                      },
+                    ]}
+                  >
+                    {formatCurrency(balInfo.balance)}
+                  </Text>
+                </View>
+
+                <View style={styles.accountFullDetails}>
+                  <Text style={styles.accountDetailItem}>
+                    Opening: {formatCurrency(acc.openingBalance)} • {balInfo.count} Transactions
+                  </Text>
+                  {acc.bankName ? (
+                    <Text style={styles.accountDetailItem}>Bank: {acc.bankName}</Text>
+                  ) : null}
+                  {acc.accountNumber ? (
+                    <Text style={styles.accountDetailItem}>A/C: {acc.accountNumber}</Text>
+                  ) : null}
+                  {acc.upiId ? (
+                    <Text style={styles.accountDetailItem}>UPI: {acc.upiId}</Text>
+                  ) : null}
+                </View>
+
+                <View style={styles.accountFullStats}>
+                  <Text style={styles.accStatGreen}>
+                    Inflows: +{formatCurrency(balInfo.inflowTotal)}
+                  </Text>
+                  <Text style={styles.accStatRed}>
+                    Outflows: -{formatCurrency(balInfo.outflowTotal)}
+                  </Text>
+                  <Text
+                    style={[
+                      styles.accStatNet,
+                      { color: netChange >= 0 ? colors.accent.success : colors.accent.danger },
+                    ]}
+                  >
+                    Net: {netChange >= 0 ? "+" : ""}{formatCurrency(netChange)}
+                  </Text>
+                </View>
+
+                {/* Quick Action Buttons on Account Card */}
+                <View style={styles.accountCardActions}>
+                  <Pressable
+                    style={[styles.accActionBtn, { backgroundColor: colors.accent.success + "15" }]}
+                    onPress={() => handleOpenInflowModal(acc.id)}
+                  >
+                    <MaterialIcons name="add" size={14} color={colors.accent.success} />
+                    <Text style={[styles.accActionText, { color: colors.accent.success }]}>
+                      Deposit
+                    </Text>
+                  </Pressable>
+
+                  <Pressable
+                    style={[styles.accActionBtn, { backgroundColor: colors.accent.danger + "15" }]}
+                    onPress={() => handleOpenOutflowModal(acc.id)}
+                  >
+                    <MaterialIcons name="remove" size={14} color={colors.accent.danger} />
+                    <Text style={[styles.accActionText, { color: colors.accent.danger }]}>
+                      Withdraw
+                    </Text>
+                  </Pressable>
+
+                  <Pressable
+                    style={[styles.accActionBtn, { backgroundColor: colors.accent.info + "15" }]}
+                    onPress={() => handleOpenTransferModal(acc.id)}
+                  >
+                    <MaterialIcons name="swap-horiz" size={14} color={colors.accent.info} />
+                    <Text style={[styles.accActionText, { color: colors.accent.info }]}>
+                      Transfer
+                    </Text>
+                  </Pressable>
+                </View>
+              </View>
+            );
+          })}
+        </View>
+      )}
+    </>
+  );
 
   return (
     <ProtectedRoute>
       <View style={styles.container}>
         {/* Top Header */}
-        <View style={styles.header}>
+        <View style={[styles.header, { paddingTop: Math.max(insets.top + 8, spacing.sm) }]}>
           <BackButton />
           <View style={styles.headerTitleWrap}>
             <Text style={styles.headerTitle}>Fund Flow Management</Text>
@@ -734,940 +1756,25 @@ export default function FundFlowManagementScreen() {
           </View>
         </View>
 
-        <ScrollView
+        <FlatList
           ref={scrollViewRef}
-          contentContainerStyle={styles.scrollContent}
+          data={ledgerListData}
+          keyExtractor={fundKeyExtractor}
+          renderItem={renderFundItem}
+          ListHeaderComponent={fundListHeader}
+          ListEmptyComponent={fundListEmpty}
+          ListFooterComponent={fundListFooter}
+          contentContainerStyle={[styles.scrollContent, { paddingBottom: scrollBottomPadding }]}
           showsVerticalScrollIndicator={false}
           scrollEventThrottle={32}
           onScroll={handleScroll}
           onContentSizeChange={handleContentSizeChange}
+          initialNumToRender={12}
+          maxToRenderPerBatch={12}
+          windowSize={5}
+          removeClippedSubviews={true}
           refreshControl={<RefreshControl refreshing={refreshing} onRefresh={onRefresh} />}
-        >
-          {/* Treasury Accounts Carousel */}
-          <View style={styles.sectionHead}>
-            <Text style={styles.sectionTitle}>Treasury & Liquid Balances</Text>
-            <Pressable onPress={() => setIsAccountsModalOpen(true)}>
-              <Text style={styles.sectionActionText}>Manage Accounts</Text>
-            </Pressable>
-          </View>
-
-          <ScrollView
-            horizontal
-            showsHorizontalScrollIndicator={false}
-            contentContainerStyle={styles.treasuryScroll}
-          >
-            {/* Total Liquid Portfolio Card */}
-            <Pressable
-              style={[
-                styles.treasuryCard,
-                selectedAccountId === "all" && styles.treasuryCardActive,
-                { borderLeftColor: colors.accent.primary, borderLeftWidth: 4 },
-              ]}
-              onPress={() => setSelectedAccountId("all")}
-            >
-              <View style={styles.treasuryCardHeader}>
-                <View style={[styles.accIconWrap, { backgroundColor: colors.accent.primary + "15" }]}>
-                  <MaterialIcons name="account-balance-wallet" size={18} color={colors.accent.primary} />
-                </View>
-                <Text style={styles.accBadge}>All Funds</Text>
-              </View>
-              <Text style={styles.treasuryTitle}>Total Liquid Cash</Text>
-              <Text
-                style={[
-                  styles.treasuryAmount,
-                  { color: totalLiquidBalance >= 0 ? colors.accent.primary : colors.accent.danger },
-                ]}
-              >
-                {formatCurrency(totalLiquidBalance)}
-              </Text>
-              <Text style={styles.treasuryMeta}>{fundAccounts.length} Connected Accounts</Text>
-            </Pressable>
-
-            {/* Individual Accounts */}
-            {fundAccounts.map((acc) => {
-              const accBal = accountBalances[acc.id]?.balance || 0;
-              const isSelected = selectedAccountId === acc.id;
-              const iconName =
-                acc.type === "cash"
-                  ? "payments"
-                  : acc.type === "upi"
-                  ? "qr-code"
-                  : "account-balance";
-              const accColor =
-                acc.type === "cash"
-                  ? colors.accent.success
-                  : acc.type === "upi"
-                  ? "#8B5CF6"
-                  : colors.accent.info;
-
-              return (
-                <Pressable
-                  key={acc.id}
-                  style={[
-                    styles.treasuryCard,
-                    isSelected && styles.treasuryCardActive,
-                    { borderLeftColor: accColor, borderLeftWidth: 4 },
-                  ]}
-                  onPress={() => setSelectedAccountId(isSelected ? "all" : acc.id)}
-                >
-                  <View style={styles.treasuryCardHeader}>
-                    <View style={[styles.accIconWrap, { backgroundColor: accColor + "15" }]}>
-                      <MaterialIcons name={iconName as any} size={18} color={accColor} />
-                    </View>
-                    <View style={styles.treasuryBadgeRow}>
-                      {accBal < 5000 && accBal >= 0 && (
-                        <View style={styles.lowBalBadge}>
-                          <MaterialIcons name="warning" size={10} color="#D97706" />
-                          <Text style={styles.lowBalBadgeText}>Low</Text>
-                        </View>
-                      )}
-                      {accBal < 0 && (
-                        <View style={[styles.lowBalBadge, { backgroundColor: colors.accent.danger + "20" }]}>
-                          <MaterialIcons name="error" size={10} color={colors.accent.danger} />
-                          <Text style={[styles.lowBalBadgeText, { color: colors.accent.danger }]}>Negative</Text>
-                        </View>
-                      )}
-                      <Text style={styles.accBadge}>{acc.type.toUpperCase()}</Text>
-                    </View>
-                  </View>
-                  <Text style={styles.treasuryTitle} numberOfLines={1}>
-                    {acc.name}
-                  </Text>
-                  <Text
-                    style={[
-                      styles.treasuryAmount,
-                      { color: accBal >= 0 ? colors.text.primary : colors.accent.danger },
-                    ]}
-                  >
-                    {formatCurrency(accBal)}
-                  </Text>
-                  <Text style={styles.treasuryMeta}>
-                    Opening: {formatCurrency(acc.openingBalance)}
-                  </Text>
-                </Pressable>
-              );
-            })}
-          </ScrollView>
-
-          {/* Period Selector Pills */}
-          <ScrollView
-            horizontal
-            showsHorizontalScrollIndicator={false}
-            contentContainerStyle={styles.periodPillsContainer}
-          >
-            {PERIOD_LIST.map((p) => {
-              const active = selectedPeriod === p.id;
-              return (
-                <Pressable
-                  key={p.id}
-                  style={[styles.periodPill, active && styles.periodPillActive]}
-                  onPress={() => {
-                    setSelectedPeriod(p.id);
-                    if (p.id === "custom") {
-                      setCalendarTarget("start");
-                    }
-                  }}
-                >
-                  <Text style={[styles.periodPillText, active && styles.periodPillTextActive]}>
-                    {p.label}
-                  </Text>
-                </Pressable>
-              );
-            })}
-          </ScrollView>
-
-          {/* Custom Date Pickers if selected */}
-          {selectedPeriod === "custom" && (
-            <View style={styles.customDateRow}>
-              <Pressable
-                style={styles.customDateBtn}
-                onPress={() => setCalendarTarget("start")}
-              >
-                <MaterialIcons name="event" size={16} color={colors.accent.primary} />
-                <Text style={styles.customDateBtnText}>
-                  From: {customStart ? formatDate(customStart) : "Select"}
-                </Text>
-              </Pressable>
-              <Pressable
-                style={styles.customDateBtn}
-                onPress={() => setCalendarTarget("end")}
-              >
-                <MaterialIcons name="event" size={16} color={colors.accent.primary} />
-                <Text style={styles.customDateBtnText}>
-                  To: {customEnd ? formatDate(customEnd) : "Select"}
-                </Text>
-              </Pressable>
-            </View>
-          )}
-
-          {/* Key Executive Metrics */}
-          <View style={styles.metricGrid}>
-            {/* Net Fund Flow */}
-            <View
-              style={[
-                styles.metricCard,
-                {
-                  borderLeftColor:
-                    summary.netFlow >= 0 ? colors.accent.success : colors.accent.danger,
-                },
-              ]}
-            >
-              <View style={styles.metricRowTop}>
-                <Text style={styles.metricLabel}>Net Fund Flow</Text>
-                <View
-                  style={[
-                    styles.tagBadge,
-                    {
-                      backgroundColor:
-                        (summary.netFlow >= 0 ? colors.accent.success : colors.accent.danger) + "20",
-                    },
-                  ]}
-                >
-                  <Text
-                    style={[
-                      styles.tagBadgeText,
-                      {
-                        color: summary.netFlow >= 0 ? colors.accent.success : colors.accent.danger,
-                      },
-                    ]}
-                  >
-                    {summary.netFlow >= 0 ? "SURPLUS" : "DEFICIT"}
-                  </Text>
-                </View>
-              </View>
-              <Text
-                style={[
-                  styles.metricValueLarge,
-                  {
-                    color: summary.netFlow >= 0 ? colors.accent.success : colors.accent.danger,
-                  },
-                ]}
-              >
-                {summary.netFlow >= 0 ? "+" : ""}
-                {formatCurrency(summary.netFlow)}
-              </Text>
-              <Text style={styles.metricSub}>
-                Coverage: {summary.coverageRatio.toFixed(2)}x inflow vs outflow
-              </Text>
-            </View>
-
-            {/* Inflows, Outflows & Transfers Row */}
-            <View style={styles.metricsRowGrid}>
-              <View
-                style={[
-                  styles.metricCardSmall,
-                  { borderLeftColor: colors.accent.success, borderLeftWidth: 3 },
-                ]}
-              >
-                <View style={styles.miniIconRow}>
-                  <View style={[styles.miniIcon, { backgroundColor: colors.accent.success + "15" }]}>
-                    <MaterialIcons name="arrow-downward" size={14} color={colors.accent.success} />
-                  </View>
-                  <Text style={styles.metricLabelSmall}>Inflows</Text>
-                </View>
-                <Text style={[styles.metricValueSmall, { color: colors.accent.success }]}>
-                  {formatCurrency(summary.totalInflow)}
-                </Text>
-                <Text style={styles.metricCountText}>{summary.inflowCount} Receipts</Text>
-              </View>
-
-              <View
-                style={[
-                  styles.metricCardSmall,
-                  { borderLeftColor: colors.accent.danger, borderLeftWidth: 3 },
-                ]}
-              >
-                <View style={styles.miniIconRow}>
-                  <View style={[styles.miniIcon, { backgroundColor: colors.accent.danger + "15" }]}>
-                    <MaterialIcons name="arrow-upward" size={14} color={colors.accent.danger} />
-                  </View>
-                  <Text style={styles.metricLabelSmall}>Outflows</Text>
-                </View>
-                <Text style={[styles.metricValueSmall, { color: colors.accent.danger }]}>
-                  {formatCurrency(summary.totalOutflow)}
-                </Text>
-                <Text style={styles.metricCountText}>{summary.outflowCount} Payments</Text>
-              </View>
-
-              <View
-                style={[
-                  styles.metricCardSmall,
-                  { borderLeftColor: colors.accent.info, borderLeftWidth: 3 },
-                ]}
-              >
-                <View style={styles.miniIconRow}>
-                  <View style={[styles.miniIcon, { backgroundColor: colors.accent.info + "15" }]}>
-                    <MaterialIcons name="swap-horiz" size={14} color={colors.accent.info} />
-                  </View>
-                  <Text style={styles.metricLabelSmall}>Transfers</Text>
-                </View>
-                <Text style={[styles.metricValueSmall, { color: colors.accent.info }]}>
-                  {formatCurrency(summary.transferVolume)}
-                </Text>
-                <Text style={styles.metricCountText}>{summary.transferCount} Contra</Text>
-              </View>
-            </View>
-          </View>
-
-          {/* Quick Action Buttons */}
-          <View style={styles.quickActionRow}>
-            <Pressable
-              style={[styles.actionBtn, { backgroundColor: colors.accent.success }]}
-              onPress={() => handleOpenInflowModal()}
-            >
-              <MaterialIcons name="add-circle" size={18} color="#FFFFFF" />
-              <Text style={styles.actionBtnText}>+ Inflow</Text>
-            </Pressable>
-
-            <Pressable
-              style={[styles.actionBtn, { backgroundColor: colors.accent.danger }]}
-              onPress={() => handleOpenOutflowModal()}
-            >
-              <MaterialIcons name="remove-circle" size={18} color="#FFFFFF" />
-              <Text style={styles.actionBtnText}>- Outflow</Text>
-            </Pressable>
-
-            <Pressable
-              style={[styles.actionBtn, { backgroundColor: colors.accent.info }]}
-              onPress={() => handleOpenTransferModal()}
-            >
-              <MaterialIcons name="swap-horiz" size={18} color="#FFFFFF" />
-              <Text style={styles.actionBtnText}>Transfer</Text>
-            </Pressable>
-          </View>
-
-          {/* Tab Navigation */}
-          <View style={styles.tabBar}>
-            <Pressable
-              style={[styles.tabItem, activeTab === "ledger" && styles.tabItemActive]}
-              onPress={() => setActiveTab("ledger")}
-            >
-              <MaterialIcons
-                name="receipt-long"
-                size={16}
-                color={activeTab === "ledger" ? colors.accent.primary : colors.text.muted}
-              />
-              <Text
-                style={[styles.tabItemText, activeTab === "ledger" && styles.tabItemTextActive]}
-              >
-                Ledger ({filteredEntries.length})
-              </Text>
-            </Pressable>
-
-            <Pressable
-              style={[styles.tabItem, activeTab === "statement" && styles.tabItemActive]}
-              onPress={() => setActiveTab("statement")}
-            >
-              <MaterialIcons
-                name="analytics"
-                size={16}
-                color={activeTab === "statement" ? colors.accent.primary : colors.text.muted}
-              />
-              <Text
-                style={[styles.tabItemText, activeTab === "statement" && styles.tabItemTextActive]}
-              >
-                Statement & Sources
-              </Text>
-            </Pressable>
-
-            <Pressable
-              style={[styles.tabItem, activeTab === "accounts" && styles.tabItemActive]}
-              onPress={() => setActiveTab("accounts")}
-            >
-              <MaterialIcons
-                name="account-balance"
-                size={16}
-                color={activeTab === "accounts" ? colors.accent.primary : colors.text.muted}
-              />
-              <Text
-                style={[styles.tabItemText, activeTab === "accounts" && styles.tabItemTextActive]}
-              >
-                Accounts ({fundAccounts.length})
-              </Text>
-            </Pressable>
-          </View>
-
-          {/* TAB 1: LEDGER */}
-          {activeTab === "ledger" && (
-            <View style={styles.tabContent}>
-              {/* Search & Movement Type Filter Bar */}
-              <View style={styles.filterBar}>
-                <View style={styles.searchBox}>
-                  <MaterialIcons name="search" size={18} color={colors.text.muted} />
-                  <TextInput
-                    style={styles.searchInput}
-                    placeholder="Search by payee, category, notes, ref..."
-                    placeholderTextColor={colors.text.muted}
-                    value={searchQuery}
-                    onChangeText={setSearchQuery}
-                  />
-                  {searchQuery ? (
-                    <Pressable onPress={() => setSearchQuery("")}>
-                      <MaterialIcons name="close" size={16} color={colors.text.muted} />
-                    </Pressable>
-                  ) : null}
-                </View>
-
-                {/* Inflow / Outflow / Transfer Toggle Chips */}
-                <View style={styles.typeChipsRow}>
-                  {(["all", "inflow", "outflow", "transfer"] as const).map((t) => {
-                    const isCur = typeFilter === t;
-                    const label =
-                      t === "all"
-                        ? "All"
-                        : t === "inflow"
-                        ? "Inflows"
-                        : t === "outflow"
-                        ? "Outflows"
-                        : "Transfers";
-                    return (
-                      <Pressable
-                        key={t}
-                        style={[styles.typeChip, isCur && styles.typeChipActive]}
-                        onPress={() => setTypeFilter(t)}
-                      >
-                        <Text
-                          style={[styles.typeChipText, isCur && styles.typeChipTextActive]}
-                        >
-                          {label}
-                        </Text>
-                      </Pressable>
-                    );
-                  })}
-                </View>
-
-                {/* Dynamic Category Drilldown Chips */}
-                {typeFilter !== "all" && (
-                  <ScrollView
-                    horizontal
-                    showsHorizontalScrollIndicator={false}
-                    contentContainerStyle={styles.categoryChipsScroll}
-                  >
-                    <Pressable
-                      style={[
-                        styles.categoryChip,
-                        selectedCategory === "all" && styles.categoryChipActive,
-                      ]}
-                      onPress={() => setSelectedCategory("all")}
-                    >
-                      <Text
-                        style={[
-                          styles.categoryChipText,
-                          selectedCategory === "all" && styles.categoryChipTextActive,
-                        ]}
-                      >
-                        All Categories
-                      </Text>
-                    </Pressable>
-                    {(typeFilter === "inflow"
-                      ? INFLOW_CATEGORIES
-                      : typeFilter === "outflow"
-                      ? OUTFLOW_CATEGORIES
-                      : TRANSFER_CATEGORIES
-                    ).map((cat) => {
-                      const isCatActive = selectedCategory === cat;
-                      return (
-                        <Pressable
-                          key={cat}
-                          style={[styles.categoryChip, isCatActive && styles.categoryChipActive]}
-                          onPress={() => setSelectedCategory(isCatActive ? "all" : cat)}
-                        >
-                          <Text
-                            style={[
-                              styles.categoryChipText,
-                              isCatActive && styles.categoryChipTextActive,
-                            ]}
-                          >
-                            {cat}
-                          </Text>
-                        </Pressable>
-                      );
-                    })}
-                  </ScrollView>
-                )}
-
-                {/* Ledger Controls Bar: Count & View Switch */}
-                <View style={styles.ledgerControlsRow}>
-                  <Text style={styles.ledgerCountText}>
-                    {filteredEntries.length} {filteredEntries.length === 1 ? "transaction" : "transactions"}
-                    {selectedCategory !== "all" ? ` • ${selectedCategory}` : ""}
-                  </Text>
-
-                  <View style={styles.viewModeToggleWrap}>
-                    <Pressable
-                      style={[
-                        styles.viewModeBtn,
-                        ledgerViewMode === "grouped" && styles.viewModeBtnActive,
-                      ]}
-                      onPress={() => setLedgerViewMode("grouped")}
-                    >
-                      <MaterialIcons
-                        name="view-agenda"
-                        size={13}
-                        color={ledgerViewMode === "grouped" ? "#FFFFFF" : colors.text.muted}
-                      />
-                      <Text
-                        style={[
-                          styles.viewModeBtnText,
-                          ledgerViewMode === "grouped" && styles.viewModeBtnTextActive,
-                        ]}
-                      >
-                        By Date
-                      </Text>
-                    </Pressable>
-
-                    <Pressable
-                      style={[
-                        styles.viewModeBtn,
-                        ledgerViewMode === "flat" && styles.viewModeBtnActive,
-                      ]}
-                      onPress={() => setLedgerViewMode("flat")}
-                    >
-                      <MaterialIcons
-                        name="view-list"
-                        size={13}
-                        color={ledgerViewMode === "flat" ? "#FFFFFF" : colors.text.muted}
-                      />
-                      <Text
-                        style={[
-                          styles.viewModeBtnText,
-                          ledgerViewMode === "flat" && styles.viewModeBtnTextActive,
-                        ]}
-                      >
-                        Flat
-                      </Text>
-                    </Pressable>
-                  </View>
-                </View>
-              </View>
-
-              {/* Transactions Stream List */}
-              {isLoading ? (
-                <View style={styles.loadingBox}>
-                  <ActivityIndicator size="large" color={colors.accent.primary} />
-                  <Text style={styles.loadingText}>Synchronizing Fund Stream...</Text>
-                </View>
-              ) : filteredEntries.length === 0 ? (
-                <View style={styles.emptyBox}>
-                  <MaterialIcons name="inbox" size={48} color={colors.text.muted} />
-                  <Text style={styles.emptyTitle}>No Fund Movements Found</Text>
-                  <Text style={styles.emptySubtitle}>
-                    {searchQuery
-                      ? "Try clearing your search query"
-                      : "Record an inflow, outflow, or change date period."}
-                  </Text>
-                </View>
-              ) : ledgerViewMode === "grouped" ? (
-                // Grouped by Date View
-                dateGroupedEntries.map((group) => (
-                  <View key={group.dateKey} style={styles.dateGroupContainer}>
-                    <View style={styles.dateGroupHeader}>
-                      <View style={styles.dateGroupTitleRow}>
-                        <MaterialIcons name="event" size={13} color={colors.text.muted} />
-                        <Text style={styles.dateGroupTitle}>{group.dateLabel}</Text>
-                        <Text style={styles.dateGroupCount}>({group.entries.length})</Text>
-                      </View>
-                      <View style={styles.dateGroupTotalsRow}>
-                        {group.totalInflow > 0 && (
-                          <Text style={styles.dayInflowText}>
-                            +{formatCurrency(group.totalInflow)}
-                          </Text>
-                        )}
-                        {group.totalOutflow > 0 && (
-                          <Text style={styles.dayOutflowText}>
-                            -{formatCurrency(group.totalOutflow)}
-                          </Text>
-                        )}
-                      </View>
-                    </View>
-                    {group.entries.map((item, i) => renderEntryCard(item, i))}
-                  </View>
-                ))
-              ) : (
-                // Flat View
-                displayedEntries.map((item, idx) => renderEntryCard(item, idx))
-              )}
-
-              {/* Load More Button for Pagination */}
-              {filteredEntries.length > displayLimit && (
-                <Pressable
-                  style={styles.loadMoreBtn}
-                  onPress={() => setDisplayLimit((prev) => prev + 50)}
-                >
-                  <MaterialIcons name="expand-more" size={18} color={colors.accent.primary} />
-                  <Text style={styles.loadMoreBtnText}>
-                    Load More ({filteredEntries.length - displayLimit} remaining)
-                  </Text>
-                </Pressable>
-              )}
-
-              {/* Quick Summary Sticky Footer */}
-              {filteredEntries.length > 0 && (
-                <View style={styles.ledgerQuickFooter}>
-                  <View style={styles.quickFooterItem}>
-                    <Text style={styles.quickFooterLabel}>ITEMS</Text>
-                    <Text style={styles.quickFooterValue}>{filteredEntries.length}</Text>
-                  </View>
-                  <View style={styles.quickFooterItem}>
-                    <Text style={styles.quickFooterLabel}>INFLOW</Text>
-                    <Text style={[styles.quickFooterValue, { color: colors.accent.success }]}>
-                      +{formatCurrency(summary.totalInflow)}
-                    </Text>
-                  </View>
-                  <View style={styles.quickFooterItem}>
-                    <Text style={styles.quickFooterLabel}>OUTFLOW</Text>
-                    <Text style={[styles.quickFooterValue, { color: colors.accent.danger }]}>
-                      -{formatCurrency(summary.totalOutflow)}
-                    </Text>
-                  </View>
-                  <View style={styles.quickFooterItem}>
-                    <Text style={styles.quickFooterLabel}>NET</Text>
-                    <Text
-                      style={[
-                        styles.quickFooterValue,
-                        { color: summary.netFlow >= 0 ? colors.accent.success : colors.accent.danger },
-                      ]}
-                    >
-                      {summary.netFlow >= 0 ? "+" : ""}
-                      {formatCurrency(summary.netFlow)}
-                    </Text>
-                  </View>
-                </View>
-              )}
-            </View>
-          )}
-
-          {/* TAB 2: STATEMENT & SOURCES */}
-          {activeTab === "statement" && (
-            <View style={styles.tabContent}>
-              {/* Liquidity Reconciled Box */}
-              <View style={styles.reconCard}>
-                <Text style={styles.reconTitle}>Reconciliation & Closing Balance</Text>
-                <View style={styles.reconRow}>
-                  <Text style={styles.reconLabel}>Opening Liquid Funds:</Text>
-                  <Text style={styles.reconVal}>
-                    {formatCurrency(summary.openingLiquidFunds)}
-                  </Text>
-                </View>
-                <View style={styles.reconRow}>
-                  <Text style={styles.reconLabel}>(+) Total Inflow Received:</Text>
-                  <Text style={[styles.reconVal, { color: colors.accent.success }]}>
-                    +{formatCurrency(summary.totalInflow)}
-                  </Text>
-                </View>
-                <View style={styles.reconRow}>
-                  <Text style={styles.reconLabel}>(-) Total Outflows Paid:</Text>
-                  <Text style={[styles.reconVal, { color: colors.accent.danger }]}>
-                    -{formatCurrency(summary.totalOutflow)}
-                  </Text>
-                </View>
-                <View style={[styles.reconRow, styles.reconRowTotal]}>
-                  <Text style={styles.reconLabelTotal}>(=) Closing Liquid Funds:</Text>
-                  <Text
-                    style={[
-                      styles.reconValTotal,
-                      {
-                        color:
-                          summary.closingLiquidFunds >= 0
-                            ? colors.accent.primary
-                            : colors.accent.danger,
-                      },
-                    ]}
-                  >
-                    {formatCurrency(summary.closingLiquidFunds)}
-                  </Text>
-                </View>
-              </View>
-
-              {/* Daily Cash Flow Movement Trend Chart */}
-              <View style={styles.chartCard}>
-                <View style={styles.chartHeader}>
-                  <View>
-                    <Text style={styles.chartTitle}>Daily Cash Flow Movement</Text>
-                    <Text style={styles.chartSubtitle}>
-                      {dateBounds.label} • Inflow vs Outflow
-                    </Text>
-                  </View>
-                  <View style={styles.chartLegendRow}>
-                    <View style={styles.legendItem}>
-                      <View style={[styles.legendDot, { backgroundColor: colors.accent.success }]} />
-                      <Text style={styles.legendText}>Inflow</Text>
-                    </View>
-                    <View style={styles.legendItem}>
-                      <View style={[styles.legendDot, { backgroundColor: colors.accent.danger }]} />
-                      <Text style={styles.legendText}>Outflow</Text>
-                    </View>
-                  </View>
-                </View>
-
-                {dailyCashFlowData.length === 0 ||
-                dailyCashFlowData.every((p) => p.inflow === 0 && p.outflow === 0) ? (
-                  <Text style={styles.chartEmptyText}>No daily movements recorded in this period.</Text>
-                ) : (
-                  (() => {
-                    const maxVal = Math.max(
-                      ...dailyCashFlowData.map((p) => Math.max(p.inflow, p.outflow)),
-                      1
-                    );
-                    const maxHeight = 70;
-
-                    return (
-                      <ScrollView
-                        horizontal
-                        showsHorizontalScrollIndicator={false}
-                        contentContainerStyle={styles.chartBarsScroll}
-                      >
-                        {dailyCashFlowData.map((pt, pIdx) => {
-                          const inHeight = Math.max(
-                            pt.inflow > 0 ? 4 : 0,
-                            Math.round((pt.inflow / maxVal) * maxHeight)
-                          );
-                          const outHeight = Math.max(
-                            pt.outflow > 0 ? 4 : 0,
-                            Math.round((pt.outflow / maxVal) * maxHeight)
-                          );
-                          return (
-                            <View key={pIdx} style={styles.chartBarCol}>
-                              <View style={[styles.barsPairWrap, { height: maxHeight }]}>
-                                {/* Inflow Bar */}
-                                <View style={styles.barTrackCol}>
-                                  {pt.inflow > 0 && (
-                                    <View
-                                      style={[
-                                        styles.chartBarFill,
-                                        {
-                                          height: inHeight,
-                                          backgroundColor: colors.accent.success,
-                                        },
-                                      ]}
-                                    />
-                                  )}
-                                </View>
-                                {/* Outflow Bar */}
-                                <View style={styles.barTrackCol}>
-                                  {pt.outflow > 0 && (
-                                    <View
-                                      style={[
-                                        styles.chartBarFill,
-                                        {
-                                          height: outHeight,
-                                          backgroundColor: colors.accent.danger,
-                                        },
-                                      ]}
-                                    />
-                                  )}
-                                </View>
-                              </View>
-                              <Text style={styles.chartDateLabel} numberOfLines={1}>
-                                {pt.dateLabel}
-                              </Text>
-                            </View>
-                          );
-                        })}
-                      </ScrollView>
-                    );
-                  })()
-                )}
-              </View>
-
-              {/* Sources of Funds Breakdown */}
-              <View style={styles.sectionHead}>
-                <Text style={[styles.sectionTitle, { color: colors.accent.success }]}>
-                  Sources of Funds (Inflows)
-                </Text>
-                <Text style={styles.sectionSubtitleText}>
-                  {formatCurrency(summary.totalInflow)}
-                </Text>
-              </View>
-
-              {summary.inflowCategories.length === 0 ? (
-                <Text style={styles.noDataText}>No inflows recorded in this period</Text>
-              ) : (
-                summary.inflowCategories.map((cat) => (
-                  <View key={cat.category} style={styles.barItem}>
-                    <View style={styles.barItemHeader}>
-                      <Text style={styles.barItemTitle}>{cat.category}</Text>
-                      <Text style={styles.barItemAmount}>{formatCurrency(cat.totalAmount)}</Text>
-                    </View>
-                    <View style={styles.progressBarTrack}>
-                      <View
-                        style={[
-                          styles.progressBarFill,
-                          {
-                            width: `${Math.min(100, Math.max(2, cat.percentage))}%`,
-                            backgroundColor: colors.accent.success,
-                          },
-                        ]}
-                      />
-                    </View>
-                    <View style={styles.barItemFooter}>
-                      <Text style={styles.barItemMeta}>{cat.count} items</Text>
-                      <Text style={styles.barItemMeta}>{cat.percentage.toFixed(1)}%</Text>
-                    </View>
-                  </View>
-                ))
-              )}
-
-              {/* Applications of Funds Breakdown */}
-              <View style={[styles.sectionHead, { marginTop: spacing.lg }]}>
-                <Text style={[styles.sectionTitle, { color: colors.accent.danger }]}>
-                  Applications of Funds (Outflows)
-                </Text>
-                <Text style={styles.sectionSubtitleText}>
-                  {formatCurrency(summary.totalOutflow)}
-                </Text>
-              </View>
-
-              {summary.outflowCategories.length === 0 ? (
-                <Text style={styles.noDataText}>No outflows recorded in this period</Text>
-              ) : (
-                summary.outflowCategories.map((cat) => (
-                  <View key={cat.category} style={styles.barItem}>
-                    <View style={styles.barItemHeader}>
-                      <Text style={styles.barItemTitle}>{cat.category}</Text>
-                      <Text style={styles.barItemAmount}>{formatCurrency(cat.totalAmount)}</Text>
-                    </View>
-                    <View style={styles.progressBarTrack}>
-                      <View
-                        style={[
-                          styles.progressBarFill,
-                          {
-                            width: `${Math.min(100, Math.max(2, cat.percentage))}%`,
-                            backgroundColor: colors.accent.danger,
-                          },
-                        ]}
-                      />
-                    </View>
-                    <View style={styles.barItemFooter}>
-                      <Text style={styles.barItemMeta}>{cat.count} items</Text>
-                      <Text style={styles.barItemMeta}>{cat.percentage.toFixed(1)}%</Text>
-                    </View>
-                  </View>
-                ))
-              )}
-            </View>
-          )}
-
-          {/* TAB 3: ACCOUNTS */}
-          {activeTab === "accounts" && (
-            <View style={styles.tabContent}>
-              <View style={styles.sectionHead}>
-                <Text style={styles.sectionTitle}>Connected Accounts & Balances</Text>
-                <Pressable onPress={() => setIsAccountsModalOpen(true)}>
-                  <Text style={styles.sectionActionText}>+ New Account</Text>
-                </Pressable>
-              </View>
-
-              {fundAccounts.map((acc) => {
-                const balInfo = accountBalances[acc.id] || { balance: 0, inflowTotal: 0, outflowTotal: 0, count: 0 };
-                const netChange = balInfo.inflowTotal - balInfo.outflowTotal;
-                const isLow = balInfo.balance < 5000 && balInfo.balance >= 0;
-                const isNeg = balInfo.balance < 0;
-
-                return (
-                  <View key={acc.id} style={styles.accountFullCard}>
-                    <View style={styles.accountFullHeader}>
-                      <View style={styles.accountFullTitleWrap}>
-                        <Text style={styles.accountFullName}>{acc.name}</Text>
-                        <View style={styles.tagBadge}>
-                          <Text style={styles.tagBadgeText}>{acc.type.toUpperCase()}</Text>
-                        </View>
-                        {isLow && (
-                          <View style={styles.lowBalBadge}>
-                            <MaterialIcons name="warning" size={10} color="#D97706" />
-                            <Text style={styles.lowBalBadgeText}>Low Liquidity</Text>
-                          </View>
-                        )}
-                        {isNeg && (
-                          <View style={[styles.lowBalBadge, { backgroundColor: colors.accent.danger + "20" }]}>
-                            <MaterialIcons name="error" size={10} color={colors.accent.danger} />
-                            <Text style={[styles.lowBalBadgeText, { color: colors.accent.danger }]}>Negative</Text>
-                          </View>
-                        )}
-                      </View>
-                      <Text
-                        style={[
-                          styles.accountFullBalance,
-                          {
-                            color:
-                              balInfo.balance >= 0 ? colors.accent.primary : colors.accent.danger,
-                          },
-                        ]}
-                      >
-                        {formatCurrency(balInfo.balance)}
-                      </Text>
-                    </View>
-
-                    <View style={styles.accountFullDetails}>
-                      <Text style={styles.accountDetailItem}>
-                        Opening: {formatCurrency(acc.openingBalance)} • {balInfo.count} Transactions
-                      </Text>
-                      {acc.bankName ? (
-                        <Text style={styles.accountDetailItem}>Bank: {acc.bankName}</Text>
-                      ) : null}
-                      {acc.accountNumber ? (
-                        <Text style={styles.accountDetailItem}>A/C: {acc.accountNumber}</Text>
-                      ) : null}
-                      {acc.upiId ? (
-                        <Text style={styles.accountDetailItem}>UPI: {acc.upiId}</Text>
-                      ) : null}
-                    </View>
-
-                    <View style={styles.accountFullStats}>
-                      <Text style={styles.accStatGreen}>
-                        Inflows: +{formatCurrency(balInfo.inflowTotal)}
-                      </Text>
-                      <Text style={styles.accStatRed}>
-                        Outflows: -{formatCurrency(balInfo.outflowTotal)}
-                      </Text>
-                      <Text
-                        style={[
-                          styles.accStatNet,
-                          { color: netChange >= 0 ? colors.accent.success : colors.accent.danger },
-                        ]}
-                      >
-                        Net: {netChange >= 0 ? "+" : ""}{formatCurrency(netChange)}
-                      </Text>
-                    </View>
-
-                    {/* Quick Action Buttons on Account Card */}
-                    <View style={styles.accountCardActions}>
-                      <Pressable
-                        style={[styles.accActionBtn, { backgroundColor: colors.accent.success + "15" }]}
-                        onPress={() => handleOpenInflowModal(acc.id)}
-                      >
-                        <MaterialIcons name="add" size={14} color={colors.accent.success} />
-                        <Text style={[styles.accActionText, { color: colors.accent.success }]}>
-                          Deposit
-                        </Text>
-                      </Pressable>
-
-                      <Pressable
-                        style={[styles.accActionBtn, { backgroundColor: colors.accent.danger + "15" }]}
-                        onPress={() => handleOpenOutflowModal(acc.id)}
-                      >
-                        <MaterialIcons name="remove" size={14} color={colors.accent.danger} />
-                        <Text style={[styles.accActionText, { color: colors.accent.danger }]}>
-                          Withdraw
-                        </Text>
-                      </Pressable>
-
-                      <Pressable
-                        style={[styles.accActionBtn, { backgroundColor: colors.accent.info + "15" }]}
-                        onPress={() => handleOpenTransferModal(acc.id)}
-                      >
-                        <MaterialIcons name="swap-horiz" size={14} color={colors.accent.info} />
-                        <Text style={[styles.accActionText, { color: colors.accent.info }]}>
-                          Transfer
-                        </Text>
-                      </Pressable>
-                    </View>
-                  </View>
-                );
-              })}
-            </View>
-          )}
-        </ScrollView>
+        />
 
         {/* ─── MODAL 1: RECORD INFLOW ─── */}
         <Modal
@@ -1676,8 +1783,8 @@ export default function FundFlowManagementScreen() {
           animationType="slide"
           onRequestClose={() => setIsInflowModalOpen(false)}
         >
-          <View style={styles.modalOverlay}>
-            <View style={styles.modalContent}>
+          <KeyboardAvoidingView behavior={kavBehavior} style={styles.modalOverlay}>
+            <View style={[styles.modalContent, { paddingBottom: Math.max(insets.bottom + 12, spacing.md) }]}>
               <View style={styles.modalHeader}>
                 <Text style={styles.modalTitle}>Record Fund Inflow (+)</Text>
                 <Pressable onPress={() => setIsInflowModalOpen(false)}>
@@ -1806,7 +1913,7 @@ export default function FundFlowManagementScreen() {
                 </Pressable>
               </View>
             </View>
-          </View>
+          </KeyboardAvoidingView>
         </Modal>
 
         {/* ─── MODAL 2: RECORD OUTFLOW ─── */}
@@ -1816,8 +1923,8 @@ export default function FundFlowManagementScreen() {
           animationType="slide"
           onRequestClose={() => setIsOutflowModalOpen(false)}
         >
-          <View style={styles.modalOverlay}>
-            <View style={styles.modalContent}>
+          <KeyboardAvoidingView behavior={kavBehavior} style={styles.modalOverlay}>
+            <View style={[styles.modalContent, { paddingBottom: Math.max(insets.bottom + 12, spacing.md) }]}>
               <View style={styles.modalHeader}>
                 <Text style={styles.modalTitle}>Record Fund Outflow (-)</Text>
                 <Pressable onPress={() => setIsOutflowModalOpen(false)}>
@@ -1949,7 +2056,7 @@ export default function FundFlowManagementScreen() {
                 </Pressable>
               </View>
             </View>
-          </View>
+          </KeyboardAvoidingView>
         </Modal>
 
         {/* ─── MODAL 3: CONTRA TRANSFER ─── */}
@@ -1959,8 +2066,8 @@ export default function FundFlowManagementScreen() {
           animationType="slide"
           onRequestClose={() => setIsTransferModalOpen(false)}
         >
-          <View style={styles.modalOverlay}>
-            <View style={styles.modalContent}>
+          <KeyboardAvoidingView behavior={kavBehavior} style={styles.modalOverlay}>
+            <View style={[styles.modalContent, { paddingBottom: Math.max(insets.bottom + 12, spacing.md) }]}>
               <View style={styles.modalHeader}>
                 <Text style={styles.modalTitle}>Contra Fund Transfer (⇄)</Text>
                 <Pressable onPress={() => setIsTransferModalOpen(false)}>
@@ -2098,7 +2205,7 @@ export default function FundFlowManagementScreen() {
                 </Pressable>
               </View>
             </View>
-          </View>
+          </KeyboardAvoidingView>
         </Modal>
 
         {/* ─── MODAL 4: MANAGE ACCOUNTS ─── */}
@@ -2108,8 +2215,8 @@ export default function FundFlowManagementScreen() {
           animationType="slide"
           onRequestClose={() => setIsAccountsModalOpen(false)}
         >
-          <View style={styles.modalOverlay}>
-            <View style={styles.modalContent}>
+          <KeyboardAvoidingView behavior={kavBehavior} style={styles.modalOverlay}>
+            <View style={[styles.modalContent, { paddingBottom: Math.max(insets.bottom + 12, spacing.md) }]}>
               <View style={styles.modalHeader}>
                 <Text style={styles.modalTitle}>Manage Treasury Accounts</Text>
                 <Pressable onPress={() => setIsAccountsModalOpen(false)}>
@@ -2256,7 +2363,7 @@ export default function FundFlowManagementScreen() {
                 </Pressable>
               </View>
             </View>
-          </View>
+          </KeyboardAvoidingView>
         </Modal>
 
         {/* ─── MODAL 5: TRANSACTION DETAILS ─── */}
@@ -2266,8 +2373,8 @@ export default function FundFlowManagementScreen() {
           animationType="fade"
           onRequestClose={() => setSelectedEntry(null)}
         >
-          <View style={styles.modalOverlay}>
-            <View style={styles.modalContent}>
+          <KeyboardAvoidingView behavior={kavBehavior} style={styles.modalOverlay}>
+            <View style={[styles.modalContent, { paddingBottom: Math.max(insets.bottom + 12, spacing.md) }]}>
               {selectedEntry && (
                 <>
                   <View style={styles.modalHeader}>
@@ -2290,16 +2397,16 @@ export default function FundFlowManagementScreen() {
                               selectedEntry.type === "inflow"
                                 ? colors.accent.success
                                 : selectedEntry.type === "transfer"
-                                ? colors.accent.info
-                                : colors.accent.danger,
+                                  ? colors.accent.info
+                                  : colors.accent.danger,
                           },
                         ]}
                       >
                         {selectedEntry.type === "inflow"
                           ? "+"
                           : selectedEntry.type === "transfer"
-                          ? "⇄"
-                          : "-"}
+                            ? "⇄"
+                            : "-"}
                         {formatCurrency(selectedEntry.amount)}
                       </Text>
                       <Text style={styles.detailTitle}>{selectedEntry.title}</Text>
@@ -2362,7 +2469,7 @@ export default function FundFlowManagementScreen() {
                 </>
               )}
             </View>
-          </View>
+          </KeyboardAvoidingView>
         </Modal>
 
         {/* ─── MODAL 6: EXPORT & SHARE ─── */}
@@ -2372,8 +2479,8 @@ export default function FundFlowManagementScreen() {
           animationType="slide"
           onRequestClose={() => setIsExportModalOpen(false)}
         >
-          <View style={styles.modalOverlay}>
-            <View style={styles.modalContent}>
+          <KeyboardAvoidingView behavior={kavBehavior} style={styles.modalOverlay}>
+            <View style={[styles.modalContent, { paddingBottom: Math.max(insets.bottom + 12, spacing.md) }]}>
               <View style={styles.modalHeader}>
                 <Text style={styles.modalTitle}>Export & Share Statement</Text>
                 <Pressable onPress={() => setIsExportModalOpen(false)}>
@@ -2488,7 +2595,7 @@ export default function FundFlowManagementScreen() {
                 </Pressable>
               </View>
             </View>
-          </View>
+          </KeyboardAvoidingView>
         </Modal>
 
         {/* ─── CALENDAR MODALS ─── */}
@@ -2756,10 +2863,14 @@ const getStyles = (theme: any) =>
     },
     metricsRowGrid: {
       flexDirection: "row",
-      gap: 6,
+      flexWrap: "wrap",
+      rowGap: 8,
+      gap: 8,
     },
     metricCardSmall: {
-      flex: 1,
+      flexGrow: 1,
+      flexBasis: "30%",
+      minWidth: 102,
       backgroundColor: theme.colors.bg.surface,
       borderRadius: theme.radius.md,
       padding: theme.spacing.sm + 4,
@@ -3054,6 +3165,9 @@ const getStyles = (theme: any) =>
       gap: theme.spacing.sm,
       marginBottom: 6,
       ...theme.shadows.sm,
+    },
+    entryCardFlatSpacing: {
+      marginBottom: theme.spacing.sm,
     },
     entryIconBox: {
       width: 36,
@@ -3416,6 +3530,9 @@ const getStyles = (theme: any) =>
       backgroundColor: theme.colors.bg.surface,
       borderTopLeftRadius: theme.radius.lg,
       borderTopRightRadius: theme.radius.lg,
+      width: "100%",
+      maxWidth: 560,
+      alignSelf: "center",
       maxHeight: "88%",
       padding: theme.spacing.md,
       ...theme.shadows.lg,

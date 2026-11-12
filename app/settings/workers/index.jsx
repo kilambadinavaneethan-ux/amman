@@ -5,6 +5,7 @@ import { useContext, useEffect, useMemo, useState } from "react";
 import {
     ActivityIndicator,
     Alert,
+    KeyboardAvoidingView,
     Modal,
     Pressable,
     RefreshControl,
@@ -20,6 +21,7 @@ import { useTheme } from "../../context/ThemeContext";
 import { WorkerContext } from "../../context/WorkerContext";
 import { db, normalizeDateValue } from "../../../src/config/firebase";
 import { useScrollRestoration } from "../../context/ScrollContext";
+import { useResponsive } from "../../../utils/responsive";
 
 const STATUS_FILTERS = [
   { label: "All Workers", value: "All" },
@@ -39,6 +41,7 @@ const ROLE_ICONS = {
 function UnifiedWorkerManagement() {
   const { theme } = useTheme();
   const { colors, spacing, radius, shadows } = theme;
+  const { insets, kavBehavior, bottomFabOffset, scrollBottomPadding } = useResponsive();
   const styles = useMemo(() => getStyles(theme), [theme]);
   const { scrollViewRef, handleScroll, handleContentSizeChange } = useScrollRestoration("/settings/workers");
   const router = useRouter();
@@ -265,7 +268,7 @@ function UnifiedWorkerManagement() {
   return (
     <View style={styles.root}>
       {/* Header */}
-      <View style={styles.header}>
+      <View style={[styles.header, { paddingTop: Math.max(insets.top + 8, 16) }]}>
         <View style={styles.headerTop}>
           <BackButton label="Settings" onPress={() => router.push("/settings")} />
           {activeTab === "regular" && (
@@ -294,7 +297,7 @@ function UnifiedWorkerManagement() {
             style={[styles.statCard, { borderLeftColor: colors.accent.danger }]}
           >
             <Text style={styles.statLabel}>Total Liability</Text>
-            <Text style={[styles.statValue, { color: colors.accent.danger }]}>
+            <Text style={[styles.statValue, { color: colors.accent.danger }]} numberOfLines={1} adjustsFontSizeToFit minimumFontScale={0.75}>
               ₹{liabilityStats.regularLiability.toLocaleString("en-IN")}
             </Text>
           </View>
@@ -411,7 +414,7 @@ function UnifiedWorkerManagement() {
       ) : (
         <ScrollView
           ref={scrollViewRef}
-          contentContainerStyle={styles.listScrollContent}
+          contentContainerStyle={[styles.listScrollContent, { paddingBottom: scrollBottomPadding + 68 }]}
           scrollEventThrottle={32}
           onScroll={handleScroll}
           onContentSizeChange={handleContentSizeChange}
@@ -681,7 +684,7 @@ function UnifiedWorkerManagement() {
       {/* Floating Action Button (Only visible in Workers directory tab) */}
       {activeTab === "regular" && (
         <Pressable
-          style={({ pressed }) => [styles.fab, pressed && styles.fabPressed]}
+          style={({ pressed }) => [styles.fab, { bottom: bottomFabOffset }, pressed && styles.fabPressed]}
           onPress={() => router.push("/settings/workers/add")}
         >
           <MaterialIcons name="person-add" size={26} color={colors.bg.card} />
@@ -695,13 +698,13 @@ function UnifiedWorkerManagement() {
         transparent={true}
         onRequestClose={handleClosePaymentModal}
       >
-        <View style={styles.modalBackdrop}>
+        <KeyboardAvoidingView behavior={kavBehavior} style={styles.modalBackdrop}>
           <Pressable
             style={styles.modalFlexSpacer}
             onPress={handleClosePaymentModal}
           />
 
-          <View style={styles.modalContent}>
+          <View style={[styles.modalContent, { paddingBottom: Math.max(insets.bottom + 12, 20) }]}>
             <View style={styles.modalContentHeader}>
               <Text style={styles.modalTitleText}>💸 Record Payout</Text>
               <Pressable onPress={handleClosePaymentModal}>
@@ -830,7 +833,7 @@ function UnifiedWorkerManagement() {
               </ScrollView>
             )}
           </View>
-        </View>
+        </KeyboardAvoidingView>
       </Modal>
     </View>
   );
@@ -1147,7 +1150,10 @@ const getStyles = (theme) => {
       backgroundColor: colors.bg.card,
       borderTopLeftRadius: 24,
       borderTopRightRadius: 24,
-      maxHeight: "85%",
+      width: "100%",
+      maxWidth: 560,
+      alignSelf: "center",
+      maxHeight: "88%",
       padding: 20,
       shadowColor: colors.text.primary,
       shadowOffset: { width: 0, height: -10 },

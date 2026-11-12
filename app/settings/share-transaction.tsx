@@ -2,7 +2,9 @@ import React, { useEffect, useState } from 'react';
 import {
   ActivityIndicator,
   Alert,
+  KeyboardAvoidingView,
   Modal,
+  Platform,
   Pressable,
   ScrollView,
   StyleSheet,
@@ -18,6 +20,7 @@ import * as ImagePicker from 'expo-image-picker';
 import { listLocalImages, saveImageToLocalFolder, LocalImageFile } from '../../src/services/localImageStorageService';
 import { useTheme } from '../context/ThemeContext';
 import ProtectedRoute from '../components/ProtectedRoute';
+import { useResponsive } from '../../utils/responsive';
 import { DEFAULT_SHARE_SETTINGS, ShareFormat, ShareSettings, TransactionData, BankAccount } from '../../src/types/sharing';
 import { shareSettingsService } from '../../src/services/sharing/shareSettingsService';
 import { TransactionShareBottomSheet } from '../../src/components/sharing/TransactionShareBottomSheet';
@@ -109,6 +112,7 @@ function ShareTransactionSettingsScreen() {
   const router = useRouter();
   const { theme } = useTheme();
   const { colors } = theme;
+  const { kavBehavior, insets } = useResponsive();
 
   const [settings, setSettings] = useState<ShareSettings>(DEFAULT_SHARE_SETTINGS);
   const [loading, setLoading] = useState(true);
@@ -381,7 +385,7 @@ function ShareTransactionSettingsScreen() {
     <ProtectedRoute>
       <View style={[styles.container, { backgroundColor: colors.bg.primary }]}>
         {/* Top App Bar */}
-        <View style={[styles.appBar, { backgroundColor: cardBg, borderBottomColor: borderColor }]}>
+        <View style={[styles.appBar, { backgroundColor: cardBg, borderBottomColor: borderColor, paddingTop: Math.max(insets.top + 8, 16) }]}>
           <Pressable onPress={() => router.back()} style={styles.iconBtn}>
             <MaterialIcons name="arrow-back" size={24} color={textColor} />
           </Pressable>
@@ -1257,8 +1261,8 @@ function ShareTransactionSettingsScreen() {
         />
         {/* Local Image Storage Modal for QR Selection */}
         <Modal visible={localImagesModalVisible} animationType="slide" transparent onRequestClose={() => setLocalImagesModalVisible(false)}>
-          <View style={styles.modalOverlay}>
-            <View style={[styles.modalContainer, { backgroundColor: cardBg, borderColor, maxWidth: 500, width: '90%' }]}>
+          <KeyboardAvoidingView behavior={kavBehavior} style={styles.modalOverlay}>
+            <View style={[styles.modalContainer, { backgroundColor: cardBg, borderColor, maxWidth: 480, width: '92%', maxHeight: '88%' }]}>
               <View style={[styles.modalHeader, { borderBottomColor: borderColor }]}>
                 <View style={{ flexDirection: 'row', alignItems: 'center', gap: 8 }}>
                   <MaterialIcons name="folder-special" size={22} color={colors.accent.primary} />
@@ -1304,7 +1308,7 @@ function ShareTransactionSettingsScreen() {
                 )}
               </ScrollView>
             </View>
-          </View>
+          </KeyboardAvoidingView>
         </Modal>
 
         {/* Bank Account Modal */}
@@ -1314,8 +1318,9 @@ function ShareTransactionSettingsScreen() {
           animationType="fade"
           onRequestClose={() => setBankModalVisible(false)}
         >
-          <View style={styles.modalOverlay}>
-            <View style={[styles.modalContainer, { backgroundColor: cardBg, borderColor, width: '90%', maxWidth: 420 }]}>
+          <KeyboardAvoidingView behavior={kavBehavior} style={styles.modalOverlay}>
+            <View style={[styles.modalContainer, { backgroundColor: cardBg, borderColor, width: '92%', maxWidth: 440, maxHeight: '88%' }]}>
+              <ScrollView showsVerticalScrollIndicator={false} keyboardShouldPersistTaps="handled">
               <View style={styles.modalHeader}>
                 <Text style={[styles.modalTitle, { color: textColor }]}>
                   {editingBankAccountId ? 'Edit Bank Account' : 'Add Bank Account'}
@@ -1387,8 +1392,9 @@ function ShareTransactionSettingsScreen() {
                   <Text style={styles.saveBtnText}>{editingBankAccountId ? 'Save Changes' : 'Add Account'}</Text>
                 </Pressable>
               </View>
+              </ScrollView>
             </View>
-          </View>
+          </KeyboardAvoidingView>
         </Modal>
       </View>
     </ProtectedRoute>

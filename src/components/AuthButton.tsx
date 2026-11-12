@@ -24,7 +24,9 @@ export default function AuthButton({ title, onPress, loading = false, style }: A
       {loading ? (
         <ActivityIndicator size="small" color={colors.bg.card} />
       ) : (
-        <Text style={styles.text}>{title}</Text>
+        <Text style={styles.text} numberOfLines={1} adjustsFontSizeToFit minimumFontScale={0.85}>
+          {title}
+        </Text>
       )}
     </Pressable>
   );

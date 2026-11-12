@@ -9,10 +9,11 @@ import {
   TextInput,
   ActivityIndicator,
   Alert,
-  Dimensions,
+  KeyboardAvoidingView,
   Platform,
   Clipboard,
 } from 'react-native';
+import { useSafeAreaInsets } from 'react-native-safe-area-context';
 import { MaterialIcons } from '@expo/vector-icons';
 import { captureRef } from 'react-native-view-shot';
 import * as Sharing from 'expo-sharing';
@@ -52,6 +53,7 @@ export function DeliveryPartnerShareModal({
   initialDateFilter = 'all',
 }: DeliveryPartnerShareModalProps) {
   const { theme } = useTheme();
+  const insets = useSafeAreaInsets();
   const { colors, isDark } = theme;
   const styles = useMemo(() => getStyles(theme), [theme]);
 
@@ -298,7 +300,10 @@ export function DeliveryPartnerShareModal({
 
   return (
     <Modal visible={visible} transparent animationType="slide" onRequestClose={onClose}>
-      <View style={styles.modalBg}>
+      <KeyboardAvoidingView
+        behavior={Platform.OS === 'ios' ? 'padding' : 'height'}
+        style={styles.modalBg}
+      >
         <View style={styles.sheetContainer}>
           {/* Header */}
           <View style={styles.sheetHeader}>
@@ -391,7 +396,11 @@ export function DeliveryPartnerShareModal({
           </View>
 
           {/* Body Content by Active Tab */}
-          <ScrollView style={styles.bodyScroll} contentContainerStyle={{ paddingBottom: 24 }}>
+          <ScrollView
+            style={styles.bodyScroll}
+            contentContainerStyle={{ paddingBottom: Math.max(insets.bottom + 16, 24) }}
+            keyboardShouldPersistTaps="handled"
+          >
             {/* ────────── TAB 1: WHATSAPP / TEXT ────────── */}
             {activeTab === 'TEXT' && (
               <View style={styles.tabContent}>
@@ -662,26 +671,28 @@ export function DeliveryPartnerShareModal({
                   {/* Financial Grid */}
                   <View style={styles.imageCardMetricsGrid}>
                     <View style={styles.imageCardMetric}>
-                      <Text style={styles.imageCardMetricLabel}>TRIPS</Text>
-                      <Text style={styles.imageCardMetricVal}>{filteredData.summary.totalTrips}</Text>
+                      <Text style={styles.imageCardMetricLabel} maxFontSizeMultiplier={1.15}>TRIPS</Text>
+                      <Text style={styles.imageCardMetricVal} numberOfLines={1} adjustsFontSizeToFit minimumFontScale={0.75}>
+                        {filteredData.summary.totalTrips}
+                      </Text>
                     </View>
                     <View style={styles.imageCardMetric}>
-                      <Text style={styles.imageCardMetricLabel}>EARNINGS</Text>
-                      <Text style={[styles.imageCardMetricVal, { color: '#16A34A' }]}>
+                      <Text style={styles.imageCardMetricLabel} maxFontSizeMultiplier={1.15}>EARNINGS</Text>
+                      <Text style={[styles.imageCardMetricVal, { color: '#16A34A' }]} numberOfLines={1} adjustsFontSizeToFit minimumFontScale={0.75}>
                         ₹{filteredData.summary.totalPayable.toLocaleString('en-IN')}
                       </Text>
                     </View>
                     {filteredData.summary.totalBonuses > 0 && (
                       <View style={styles.imageCardMetric}>
-                        <Text style={styles.imageCardMetricLabel}>BONUS</Text>
-                        <Text style={[styles.imageCardMetricVal, { color: '#8B5CF6' }]}>
+                        <Text style={styles.imageCardMetricLabel} maxFontSizeMultiplier={1.15}>BONUS</Text>
+                        <Text style={[styles.imageCardMetricVal, { color: '#8B5CF6' }]} numberOfLines={1} adjustsFontSizeToFit minimumFontScale={0.75}>
                           +₹{filteredData.summary.totalBonuses.toLocaleString('en-IN')}
                         </Text>
                       </View>
                     )}
                     <View style={styles.imageCardMetric}>
-                      <Text style={styles.imageCardMetricLabel}>PAID</Text>
-                      <Text style={styles.imageCardMetricVal}>
+                      <Text style={styles.imageCardMetricLabel} maxFontSizeMultiplier={1.15}>PAID</Text>
+                      <Text style={styles.imageCardMetricVal} numberOfLines={1} adjustsFontSizeToFit minimumFontScale={0.75}>
                         ₹{filteredData.summary.totalPaid.toLocaleString('en-IN')}
                       </Text>
                     </View>
@@ -701,7 +712,12 @@ export function DeliveryPartnerShareModal({
                         ? 'NET SETTLEMENT DUE TO PARTNER'
                         : 'NET DELIVERY DUE TO PARTNER'}
                     </Text>
-                    <Text style={[styles.imageCardBalanceVal, { color: isAdvance ? '#059669' : '#DC2626' }]}>
+                    <Text
+                      style={[styles.imageCardBalanceVal, { color: isAdvance ? '#059669' : '#DC2626' }]}
+                      numberOfLines={1}
+                      adjustsFontSizeToFit
+                      minimumFontScale={0.75}
+                    >
                       ₹{Math.abs(filteredData.summary.netPending).toLocaleString('en-IN', { minimumFractionDigits: 2 })}
                     </Text>
                   </View>
@@ -783,7 +799,7 @@ export function DeliveryPartnerShareModal({
             )}
           </ScrollView>
         </View>
-      </View>
+      </KeyboardAvoidingView>
     </Modal>
   );
 }
@@ -800,8 +816,10 @@ function getStyles(theme: any) {
       backgroundColor: colors.bg.card,
       borderTopLeftRadius: 24,
       borderTopRightRadius: 24,
-      maxHeight: '92%',
+      maxHeight: '90%',
       width: '100%',
+      maxWidth: 560,
+      alignSelf: 'center',
       shadowColor: '#000',
       shadowOffset: { width: 0, height: -3 },
       shadowOpacity: 0.15,
@@ -1069,11 +1087,13 @@ function getStyles(theme: any) {
       flexDirection: 'row',
       justifyContent: 'space-between',
       alignItems: 'center',
+      gap: 8,
     },
     imageCardCompany: {
       fontSize: 16,
       fontWeight: '800',
       color: colors.text.primary,
+      flexShrink: 1,
     },
     imageCardCompanySub: {
       fontSize: 11,
@@ -1125,11 +1145,13 @@ function getStyles(theme: any) {
     },
     imageCardMetricsGrid: {
       flexDirection: 'row',
+      flexWrap: 'wrap',
       gap: 6,
       marginBottom: 10,
     },
     imageCardMetric: {
       flex: 1,
+      minWidth: 72,
       backgroundColor: colors.bg.primary,
       borderRadius: 8,
       padding: 6,

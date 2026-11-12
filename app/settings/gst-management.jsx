@@ -1,5 +1,6 @@
 import React, { useState, useMemo, useContext, useEffect, useCallback } from "react";
 import { useTheme } from "../context/ThemeContext";
+import { useResponsive } from "../../utils/responsive";
 import { AlarmContext } from "../context/AlarmContext";
 import {
   View,
@@ -11,6 +12,7 @@ import {
   ActivityIndicator,
   TextInput,
   Alert,
+  KeyboardAvoidingView,
   Modal,
 } from "react-native";
 import Animated, { FadeInDown } from "react-native-reanimated";
@@ -95,6 +97,7 @@ const MONTHS = [
 function GSTManagementScreen() {
   const { theme } = useTheme();
   const { colors } = theme;
+  const { insets, kavBehavior, hp, scrollBottomPadding } = useResponsive();
   const styles = useMemo(() => getStyles(theme), [theme]);
   const router = useRouter();
   const { addAlarm, alarms, deleteAlarm, updateAlarm } = useContext(AlarmContext);
@@ -516,7 +519,14 @@ function GSTManagementScreen() {
   const completedItems = upcomingDueDates.filter((d) => d.isCompleted);
 
   return (
-    <ScrollView contentContainerStyle={styles.container} showsVerticalScrollIndicator={false} keyboardShouldPersistTaps="handled">
+    <ScrollView
+      contentContainerStyle={[
+        styles.container,
+        { paddingTop: Math.max(insets.top + 8, theme.spacing.lg), paddingBottom: scrollBottomPadding },
+      ]}
+      showsVerticalScrollIndicator={false}
+      keyboardShouldPersistTaps="handled"
+    >
       {/* Header */}
       <View style={styles.header}>
         <BackButton label="Settings" onPress={() => router.push("/settings")} style={{ marginBottom: 12 }} />
@@ -1064,7 +1074,7 @@ function GSTManagementScreen() {
 
       {/* ─── Edit Due Day Modal ─── */}
       <Modal visible={editModalVisible} transparent animationType="fade" onRequestClose={() => setEditModalVisible(false)}>
-        <View style={styles.modalOverlay}>
+        <KeyboardAvoidingView behavior={kavBehavior} style={styles.modalOverlay}>
           <View style={styles.modalContent}>
             <View style={styles.modalHeader}>
               <Text style={styles.modalTitle}>
@@ -1095,12 +1105,12 @@ function GSTManagementScreen() {
               </Pressable>
             </View>
           </View>
-        </View>
+        </KeyboardAvoidingView>
       </Modal>
 
       {/* ─── Add Custom Reminder Modal ─── */}
       <Modal visible={addReminderModal} transparent animationType="slide" onRequestClose={() => setAddReminderModal(false)}>
-        <View style={styles.modalOverlay}>
+        <KeyboardAvoidingView behavior={kavBehavior} style={styles.modalOverlay}>
           <View style={styles.modalContent}>
             <View style={styles.modalHeader}>
               <Text style={styles.modalTitle}>Add Custom Reminder</Text>
@@ -1109,6 +1119,7 @@ function GSTManagementScreen() {
               </Pressable>
             </View>
 
+            <ScrollView style={{ maxHeight: Math.round(hp(62)) }} showsVerticalScrollIndicator={false} keyboardShouldPersistTaps="handled">
             <Text style={styles.inputLabel}>Title *</Text>
             <TextInput
               style={styles.modalInput}
@@ -1166,8 +1177,9 @@ function GSTManagementScreen() {
                 <Text style={styles.modalSaveText}>Add Reminder</Text>
               </Pressable>
             </View>
+            </ScrollView>
           </View>
-        </View>
+        </KeyboardAvoidingView>
       </Modal>
     </ScrollView>
   );
@@ -2031,8 +2043,9 @@ const getStyles = (theme) => {
       backgroundColor: colors.bg.card,
       borderRadius: radius.xl,
       padding: spacing.xl,
-      width: "100%",
-      maxWidth: 400,
+      width: "92%",
+      maxWidth: 440,
+      maxHeight: "88%",
       borderWidth: 1,
       borderColor: colors.border.subtle,
       ...shadows.elevated,

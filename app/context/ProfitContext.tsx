@@ -7,109 +7,215 @@ import {
   writeBatch,
   Timestamp,
 } from "firebase/firestore";
-import { createContext, useContext, useEffect, useState, useMemo, useCallback } from "react";
+import {
+  createContext,
+  useCallback,
+  useContext,
+  useEffect,
+  useMemo,
+  useState,
+  type ReactNode,
+} from "react";
 import { useDeferredInit } from "../../hooks/useDeferredInit";
-import { db } from "../../src/config/firebase";
-import { OrderContext } from "./OrderContext";
+import { db, normalizeDateValue } from "../../src/config/firebase";
+import type { DateInput } from "../../src/types/models";
+import { roundCurrency } from "../../utils/currency";
 import { ExpenseContext } from "./ExpenseContext";
 import { ItemContext } from "./ItemContext";
+import { OrderContext } from "./OrderContext";
 
-export const ProfitContext = createContext(null);
+export interface ProfitTransaction {
+  id: string;
+  orderId: string;
+  customerId?: string;
+  itemId?: string;
+  sellingPrice: number;
+  costPrice: number;
+  quantity: number;
+  grossProfit: number;
+  deliveryCost: number;
+  netProfit: number;
+  createdAt: Date;
+  [key: string]: unknown;
+}
 
-export function ProfitProvider({ children }) {
-  const { orders, loading: loadingOrders } = useContext(OrderContext);
-  const { expenses, loading: loadingExpenses } = useContext(ExpenseContext);
+export interface ProfitSummaryDoc {
+  id: string;
+  date: Date;
+  totalSales: number;
+  totalExpenses: number;
+  totalDeliveryCost: number;
+  grossProfit: number;
+  netProfit: number;
+  [key: string]: unknown;
+}
+
+export interface PeriodProfitMetric {
+  sales: number;
+  expenses: number;
+  delivery: number;
+  gross: number;
+  net: number;
+}
+
+export interface DashboardProfitMetrics {
+  today: PeriodProfitMetric;
+  weekly: PeriodProfitMetric;
+  monthly: PeriodProfitMetric;
+  yearly: PeriodProfitMetric;
+  allTime: PeriodProfitMetric;
+}
+
+export interface ProfitContextType {
+  transactions: ProfitTransaction[];
+  summaries: ProfitSummaryDoc[];
+  loading: boolean;
+  syncing: boolean;
+  dashboardMetrics: DashboardProfitMetrics;
+  forceRecalculate: () => Promise<void>;
+}
+
+const EMPTY_METRIC: PeriodProfitMetric = {
+  sales: 0,
+  expenses: 0,
+  delivery: 0,
+  gross: 0,
+  net: 0,
+};
+
+export const ProfitContext = createContext<ProfitContextType>({
+  transactions: [],
+  summaries: [],
+  loading: true,
+  syncing: false,
+  dashboardMetrics: {
+    today: { ...EMPTY_METRIC },
+    weekly: { ...EMPTY_METRIC },
+    monthly: { ...EMPTY_METRIC },
+    yearly: { ...EMPTY_METRIC },
+    allTime: { ...EMPTY_METRIC },
+  },
+  forceRecalculate: async () => {},
+});
+
+// Helper to convert date value to YYYY-MM-DD string locally
+function formatDateKey(date: DateInput): string {
+  if (!date) return "";
+  const d = date instanceof Date ? date : normalizeDateValue(date);
+  if (isNaN(d.getTime())) return "";
+  const yyyy = d.getFullYear();
+  const mm = String(d.getMonth() + 1).padStart(2, "0");
+  const dd = String(d.getDate()).padStart(2, "0");
+  return `${yyyy}-${mm}-${dd}`;
+}
+
+export function ProfitProvider({ children }: { children: ReactNode }) {
+  const { orders, loading: loadingOrders } = useContext(OrderContext) as any;
+  const { expenses, loading: loadingExpenses } = useContext(ExpenseContext) as any;
   const { items, loading: loadingItems } = useContext(ItemContext);
+
   const finishedProducts = useMemo(() => {
     return items ? items.filter((i) => i.itemType !== "raw_material") : [];
   }, [items]);
 
-  const [dbTransactions, setDbTransactions] = useState([]);
-  const [dbSummaries, setDbSummaries] = useState([]);
-  const [loadingTxs, setLoadingTxs] = useState(true);
-  const [loadingSummaries, setLoadingSummaries] = useState(true);
-  const [syncing, setSyncing] = useState(false);
+  const [dbTransactions, setDbTransactions] = useState<ProfitTransaction[]>([]);
+  const [dbSummaries, setDbSummaries] = useState<ProfitSummaryDoc[]>([]);
+  const [loadingTxs, setLoadingTxs] = useState<boolean>(true);
+  const [loadingSummaries, setLoadingSummaries] = useState<boolean>(true);
+  const [syncing, setSyncing] = useState<boolean>(false);
 
   // Defer Firestore listeners to reduce startup load
   const _deferReady = useDeferredInit();
 
   // 1. Listen to profitTransactions from Firestore
   useEffect(() => {
-    if (!_deferReady) { setLoadingTxs(false); return; }
+    if (!_deferReady) {
+      setLoadingTxs(false);
+      return;
+    }
     setLoadingTxs(true);
     const txRef = collection(db, "profitTransactions");
     const q = query(txRef, orderBy("createdAt", "desc"));
     const unsubscribe = onSnapshot(
       q,
       (snapshot) => {
-        const data = snapshot.docs.map((docObj) => ({
-          id: docObj.id,
-          ...docObj.data(),
-          createdAt: docObj.data().createdAt?.toDate ? docObj.data().createdAt.toDate() : new Date(),
-        }));
+        const data = snapshot.docs.map((docObj) => {
+          const raw = docObj.data();
+          return {
+            id: docObj.id,
+            ...raw,
+            createdAt: raw.createdAt?.toDate ? raw.createdAt.toDate() : new Date(),
+          } as ProfitTransaction;
+        });
         setDbTransactions(data);
         setLoadingTxs(false);
       },
-      (error) => {
+      () => {
         setLoadingTxs(false);
-      }
+      },
     );
     return () => unsubscribe();
   }, [_deferReady]);
 
   // 2. Listen to profitSummary from Firestore
   useEffect(() => {
-    if (!_deferReady) { setLoadingSummaries(false); return; }
+    if (!_deferReady) {
+      setLoadingSummaries(false);
+      return;
+    }
     setLoadingSummaries(true);
     const summaryRef = collection(db, "profitSummary");
     const q = query(summaryRef, orderBy("date", "desc"));
     const unsubscribe = onSnapshot(
       q,
       (snapshot) => {
-        const data = snapshot.docs.map((docObj) => ({
-          id: docObj.id,
-          ...docObj.data(),
-          date: docObj.data().date?.toDate ? docObj.data().date.toDate() : new Date(),
-        }));
+        const data = snapshot.docs.map((docObj) => {
+          const raw = docObj.data();
+          return {
+            id: docObj.id,
+            ...raw,
+            date: raw.date?.toDate ? raw.date.toDate() : new Date(),
+          } as ProfitSummaryDoc;
+        });
         setDbSummaries(data);
         setLoadingSummaries(false);
       },
-      (error) => {
+      () => {
         setLoadingSummaries(false);
-      }
+      },
     );
     return () => unsubscribe();
   }, [_deferReady]);
 
-  // Helper to convert date object to YYYY-MM-DD string locally
-  const formatDateKey = (date) => {
-    if (!date) return "";
-    const d = new Date(date);
-    const yyyy = d.getFullYear();
-    const mm = String(d.getMonth() + 1).padStart(2, "0");
-    const dd = String(d.getDate()).padStart(2, "0");
-    return `${yyyy}-${mm}-${dd}`;
-  };
-
   // 3. Background synchronization logic
   // Triggered whenever orders, expenses, items, or DB transactions are loaded/updated.
   useEffect(() => {
-    if (loadingOrders || loadingExpenses || loadingItems || loadingTxs || loadingSummaries || syncing) {
+    if (
+      loadingOrders ||
+      loadingExpenses ||
+      loadingItems ||
+      loadingTxs ||
+      loadingSummaries ||
+      syncing
+    ) {
       return;
     }
 
     const runSync = async () => {
       setSyncing(true);
       try {
-        const completedOrders = orders.filter((o) => o.status === "completed");
-        const activeOrderIds = new Set(orders.map((o) => o.id));
+        const ordersList: any[] = orders || [];
+        const expensesList: any[] = expenses || [];
+
+        const completedOrders = ordersList.filter((o) => o.status === "completed");
+        const activeOrderIds = new Set(ordersList.map((o) => o.id));
         const completedOrderIds = new Set(completedOrders.map((o) => o.id));
 
         // ────────────────────────────────────────────────────────
         // STEP A: Delete orphan or cancelled order transactions
         // ────────────────────────────────────────────────────────
         const txsToDelete = dbTransactions.filter(
-          (tx) => !activeOrderIds.has(tx.orderId) || !completedOrderIds.has(tx.orderId)
+          (tx) => !activeOrderIds.has(tx.orderId) || !completedOrderIds.has(tx.orderId),
         );
 
         if (txsToDelete.length > 0) {
@@ -125,21 +231,33 @@ export function ProfitProvider({ children }) {
         // ────────────────────────────────────────────────────────
         for (const order of completedOrders) {
           const existingTxs = dbTransactions.filter((tx) => tx.orderId === order.id);
-          const orderItems = order.items || [];
-          const expectedTxs = [];
+          const orderItems: any[] = order.items || [];
+          const expectedTxs: Array<{
+            orderId: string;
+            customerId: string;
+            itemId: string;
+            sellingPrice: number;
+            costPrice: number;
+            quantity: number;
+            grossProfit: number;
+            deliveryCost: number;
+            netProfit: number;
+          }> = [];
 
           if (orderItems.length > 0) {
             orderItems.forEach((itm) => {
               const matchedItem = finishedProducts.find((i) => i.id === itm.itemId);
-              const costPrice = Number(matchedItem ? matchedItem.costPrice : 0);
+              const costPrice = Number(matchedItem ? matchedItem.costPrice || 0 : 0);
               const sellingPrice = Number(itm.rate || 0);
               const quantity = Number(itm.quantity || 0);
-              const grossProfit = (sellingPrice - costPrice) * quantity;
+              const grossProfit = roundCurrency((sellingPrice - costPrice) * quantity);
 
               const itemGrossTotal = quantity * sellingPrice;
               const orderGrossTotal = Number(order.grossTotal || order.total || 1);
-              const deliveryCost = (itemGrossTotal / orderGrossTotal) * Number(order.shipmentCharge || 0);
-              const netProfit = grossProfit - deliveryCost;
+              const deliveryCost = roundCurrency(
+                (itemGrossTotal / orderGrossTotal) * Number(order.shipmentCharge || 0),
+              );
+              const netProfit = roundCurrency(grossProfit - deliveryCost);
 
               expectedTxs.push({
                 orderId: order.id,
@@ -156,12 +274,12 @@ export function ProfitProvider({ children }) {
           } else {
             // Fallback for single-item order structures
             const matchedItem = finishedProducts.find((i) => i.id === order.itemId);
-            const costPrice = Number(matchedItem ? matchedItem.costPrice : 0);
+            const costPrice = Number(matchedItem ? matchedItem.costPrice || 0 : 0);
             const sellingPrice = Number(order.rate || 0);
             const quantity = Number(order.quantity || 0);
-            const grossProfit = (sellingPrice - costPrice) * quantity;
-            const deliveryCost = Number(order.shipmentCharge || 0);
-            const netProfit = grossProfit - deliveryCost;
+            const grossProfit = roundCurrency((sellingPrice - costPrice) * quantity);
+            const deliveryCost = roundCurrency(Number(order.shipmentCharge || 0));
+            const netProfit = roundCurrency(grossProfit - deliveryCost);
 
             expectedTxs.push({
               orderId: order.id,
@@ -214,8 +332,16 @@ export function ProfitProvider({ children }) {
         // ────────────────────────────────────────────────────────
         // STEP C: Roll up and aggregate daily summaries
         // ────────────────────────────────────────────────────────
-        // Compute daily totals locally from expected/current synced states
-        const dailyData = {};
+        const dailyData: Record<
+          string,
+          {
+            sales: number;
+            expenses: number;
+            delivery: number;
+            gross: number;
+            dateObj: Date;
+          }
+        > = {};
 
         // Aggregate from dbTransactions (current Firestore records)
         dbTransactions.forEach((tx) => {
@@ -231,16 +357,17 @@ export function ProfitProvider({ children }) {
               expenses: 0,
               delivery: 0,
               gross: 0,
-              dateObj: tx.createdAt,
+              dateObj:
+                tx.createdAt instanceof Date ? tx.createdAt : normalizeDateValue(tx.createdAt),
             };
           }
-          dailyData[dateStr].sales += (tx.sellingPrice * tx.quantity);
+          dailyData[dateStr].sales += tx.sellingPrice * tx.quantity;
           dailyData[dateStr].delivery += tx.deliveryCost;
           dailyData[dateStr].gross += tx.grossProfit;
         });
 
         // Integrate Expenses
-        expenses.forEach((exp) => {
+        expensesList.forEach((exp) => {
           const dateStr = formatDateKey(exp.expenseDate);
           if (!dateStr) return;
 
@@ -250,7 +377,10 @@ export function ProfitProvider({ children }) {
               expenses: 0,
               delivery: 0,
               gross: 0,
-              dateObj: exp.expenseDate,
+              dateObj:
+                exp.expenseDate instanceof Date
+                  ? exp.expenseDate
+                  : normalizeDateValue(exp.expenseDate),
             };
           }
           dailyData[dateStr].expenses += Number(exp.totalAmount || exp.amount || 0);
@@ -262,16 +392,19 @@ export function ProfitProvider({ children }) {
 
         Object.keys(dailyData).forEach((dateStr) => {
           const day = dailyData[dateStr];
-          const grossProfit = day.gross;
-          const netProfit = grossProfit - day.expenses - day.delivery;
+          const grossProfit = roundCurrency(day.gross);
+          const totalSales = roundCurrency(day.sales);
+          const totalExpenses = roundCurrency(day.expenses);
+          const totalDeliveryCost = roundCurrency(day.delivery);
+          const netProfit = roundCurrency(grossProfit - totalExpenses - totalDeliveryCost);
 
           const existingSum = dbSummaries.find((s) => s.id === dateStr);
 
           const isDiff =
             !existingSum ||
-            Math.abs(existingSum.totalSales - day.sales) > 0.1 ||
-            Math.abs(existingSum.totalExpenses - day.expenses) > 0.1 ||
-            Math.abs(existingSum.totalDeliveryCost - day.delivery) > 0.1 ||
+            Math.abs(existingSum.totalSales - totalSales) > 0.1 ||
+            Math.abs(existingSum.totalExpenses - totalExpenses) > 0.1 ||
+            Math.abs(existingSum.totalDeliveryCost - totalDeliveryCost) > 0.1 ||
             Math.abs(existingSum.grossProfit - grossProfit) > 0.1 ||
             Math.abs(existingSum.netProfit - netProfit) > 0.1;
 
@@ -280,11 +413,11 @@ export function ProfitProvider({ children }) {
             const summaryDocRef = doc(db, "profitSummary", dateStr);
             batch.set(summaryDocRef, {
               date: Timestamp.fromDate(day.dateObj),
-              totalSales: Number(day.sales),
-              totalExpenses: Number(day.expenses),
-              totalDeliveryCost: Number(day.delivery),
-              grossProfit: Number(grossProfit),
-              netProfit: Number(netProfit),
+              totalSales,
+              totalExpenses,
+              totalDeliveryCost,
+              grossProfit,
+              netProfit,
             });
           }
         });
@@ -300,7 +433,8 @@ export function ProfitProvider({ children }) {
         if (summaryNeedsCommit) {
           await batch.commit();
         }
-      } catch (err) {
+      } catch {
+        // Sync errors will retry on next snapshot change
       } finally {
         setSyncing(false);
       }
@@ -312,36 +446,38 @@ export function ProfitProvider({ children }) {
 
     return () => clearTimeout(timer);
     // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, [orders, expenses, finishedProducts, dbTransactions, dbSummaries, loadingOrders, loadingExpenses, loadingItems, loadingTxs, loadingSummaries]);
+  }, [
+    orders,
+    expenses,
+    finishedProducts,
+    dbTransactions,
+    dbSummaries,
+    loadingOrders,
+    loadingExpenses,
+    loadingItems,
+    loadingTxs,
+    loadingSummaries,
+  ]);
 
   // 4. Force manual recalculation (for Pull-to-refresh)
   const forceRecalculate = useCallback(async () => {
-    // Simply sets loaded state to trigger effect
     setDbTransactions((prev) => [...prev]);
     setDbSummaries((prev) => [...prev]);
   }, []);
 
   // 5. Dashboard Metrics Computation
-  // Computes relative metrics for Today, Week, Month, Year
-  const dashboardMetrics = useMemo(() => {
+  const dashboardMetrics = useMemo<DashboardProfitMetrics>(() => {
     const now = new Date();
     const todayStr = formatDateKey(now);
 
-    // Helper for start of week (last Sunday)
-    const getStartOfWeek = () => {
-      const d = new Date(now);
-      const day = d.getDay();
-      const diff = d.getDate() - day;
-      return new Date(d.setDate(diff));
-    };
-
-    const startOfWeek = getStartOfWeek();
+    const startOfWeek = new Date(now);
+    startOfWeek.setDate(startOfWeek.getDate() - startOfWeek.getDay());
     startOfWeek.setHours(0, 0, 0, 0);
 
     const startOfMonth = new Date(now.getFullYear(), now.getMonth(), 1);
     const startOfYear = new Date(now.getFullYear(), 0, 1);
 
-    const metrics = {
+    const metrics: DashboardProfitMetrics = {
       today: { sales: 0, expenses: 0, delivery: 0, gross: 0, net: 0 },
       weekly: { sales: 0, expenses: 0, delivery: 0, gross: 0, net: 0 },
       monthly: { sales: 0, expenses: 0, delivery: 0, gross: 0, net: 0 },
@@ -384,8 +520,9 @@ export function ProfitProvider({ children }) {
     });
 
     // Calculate expenses
-    expenses.forEach((exp) => {
-      const expDate = exp.expenseDate;
+    ((expenses as any[]) || []).forEach((exp) => {
+      const expDate =
+        exp.expenseDate instanceof Date ? exp.expenseDate : normalizeDateValue(exp.expenseDate);
       const expVal = Number(exp.totalAmount || exp.amount || 0);
 
       const isToday = formatDateKey(expDate) === todayStr;
@@ -401,17 +538,24 @@ export function ProfitProvider({ children }) {
     });
 
     // Compute Net Profit = Gross Profit - Expenses - Delivery Cost
-    const periods = ["today", "weekly", "monthly", "yearly", "allTime"];
+    const periods = ["today", "weekly", "monthly", "yearly", "allTime"] as const;
     periods.forEach((p) => {
-      metrics[p].net = metrics[p].gross - metrics[p].expenses - metrics[p].delivery;
+      metrics[p].sales = roundCurrency(metrics[p].sales);
+      metrics[p].expenses = roundCurrency(metrics[p].expenses);
+      metrics[p].delivery = roundCurrency(metrics[p].delivery);
+      metrics[p].gross = roundCurrency(metrics[p].gross);
+      metrics[p].net = roundCurrency(
+        metrics[p].gross - metrics[p].expenses - metrics[p].delivery,
+      );
     });
 
     return metrics;
   }, [dbTransactions, expenses]);
 
-  const profitLoading = loadingTxs || loadingSummaries || loadingOrders || loadingExpenses || loadingItems;
+  const profitLoading =
+    loadingTxs || loadingSummaries || loadingOrders || loadingExpenses || loadingItems;
 
-  const contextValue = useMemo(
+  const contextValue = useMemo<ProfitContextType>(
     () => ({
       transactions: dbTransactions,
       summaries: dbSummaries,
@@ -420,7 +564,14 @@ export function ProfitProvider({ children }) {
       dashboardMetrics,
       forceRecalculate,
     }),
-    [dbTransactions, dbSummaries, profitLoading, syncing, dashboardMetrics, forceRecalculate]
+    [
+      dbTransactions,
+      dbSummaries,
+      profitLoading,
+      syncing,
+      dashboardMetrics,
+      forceRecalculate,
+    ],
   );
 
   return (

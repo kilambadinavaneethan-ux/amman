@@ -18,6 +18,7 @@ import { doc, setDoc, serverTimestamp } from "firebase/firestore";
 import { signup, loginWithGoogle } from "../services/authService";
 import { db } from "../config/firebase";
 import { colors, radius, spacing, shadows } from "../theme/theme";
+import { useResponsive } from "../../utils/responsive";
 import AuthInput from "../components/AuthInput";
 import AuthButton from "../components/AuthButton";
 import GoogleButton from "../components/GoogleButton";
@@ -35,6 +36,7 @@ function isGoogleSigninAvailable(): boolean {
 export default function SignupScreen() {
   const router = useRouter();
   const insets = useSafeAreaInsets();
+  const { kavBehavior, isSmallDevice, ms } = useResponsive();
 
   // Form states
   const [fullName, setFullName] = useState("");
@@ -211,13 +213,14 @@ export default function SignupScreen() {
 
   return (
     <KeyboardAvoidingView
-      behavior={Platform.OS === "ios" ? "padding" : undefined}
+      behavior={kavBehavior}
       style={{ flex: 1, backgroundColor: colors.bg.primary }}
     >
       <ScrollView
         contentContainerStyle={[
           styles.container,
           {
+            paddingHorizontal: isSmallDevice ? spacing.md : spacing.lg,
             paddingTop: Math.max(insets.top + 16, 24),
             paddingBottom: Math.max(insets.bottom + 16, 24),
           },
@@ -225,7 +228,13 @@ export default function SignupScreen() {
         keyboardShouldPersistTaps="handled"
         showsVerticalScrollIndicator={false}
       >
-        <Animated.View style={[styles.card, { opacity: fadeAnim, transform: [{ translateY: slideAnim }] }]}>
+        <Animated.View
+          style={[
+            styles.card,
+            { padding: isSmallDevice ? spacing.lg : ms(spacing.xl, 0.4) },
+            { opacity: fadeAnim, transform: [{ translateY: slideAnim }] },
+          ]}
+        >
         
         {/* Brand Header */}
         <View style={styles.brandContainer}>
@@ -453,6 +462,8 @@ const styles = StyleSheet.create({
     marginRight: 6,
   },
   switchLabel: {
+    flex: 1,
+    flexShrink: 1,
     fontSize: 14,
     color: colors.text.secondary,
     fontWeight: "600",
@@ -496,6 +507,7 @@ const styles = StyleSheet.create({
   },
   footerContainer: {
     flexDirection: "row",
+    flexWrap: "wrap",
     justifyContent: "center",
     alignItems: "center",
     marginTop: spacing.xl,

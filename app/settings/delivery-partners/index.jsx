@@ -7,6 +7,7 @@ import ProtectedRoute from "../../components/ProtectedRoute";
 import BackButton from "../../components/BackButton";
 import { useTheme } from "../../context/ThemeContext";
 import { useScrollRestoration } from "../../context/ScrollContext";
+import { useResponsive } from "../../../utils/responsive";
 
 const STATUS_FILTERS = [
   { label: "All Partners", value: "All" },
@@ -27,6 +28,7 @@ const VEHICLE_ICONS = {
 function DeliveryPartnersListScreen() {
   const { theme } = useTheme();
   const { colors, spacing, radius, shadows } = theme;
+  const { bottomFabOffset, scrollBottomPadding } = useResponsive();
   const styles = useMemo(() => getStyles(theme), [theme]);
   const router = useRouter();
   const { scrollViewRef, handleScroll, handleContentSizeChange } = useScrollRestoration("/settings/delivery-partners");
@@ -81,7 +83,7 @@ function DeliveryPartnersListScreen() {
     <View style={styles.root}>
       <ScrollView 
         ref={scrollViewRef}
-        contentContainerStyle={styles.container}
+        contentContainerStyle={[styles.container, { paddingBottom: scrollBottomPadding }]}
         scrollEventThrottle={32}
         onScroll={handleScroll}
         onContentSizeChange={handleContentSizeChange}
@@ -237,7 +239,7 @@ function DeliveryPartnersListScreen() {
 
       {/* Floating Action Button */}
       <Pressable 
-        style={({ pressed }) => [styles.fab, pressed && styles.fabPressed]}
+        style={({ pressed }) => [styles.fab, { bottom: bottomFabOffset }, pressed && styles.fabPressed]}
         onPress={() => router.push("/settings/delivery-partners/add")}
       >
         <MaterialIcons name="add" size={28} color={colors.bg.card} />

@@ -1,8 +1,9 @@
-import React, { useContext, useState, useMemo, useEffect } from "react";
+import React, { useContext, useState, useMemo, useEffect, useCallback } from "react";
 import {
   View,
   Text,
   StyleSheet,
+  FlatList,
   ScrollView,
   TextInput,
   Pressable,
@@ -15,6 +16,10 @@ import { useRouter } from "expo-router";
 import { MaterialIcons } from "@expo/vector-icons";
 import { collection, onSnapshot } from "firebase/firestore";
 import { db, normalizeDateValue } from "../src/config/firebase";
+import {
+  buildPresentedDatesSet,
+  computePurchaseIntervalMap,
+} from "../utils/rawMaterialIntervals";
 import { useTheme } from "./context/ThemeContext";
 import { ItemContext } from "./context/ItemContext";
 import { RawMaterialContext } from "./context/RawMaterialContext";
@@ -24,20 +29,113 @@ import ProtectedRoute from "./components/ProtectedRoute";
 import BackButton from "./components/BackButton";
 import EasyCalendarModal from "./components/EasyCalendarModal";
 import { useScrollRestoration } from "./context/ScrollContext";
+import { useResponsive } from "../utils/responsive";
 
-const formatDateKey = (dateVal) => {
-  if (!dateVal) return "";
-  const d = normalizeDateValue(dateVal);
-  if (!d || isNaN(d.getTime())) return "";
-  const yyyy = d.getFullYear();
-  const mm = String(d.getMonth() + 1).padStart(2, "0");
-  const dd = String(d.getDate()).padStart(2, "0");
-  return `${yyyy}-${mm}-${dd}`;
+const DEFAULT_INTERVAL = {
+  formatted: "N/A",
+  unit: "",
+  subtext: "No purchases logged",
+  fullSubtext: "No purchases logged",
+  workingDays: null,
 };
+
+const MaterialStockCard = React.memo(function MaterialStockCard({
+  material,
+  interval,
+  currencySymbol,
+  styles,
+  colors,
+  onOpenLog,
+}) {
+  const stock = Number(
+    material.openingStock !== undefined ? material.openingStock : material.stock || 0
+  );
+  const threshold = Number(
+    material.reorderLevel !== undefined ? material.reorderLevel : 5
+  );
+
+  let badge = { text: "Healthy", color: "#10B981", bg: "#ECFDF5" };
+  if (stock === 0) {
+    badge = { text: "Out of Stock", color: "#EF4444", bg: "#FEF2F2" };
+  } else if (stock <= threshold) {
+    badge = { text: "Low Stock", color: colors.accent.warning, bg: "#FFFBEB" };
+  }
+
+  return (
+    <View style={styles.materialCard}>
+      <View style={styles.cardHeader}>
+        <View style={styles.cardInfo}>
+          <Text style={styles.materialName}>{material.itemName}</Text>
+          <Text style={styles.unitSuffix}>Unit: {material.rateType || "unit"}</Text>
+        </View>
+        <View style={[styles.badge, { backgroundColor: badge.bg }]}>
+          <Text style={[styles.badgeText, { color: badge.color }]} maxFontSizeMultiplier={1.15}>{badge.text}</Text>
+        </View>
+      </View>
+
+      <View style={styles.metricsRow}>
+        <View style={styles.metricItem}>
+          <Text style={styles.metricLabel} maxFontSizeMultiplier={1.15}>Current Stock</Text>
+          <Text style={styles.metricValue} adjustsFontSizeToFit numberOfLines={1} minimumFontScale={0.75}>
+            {stock} <Text style={styles.metricUnit}>{material.rateType || "units"}</Text>
+          </Text>
+        </View>
+        <View style={styles.metricItem}>
+          <Text style={styles.metricLabel} maxFontSizeMultiplier={1.15}>Unit Cost</Text>
+          <Text style={styles.metricValue} adjustsFontSizeToFit numberOfLines={1} minimumFontScale={0.75}>
+            {currencySymbol}{Number(material.costPrice || 0).toFixed(2)}
+          </Text>
+        </View>
+        <View style={styles.metricItem}>
+          <View style={styles.historyIconRow}>
+            <Text style={styles.metricLabel} numberOfLines={1} maxFontSizeMultiplier={1.15}>Last - Current</Text>
+            <MaterialIcons name="history" size={12} color={colors.accent.primary} />
+          </View>
+          <Text style={styles.metricValue} adjustsFontSizeToFit numberOfLines={1} minimumFontScale={0.75}>
+            {interval.formatted}{interval.unit ? ` ` : ""}<Text style={styles.metricUnit}>{interval.unit}</Text>
+          </Text>
+          {interval.subtext ? (
+            <Text style={styles.metricSubtext} numberOfLines={1} maxFontSizeMultiplier={1.15}>
+              {interval.subtext}
+            </Text>
+          ) : null}
+        </View>
+      </View>
+
+      {/* Log buttons */}
+      <View style={styles.cardActions}>
+        <Pressable
+          style={({ pressed }) => [
+            styles.actionBtn,
+            styles.stockInBtn,
+            pressed && styles.actionBtnPressed,
+          ]}
+          onPress={() => onOpenLog(material, "in")}
+        >
+          <MaterialIcons name="add-circle-outline" size={18} color={colors.accent.success} />
+          <Text style={[styles.actionBtnText, styles.stockInBtnText]}>Log Stock In</Text>
+        </Pressable>
+
+        <Pressable
+          style={({ pressed }) => [
+            styles.actionBtn,
+            styles.stockOutBtn,
+            pressed && styles.actionBtnPressed,
+          ]}
+          onPress={() => onOpenLog(material, "out")}
+        >
+          <MaterialIcons name="remove-circle-outline" size={18} color={colors.accent.danger} />
+          <Text style={[styles.actionBtnText, styles.stockOutBtnText]}>Log Stock Out</Text>
+        </Pressable>
+      </View>
+    </View>
+  );
+});
 
 function RawMaterialStockManager() {
   const { theme } = useTheme();
   const { colors, spacing, radius, shadows } = theme;
+  const { scrollBottomPadding, kavBehavior, insets } = useResponsive();
   const styles = useMemo(() => getStyles(theme), [theme]);
   const router = useRouter();
   const { scrollViewRef, handleScroll, handleContentSizeChange } = useScrollRestoration("/raw-material-stock");
@@ -91,134 +189,34 @@ function RawMaterialStockManager() {
   }, []);
 
   // Set of calendar dates (YYYY-MM-DD) where at least one worker was present (excluding absent-only days)
-  const presentedDates = useMemo(() => {
-    const dates = new Set();
-    (workerAttendance || []).forEach((att) => {
-      if (att.status && att.status !== "absent") {
-        const key = formatDateKey(att.createdAt || att.date);
-        if (key) {
-          dates.add(key);
-        }
-      }
-    });
-    return dates;
-  }, [workerAttendance]);
+  const presentedDates = useMemo(
+    () => buildPresentedDatesSet(workerAttendance),
+    [workerAttendance]
+  );
 
   // Calculate days between previous purchase and latest (current) purchase, counting only worker presented days
-  const purchaseIntervalMap = useMemo(() => {
-    const hasAttendanceData = (workerAttendance || []).length > 0;
-
-    // Group purchase logs by materialId
-    const purchasesByMaterial = {};
-    (logs || []).forEach((log) => {
-      if (log.type === "purchase" && log.materialId) {
-        if (!purchasesByMaterial[log.materialId]) {
-          purchasesByMaterial[log.materialId] = [];
-        }
-        purchasesByMaterial[log.materialId].push(log);
-      }
-    });
-
-    const result = {};
-
-    Object.keys(purchasesByMaterial).forEach((matId) => {
-      const pLogs = purchasesByMaterial[matId];
-      const timestamps = pLogs
-        .map((log) => {
-          const raw = log.date || log.createdAt;
-          if (!raw) return null;
-          if (raw instanceof Date) return raw.getTime();
-          if (raw.toDate && typeof raw.toDate === "function") return raw.toDate().getTime();
-          const d = new Date(raw);
-          return isNaN(d.getTime()) ? null : d.getTime();
-        })
-        .filter((ts) => ts !== null)
-        .sort((a, b) => a - b);
-
-      if (timestamps.length === 0) {
-        result[matId] = {
-          formatted: "N/A",
-          unit: "",
-          subtext: "No purchases logged",
-          fullSubtext: "No purchases logged",
-          workingDays: null,
-        };
-        return;
-      }
-
-      if (timestamps.length === 1) {
-        result[matId] = {
-          formatted: "1",
-          unit: "Purchase",
-          subtext: "Only 1 purchase logged",
-          fullSubtext: "Only 1 purchase logged",
-          workingDays: null,
-        };
-        return;
-      }
-
-      const prevPurchase = timestamps[timestamps.length - 2];
-      const latestPurchase = timestamps[timestamps.length - 1];
-
-      let intervalDays = 0;
-      if (hasAttendanceData) {
-        const startDate = new Date(prevPurchase);
-        startDate.setHours(0, 0, 0, 0);
-        const endDate = new Date(latestPurchase);
-        endDate.setHours(0, 0, 0, 0);
-
-        const curr = new Date(startDate);
-        while (curr < endDate) {
-          const key = formatDateKey(curr);
-          if (presentedDates.has(key)) {
-            intervalDays++;
-          }
-          curr.setDate(curr.getDate() + 1);
-        }
-      } else {
-        intervalDays = Math.max(0, Math.round((latestPurchase - prevPurchase) / (1000 * 60 * 60 * 24)));
-      }
-
-      const unitVal = intervalDays === 1 ? "Day" : "Days";
-      result[matId] = {
-        formatted: `${intervalDays}`,
-        unit: unitVal,
-        subtext: hasAttendanceData
-          ? `${intervalDays} working ${intervalDays === 1 ? "day" : "days"}`
-          : "Between last 2 purchases",
-        fullSubtext: hasAttendanceData
-          ? `Between last 2 purchases (${intervalDays} working ${intervalDays === 1 ? "day" : "days"})`
-          : "Between last 2 purchases",
-        workingDays: intervalDays,
-      };
-    });
-
-    return result;
-  }, [logs, workerAttendance, presentedDates]);
-
-  const getMaterialInterval = (materialId) => {
-    return (
-      purchaseIntervalMap[materialId] || {
-        formatted: "N/A",
-        unit: "",
-        subtext: "No purchases logged",
-        fullSubtext: "No purchases logged",
-        workingDays: null,
-      }
-    );
-  };
+  const purchaseIntervalMap = useMemo(
+    () => computePurchaseIntervalMap(logs, workerAttendance, presentedDates),
+    [logs, workerAttendance, presentedDates]
+  );
 
   // Get raw materials
-  const rawMaterials = items.filter((item) => item.itemType === "raw_material");
+  const rawMaterials = useMemo(
+    () => (items || []).filter((item) => item.itemType === "raw_material"),
+    [items]
+  );
 
   // Search filtered raw materials
-  const filteredMaterials = rawMaterials.filter((item) => {
-    const nameMatch = item.itemName.toLowerCase().includes(searchQuery.toLowerCase());
-    const descMatch = (item.description || "").toLowerCase().includes(searchQuery.toLowerCase());
-    return nameMatch || descMatch;
-  });
+  const filteredMaterials = useMemo(() => {
+    const q = searchQuery.toLowerCase();
+    return rawMaterials.filter((item) => {
+      const nameMatch = (item.itemName || "").toLowerCase().includes(q);
+      const descMatch = (item.description || "").toLowerCase().includes(q);
+      return nameMatch || descMatch;
+    });
+  }, [rawMaterials, searchQuery]);
 
-  const handleOpenLogModal = (material, type) => {
+  const handleOpenLogModal = useCallback((material, type) => {
     setActiveMaterial(material);
     setLogType(type);
     setSelectedDate(new Date());
@@ -282,7 +280,7 @@ function RawMaterialStockManager() {
     }
     
     setIsModalOpen(true);
-  };
+  }, [logs, suppliers]);
 
   const handleCloseModal = () => {
     setIsModalOpen(false);
@@ -401,22 +399,21 @@ function RawMaterialStockManager() {
     }
   };
 
-  const getStatusBadge = (material) => {
-    const stock = Number(
-      material.openingStock !== undefined ? material.openingStock : material.stock || 0
-    );
-    const threshold = Number(
-      material.reorderLevel !== undefined ? material.reorderLevel : 5
-    );
+  const renderMaterialItem = useCallback(
+    ({ item: material }) => (
+      <MaterialStockCard
+        material={material}
+        interval={purchaseIntervalMap[material.id] || DEFAULT_INTERVAL}
+        currencySymbol={currencySymbol}
+        styles={styles}
+        colors={colors}
+        onOpenLog={handleOpenLogModal}
+      />
+    ),
+    [purchaseIntervalMap, currencySymbol, styles, colors, handleOpenLogModal]
+  );
 
-    if (stock === 0) {
-      return { text: "Out of Stock", color: "#EF4444", bg: "#FEF2F2" };
-    }
-    if (stock <= threshold) {
-      return { text: "Low Stock", color: colors.accent.warning, bg: "#FFFBEB" };
-    }
-    return { text: "Healthy", color: "#10B981", bg: "#ECFDF5" };
-  };
+  const keyExtractor = useCallback((material) => material.id, []);
 
   const loadingState = itemsLoading || suppliersLoading;
 
@@ -459,91 +456,20 @@ function RawMaterialStockManager() {
           </Text>
         </View>
       ) : (
-        <ScrollView
+        <FlatList
           ref={scrollViewRef}
-          contentContainerStyle={styles.listContent}
+          data={filteredMaterials}
+          keyExtractor={keyExtractor}
+          renderItem={renderMaterialItem}
+          contentContainerStyle={[styles.listContent, { paddingBottom: scrollBottomPadding }]}
           scrollEventThrottle={32}
           onScroll={handleScroll}
           onContentSizeChange={handleContentSizeChange}
-        >
-          {filteredMaterials.map((material) => {
-            const stock = Number(
-              material.openingStock !== undefined ? material.openingStock : material.stock || 0
-            );
-            const badge = getStatusBadge(material);
-            const interval = getMaterialInterval(material.id);
-
-            return (
-              <View key={material.id} style={styles.materialCard}>
-                <View style={styles.cardHeader}>
-                  <View style={styles.cardInfo}>
-                    <Text style={styles.materialName}>{material.itemName}</Text>
-                    <Text style={styles.unitSuffix}>Unit: {material.rateType || "unit"}</Text>
-                  </View>
-                  <View style={[styles.badge, { backgroundColor: badge.bg }]}>
-                    <Text style={[styles.badgeText, { color: badge.color }]}>{badge.text}</Text>
-                  </View>
-                </View>
-
-                <View style={styles.metricsRow}>
-                  <View style={styles.metricItem}>
-                    <Text style={styles.metricLabel}>Current Stock</Text>
-                    <Text style={styles.metricValue}>
-                      {stock} <Text style={styles.metricUnit}>{material.rateType || "units"}</Text>
-                    </Text>
-                  </View>
-                  <View style={styles.metricItem}>
-                    <Text style={styles.metricLabel}>Unit Cost</Text>
-                    <Text style={styles.metricValue}>
-                      {currencySymbol}{Number(material.costPrice || 0).toFixed(2)}
-                    </Text>
-                  </View>
-                  <View style={styles.metricItem}>
-                    <View style={{ flexDirection: "row", alignItems: "center", gap: 3 }}>
-                      <Text style={styles.metricLabel} numberOfLines={1}>Last - Current</Text>
-                      <MaterialIcons name="history" size={12} color={colors.accent.primary} />
-                    </View>
-                    <Text style={styles.metricValue}>
-                      {interval.formatted}{interval.unit ? ` ` : ""}<Text style={styles.metricUnit}>{interval.unit}</Text>
-                    </Text>
-                    {interval.subtext ? (
-                      <Text style={styles.metricSubtext} numberOfLines={1}>
-                        {interval.subtext}
-                      </Text>
-                    ) : null}
-                  </View>
-                </View>
-
-                {/* Log buttons */}
-                <View style={styles.cardActions}>
-                  <Pressable
-                    style={({ pressed }) => [
-                      styles.actionBtn,
-                      styles.stockInBtn,
-                      pressed && styles.actionBtnPressed,
-                    ]}
-                    onPress={() => handleOpenLogModal(material, "in")}
-                  >
-                    <MaterialIcons name="add-circle-outline" size={18} color={colors.accent.success} />
-                    <Text style={[styles.actionBtnText, { color: "#065f46" }]}>Log Stock In</Text>
-                  </Pressable>
-
-                  <Pressable
-                    style={({ pressed }) => [
-                      styles.actionBtn,
-                      styles.stockOutBtn,
-                      pressed && styles.actionBtnPressed,
-                    ]}
-                    onPress={() => handleOpenLogModal(material, "out")}
-                  >
-                    <MaterialIcons name="remove-circle-outline" size={18} color={colors.accent.danger} />
-                    <Text style={[styles.actionBtnText, { color: "#991b1b" }]}>Log Stock Out</Text>
-                  </Pressable>
-                </View>
-              </View>
-            );
-          })}
-        </ScrollView>
+          initialNumToRender={10}
+          maxToRenderPerBatch={10}
+          windowSize={5}
+          removeClippedSubviews={true}
+        />
       )}
 
       {/* Log Transaction Modal */}
@@ -584,7 +510,7 @@ function RawMaterialStockManager() {
                 </Text>
 
                 {(() => {
-                  const activeInterval = getMaterialInterval(activeMaterial.id);
+                  const activeInterval = purchaseIntervalMap[activeMaterial.id] || DEFAULT_INTERVAL;
                   return (
                     <View style={styles.modalIntervalBanner}>
                       <View style={styles.modalIntervalHeader}>
@@ -1013,6 +939,7 @@ const getStyles = (theme) => {
   },
   metricsRow: {
     flexDirection: "row",
+    flexWrap: "wrap",
     borderTopWidth: 1,
     borderTopColor: colors.border.subtle,
     paddingTop: 12,
@@ -1021,12 +948,18 @@ const getStyles = (theme) => {
   },
   metricItem: {
     flex: 1,
+    minWidth: 92,
   },
   metricLabel: {
     fontSize: 11,
     color: colors.text.muted,
     fontWeight: "600",
     marginBottom: 2,
+  },
+  historyIconRow: {
+    flexDirection: "row",
+    alignItems: "center",
+    gap: 3,
   },
   metricValue: {
     fontSize: 14,
@@ -1045,10 +978,12 @@ const getStyles = (theme) => {
   },
   cardActions: {
     flexDirection: "row",
+    flexWrap: "wrap",
     gap: 12,
   },
   actionBtn: {
     flex: 1,
+    minWidth: 124,
     flexDirection: "row",
     height: 40,
     alignItems: "center",
@@ -1072,6 +1007,12 @@ const getStyles = (theme) => {
     fontSize: 13,
     fontWeight: "700",
   },
+  stockInBtnText: {
+    color: "#065f46",
+  },
+  stockOutBtnText: {
+    color: "#991b1b",
+  },
   modalOverlay: {
     flex: 1,
     backgroundColor: "rgba(0, 0, 0, 0.45)",
@@ -1081,13 +1022,16 @@ const getStyles = (theme) => {
     flex: 1,
   },
   modalContent: {
+    width: "100%",
+    maxWidth: 560,
+    alignSelf: "center",
     backgroundColor: colors.bg.card,
     borderTopLeftRadius: 24,
     borderTopRightRadius: 24,
     paddingHorizontal: 20,
     paddingTop: 20,
     paddingBottom: Platform.OS === "ios" ? 40 : 24,
-    maxHeight: "85%",
+    maxHeight: "88%",
   },
   modalHeader: {
     flexDirection: "row",

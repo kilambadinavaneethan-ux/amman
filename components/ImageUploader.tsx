@@ -7,6 +7,9 @@ import {
   ActivityIndicator,
   Modal,
   Alert,
+  KeyboardAvoidingView,
+  Platform,
+  ScrollView,
   StyleProp,
   ViewStyle,
 } from "react-native";
@@ -190,31 +193,44 @@ export const ImageUploader: React.FC<ImageUploaderProps> = ({
         animationType="fade"
         onRequestClose={() => setPickerModalVisible(false)}
       >
-        <Pressable style={styles.modalBackdrop} onPress={() => setPickerModalVisible(false)}>
-          <View style={styles.modalCard}>
-            <Text style={styles.modalTitle}>Choose Image Source</Text>
+        <KeyboardAvoidingView
+          behavior={Platform.OS === "ios" ? "padding" : "height"}
+          style={{ flex: 1 }}
+        >
+          <Pressable style={styles.modalBackdrop} onPress={() => setPickerModalVisible(false)}>
+            <Pressable style={styles.modalCard} onPress={(e) => e.stopPropagation()}>
+              <ScrollView
+                showsVerticalScrollIndicator={false}
+                keyboardShouldPersistTaps="handled"
+                bounces={false}
+                style={{ width: "100%" }}
+                contentContainerStyle={{ alignItems: "center" }}
+              >
+                <Text style={styles.modalTitle}>Choose Image Source</Text>
 
-            <View style={styles.modalOptionsRow}>
-              <Pressable style={styles.modalOptionBtn} onPress={() => handlePickSource("camera")}>
-                <View style={[styles.optionIconCircle, { backgroundColor: "#e0e7ff" }]}>
-                  <MaterialIcons name="photo-camera" size={26} color="#4f46e5" />
+                <View style={styles.modalOptionsRow}>
+                  <Pressable style={styles.modalOptionBtn} onPress={() => handlePickSource("camera")}>
+                    <View style={[styles.optionIconCircle, { backgroundColor: "#e0e7ff" }]}>
+                      <MaterialIcons name="photo-camera" size={26} color="#4f46e5" />
+                    </View>
+                    <Text style={styles.optionText}>Take Photo</Text>
+                  </Pressable>
+
+                  <Pressable style={styles.modalOptionBtn} onPress={() => handlePickSource("gallery")}>
+                    <View style={[styles.optionIconCircle, { backgroundColor: "#f0fdf4" }]}>
+                      <MaterialIcons name="photo-library" size={26} color="#16a34a" />
+                    </View>
+                    <Text style={styles.optionText}>Choose Gallery</Text>
+                  </Pressable>
                 </View>
-                <Text style={styles.optionText}>Take Photo</Text>
-              </Pressable>
 
-              <Pressable style={styles.modalOptionBtn} onPress={() => handlePickSource("gallery")}>
-                <View style={[styles.optionIconCircle, { backgroundColor: "#f0fdf4" }]}>
-                  <MaterialIcons name="photo-library" size={26} color="#16a34a" />
-                </View>
-                <Text style={styles.optionText}>Choose Gallery</Text>
-              </Pressable>
-            </View>
-
-            <Pressable style={styles.modalCancelBtn} onPress={() => setPickerModalVisible(false)}>
-              <Text style={styles.modalCancelText}>Cancel</Text>
+                <Pressable style={styles.modalCancelBtn} onPress={() => setPickerModalVisible(false)}>
+                  <Text style={styles.modalCancelText}>Cancel</Text>
+                </Pressable>
+              </ScrollView>
             </Pressable>
-          </View>
-        </Pressable>
+          </Pressable>
+        </KeyboardAvoidingView>
       </Modal>
     </View>
   );
@@ -392,11 +408,12 @@ const styles = StyleSheet.create({
     backgroundColor: "rgba(0, 0, 0, 0.5)",
     justifyContent: "center",
     alignItems: "center",
-    padding: 24,
+    padding: 16,
   },
   modalCard: {
-    width: "100%",
-    maxWidth: 320,
+    width: "92%",
+    maxWidth: 420,
+    maxHeight: "88%",
     backgroundColor: "#FFFFFF",
     borderRadius: 20,
     padding: 20,

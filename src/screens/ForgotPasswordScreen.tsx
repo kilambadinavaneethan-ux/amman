@@ -14,12 +14,14 @@ import { useRouter } from "expo-router";
 import { MaterialIcons } from "@expo/vector-icons";
 import { sendPasswordReset } from "../services/authService";
 import { colors, radius, spacing, shadows } from "../theme/theme";
+import { useResponsive } from "../../utils/responsive";
 import AuthInput from "../components/AuthInput";
 import AuthButton from "../components/AuthButton";
 
 export default function ForgotPasswordScreen() {
   const router = useRouter();
   const insets = useSafeAreaInsets();
+  const { kavBehavior, isSmallDevice, ms } = useResponsive();
 
   // Inputs
   const [email, setEmail] = useState("");
@@ -79,13 +81,14 @@ export default function ForgotPasswordScreen() {
 
   return (
     <KeyboardAvoidingView
-      behavior={Platform.OS === "ios" ? "padding" : undefined}
+      behavior={kavBehavior}
       style={{ flex: 1, backgroundColor: colors.bg.primary }}
     >
       <ScrollView
         contentContainerStyle={[
           styles.container,
           {
+            paddingHorizontal: isSmallDevice ? spacing.md : spacing.lg,
             paddingTop: Math.max(insets.top + 16, 24),
             paddingBottom: Math.max(insets.bottom + 16, 24),
           },
@@ -93,7 +96,13 @@ export default function ForgotPasswordScreen() {
         keyboardShouldPersistTaps="handled"
         showsVerticalScrollIndicator={false}
       >
-        <Animated.View style={[styles.card, { opacity: fadeAnim, transform: [{ translateY: slideAnim }] }]}>
+        <Animated.View
+          style={[
+            styles.card,
+            { padding: isSmallDevice ? spacing.lg : ms(spacing.xl, 0.4) },
+            { opacity: fadeAnim, transform: [{ translateY: slideAnim }] },
+          ]}
+        >
           
           {/* Brand Header */}
           <View style={styles.brandContainer}>
@@ -242,6 +251,7 @@ const styles = StyleSheet.create({
   },
   footerContainer: {
     flexDirection: "row",
+    flexWrap: "wrap",
     justifyContent: "center",
     alignItems: "center",
     marginTop: spacing.xl,

@@ -1,5 +1,6 @@
-import { CustomerShareData } from '../types/sharing';
+import { roundCurrency } from '../../utils/currency';
 import { normalizeDateValue } from '../config/firebase';
+import { CustomerShareData } from '../types/sharing';
 
 /**
  * Builds standard CustomerShareData for Customer Statement generation (WhatsApp, PDF, Image)
@@ -131,15 +132,15 @@ export function buildCustomerShareData(
       itemDescription = order.itemName ? `${order.itemName} (${order.quantity || 1} qty)` : 'Invoice Created';
     }
 
-    const orderPaid = Number(order.paidAmount || 0);
-    const orderTotal = Number(order.total || 0);
-    const orderExcess = Math.max(0, orderPaid - orderTotal);
+    const orderPaid = roundCurrency(order.paidAmount || 0);
+    const orderTotal = roundCurrency(order.total || 0);
+    const orderExcess = roundCurrency(Math.max(0, orderPaid - orderTotal));
     const orderUnpaid = order.balanceDue !== undefined
-      ? Number(order.balanceDue)
-      : Math.max(0, orderTotal - orderPaid);
+      ? roundCurrency(order.balanceDue)
+      : roundCurrency(Math.max(0, orderTotal - orderPaid));
     const balChange = isCancelled
       ? 0
-      : (orderExcess > 0 ? -orderExcess : orderUnpaid);
+      : (orderExcess > 0 ? roundCurrency(-orderExcess) : orderUnpaid);
 
     entries.push({
       id: order.id,
@@ -188,9 +189,9 @@ export function buildCustomerShareData(
     if (isOrderPayment) return;
 
     const payDate = resolvePaymentDateTime(payment);
-    const amtRec = Number(payment.amountReceived !== undefined ? payment.amountReceived : (payment.amount || 0));
-    const discAmt = Number(payment.discountAmount || 0);
-    const totalBalanceReduction = amtRec + discAmt;
+    const amtRec = roundCurrency(payment.amountReceived !== undefined ? payment.amountReceived : (payment.amount || 0));
+    const discAmt = roundCurrency(payment.discountAmount || 0);
+    const totalBalanceReduction = roundCurrency(amtRec + discAmt);
 
     let desc = `Payment: ${payment.paymentMethod || 'Cash'}`;
     if (discAmt > 0) {
@@ -211,7 +212,7 @@ export function buildCustomerShareData(
       orderAmount: 0,
       paymentReceived: amtRec,
       discountAmount: discAmt,
-      balanceChange: -totalBalanceReduction,
+      balanceChange: roundCurrency(-totalBalanceReduction),
       original: payment,
     });
   });
@@ -229,15 +230,15 @@ export function buildCustomerShareData(
     return idA.localeCompare(idB);
   });
 
-  const sumChanges = entries.reduce((sum: number, entry: any) => sum + (entry.balanceChange || 0), 0);
-  const customerPending = Number(
+  const sumChanges = roundCurrency(entries.reduce((sum: number, entry: any) => sum + Number(entry.balanceChange || 0), 0));
+  const customerPending = roundCurrency(
     customer.totalPending !== undefined ? customer.totalPending : (customer.balance || 0)
   );
-  const openingBalance = customerPending - sumChanges;
+  const openingBalance = roundCurrency(customerPending - sumChanges);
 
   let runningBalance = openingBalance;
   const ledgerEntries = entries.map((entry) => {
-    runningBalance += entry.balanceChange;
+    runningBalance = roundCurrency(runningBalance + Number(entry.balanceChange || 0));
     return {
       ...entry,
       runningBalance,
@@ -261,13 +262,17 @@ export function buildCustomerShareData(
     });
   }
 
-  const totalSpent = customerOrders.reduce(
-    (sum: number, o: any) => (o.status === 'cancelled' ? sum : sum + (o.total || 0)),
-    0
+  const totalSpent = roundCurrency(
+    customerOrders.reduce(
+      (sum: number, o: any) => (o.status === 'cancelled' ? sum : sum + Number(o.total || 0)),
+      0
+    )
   );
-  const totalPaid = (ledgerEntries || []).reduce(
-    (sum: number, l: any) => sum + (Number(l.paymentReceived || 0) + Number(l.discountAmount || 0)),
-    0
+  const totalPaid = roundCurrency(
+    (ledgerEntries || []).reduce(
+      (sum: number, l: any) => sum + (Number(l.paymentReceived || 0) + Number(l.discountAmount || 0)),
+      0
+    )
   );
 
   return {
@@ -279,8 +284,8 @@ export function buildCustomerShareData(
         customer.phoneNumbers && customer.phoneNumbers.length > 0
           ? customer.phoneNumbers
           : customer.phone
-          ? [customer.phone]
-          : [],
+            ? [customer.phone]
+            : [],
       address: customer.address || customer.city || '',
       gstin: customer.gstin || customer.gstNo || '',
       email: customer.email || '',
@@ -306,22 +311,22 @@ export function buildCustomerShareData(
       const rawItems =
         orig.items && Array.isArray(orig.items) && orig.items.length > 0
           ? orig.items.map((i: any) => ({
-              name: i.itemName || i.name || 'Item',
-              quantity: Number(i.quantity || 1),
-              rate: Number(i.unitPrice || i.rate || i.price || 0),
-              unit: i.unit || 'pcs',
-              total: Number(
-                i.totalPrice || i.total || (i.quantity || 1) * (i.unitPrice || i.rate || i.price || 0)
-              ),
-            }))
+            name: i.itemName || i.name || 'Item',
+            quantity: Number(i.quantity || 1),
+            rate: Number(i.unitPrice || i.rate || i.price || 0),
+            unit: i.unit || 'pcs',
+            total: Number(
+              i.totalPrice || i.total || (i.quantity || 1) * (i.unitPrice || i.rate || i.price || 0)
+            ),
+          }))
           : undefined;
 
-      const discAmt = Number(l.discountAmount || orig.discountAmount || 0);
-      const basePaid = Number(
+      const discAmt = roundCurrency(l.discountAmount || orig.discountAmount || 0);
+      const basePaid = roundCurrency(
         l.paymentReceived || (l.type === 'payment' ? l.amount || l.paid : l.paid) || 0
       );
-      const rawPaid = basePaid + discAmt;
-      const rawAmount = Number(l.orderAmount || (l.type === 'order' ? l.amount : 0) || 0);
+      const rawPaid = roundCurrency(basePaid + discAmt);
+      const rawAmount = roundCurrency(l.orderAmount || (l.type === 'order' ? l.amount : 0) || 0);
 
       return {
         id: l.id || String(Math.random()),
@@ -332,7 +337,7 @@ export function buildCustomerShareData(
         notes: l.notes || orig.notes || orig.description || orig.note || orig.remarks || orig.paymentNotes || orig.paymentNote || '',
         amount: rawAmount,
         paid: rawPaid,
-        balance: Number(l.runningBalance || 0),
+        balance: roundCurrency(l.runningBalance || 0),
         items: rawItems,
         rate: orig.unitPrice || orig.rate,
         quantity: orig.quantity,

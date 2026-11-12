@@ -2,7 +2,9 @@ import React, { useEffect, useState, useMemo, useCallback, useContext } from 're
 import {
   ActivityIndicator,
   Alert,
+  KeyboardAvoidingView,
   Modal,
+  Platform,
   Pressable,
   ScrollView,
   StyleSheet,
@@ -10,7 +12,6 @@ import {
   Text,
   TextInput,
   View,
-  Dimensions,
 } from 'react-native';
 import { useRouter } from 'expo-router';
 import { MaterialIcons } from '@expo/vector-icons';
@@ -20,6 +21,7 @@ import { listLocalImages, saveImageToLocalFolder, LocalImageFile } from '../../s
 import { useTheme } from '../context/ThemeContext';
 import { UserContext } from '../context/UserContext';
 import ProtectedRoute from '../components/ProtectedRoute';
+import { useResponsive } from '../../utils/responsive';
 import {
   DEFAULT_INVOICE_TEMPLATE,
   InvoiceTemplate,
@@ -499,6 +501,7 @@ function InvoiceManagementScreen() {
   const router = useRouter();
   const { theme } = useTheme();
   const { colors } = theme;
+  const { kavBehavior, insets } = useResponsive();
 
   const [docType, setDocType] = useState<'standard' | 'appa_estimate'>('standard');
   const [appaPreviewTheme, setAppaPreviewTheme] = useState<AppaBillTheme>('classic');
@@ -1119,7 +1122,7 @@ function InvoiceManagementScreen() {
       <InvoiceEditorContext.Provider value={editorContextValue}>
         <View style={[styles.container, { backgroundColor: colors.bg.primary }]}>
         {/* App Bar */}
-        <View style={[styles.appBar, { backgroundColor: cardBg, borderBottomColor: borderColor }]}>
+        <View style={[styles.appBar, { backgroundColor: cardBg, borderBottomColor: borderColor, paddingTop: Math.max(insets.top + 8, 16) }]}>
           <Pressable onPress={() => router.back()} style={styles.iconBtn}>
             <MaterialIcons name="arrow-back" size={24} color={textColor} />
           </Pressable>
@@ -3439,7 +3442,8 @@ function InvoiceManagementScreen() {
                 {appaSettings.signatureImageUri ? (
                   <View
                     style={{
-                      width: 220,
+                      width: '100%',
+                      maxWidth: 240,
                       height: 80,
                       borderRadius: 10,
                       borderWidth: 1.5,
@@ -3459,7 +3463,8 @@ function InvoiceManagementScreen() {
                 ) : (
                   <View
                     style={{
-                      width: 220,
+                      width: '100%',
+                      maxWidth: 240,
                       height: 80,
                       borderRadius: 10,
                       borderWidth: 1.5,
@@ -3612,8 +3617,8 @@ function InvoiceManagementScreen() {
 
         {/* Local Image Storage Modal for QR Selection */}
         <Modal visible={localImagesModalVisible} animationType="slide" transparent onRequestClose={() => setLocalImagesModalVisible(false)}>
-          <View style={styles.modalOverlay}>
-            <View style={[styles.modalContainer, { backgroundColor: cardBg, borderColor, maxWidth: 500, width: '90%' }]}>
+          <KeyboardAvoidingView behavior={kavBehavior} style={styles.modalOverlay}>
+            <View style={[styles.modalContainer, { backgroundColor: cardBg, borderColor, maxWidth: 480, width: '92%', maxHeight: '88%' }]}>
               <View style={[styles.modalHeader, { borderBottomColor: borderColor }]}>
                 <View style={{ flexDirection: 'row', alignItems: 'center', gap: 8 }}>
                   <MaterialIcons name="folder-special" size={22} color={colors.accent.primary} />
@@ -3659,7 +3664,7 @@ function InvoiceManagementScreen() {
                 )}
               </ScrollView>
             </View>
-          </View>
+          </KeyboardAvoidingView>
         </Modal>
 
         {/* Bank Account Modal */}
@@ -3669,8 +3674,9 @@ function InvoiceManagementScreen() {
           animationType="fade"
           onRequestClose={() => setBankModalVisible(false)}
         >
-          <View style={styles.modalOverlay}>
-            <View style={[styles.modalContainer, { backgroundColor: cardBg, borderColor, width: '90%', maxWidth: 420 }]}>
+          <KeyboardAvoidingView behavior={kavBehavior} style={styles.modalOverlay}>
+            <View style={[styles.modalContainer, { backgroundColor: cardBg, borderColor, width: '92%', maxWidth: 440, maxHeight: '88%' }]}>
+              <ScrollView showsVerticalScrollIndicator={false} keyboardShouldPersistTaps="handled">
               <View style={styles.modalHeader}>
                 <Text style={[styles.modalTitle, { color: textColor }]}>
                   {editingBankAccountId ? 'Edit Bank Account' : 'Add Bank Account'}
@@ -3742,8 +3748,9 @@ function InvoiceManagementScreen() {
                   <Text style={styles.saveBtnText}>{editingBankAccountId ? 'Save Changes' : 'Add Account'}</Text>
                 </Pressable>
               </View>
+              </ScrollView>
             </View>
-          </View>
+          </KeyboardAvoidingView>
         </Modal>
 
         {/* Signatory Pad Modal */}

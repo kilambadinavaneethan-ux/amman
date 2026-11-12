@@ -2,15 +2,28 @@ import React from "react";
 import { View, ActivityIndicator, StyleSheet, Text } from "react-native";
 import { MaterialIcons } from "@expo/vector-icons";
 import { colors, spacing } from "../theme/theme";
+import { useResponsive } from "../../utils/responsive";
 
 export default function SplashScreen() {
+  const { ms } = useResponsive();
+  const logoSize = ms(100, 0.4);
+
   return (
     <View style={styles.container}>
-      <View style={styles.logoWrapper}>
-        <MaterialIcons name="storefront" size={64} color={colors.accent.primary} />
+      <View
+        style={[
+          styles.logoWrapper,
+          {
+            width: logoSize,
+            height: logoSize,
+            borderRadius: logoSize / 2,
+          },
+        ]}
+      >
+        <MaterialIcons name="storefront" size={ms(64, 0.4)} color={colors.accent.primary} />
       </View>
-      <Text style={styles.title}>Business Suite</Text>
-      <Text style={styles.subtitle}>Securing connection...</Text>
+      <Text style={[styles.title, { fontSize: ms(24, 0.4) }]}>Business Suite</Text>
+      <Text style={[styles.subtitle, { fontSize: ms(14, 0.35) }]}>Securing connection...</Text>
       <ActivityIndicator size="small" color={colors.accent.primary} style={styles.loader} />
     </View>
   );

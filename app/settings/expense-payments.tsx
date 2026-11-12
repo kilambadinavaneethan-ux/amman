@@ -6,6 +6,7 @@ import {
   ScrollView,
   Pressable,
   TextInput,
+  KeyboardAvoidingView,
   Modal,
   Alert,
   ActivityIndicator,
@@ -19,6 +20,7 @@ import { useRouter } from "expo-router";
 // Theme & Navigation
 import { useTheme } from "../context/ThemeContext";
 import { useScrollRestoration } from "../context/ScrollContext";
+import { useResponsive } from "../../utils/responsive";
 import BackButton from "../components/BackButton";
 import EasyCalendarModal from "../components/EasyCalendarModal";
 
@@ -54,6 +56,7 @@ export default function ExpensePaymentManagement() {
   const router = useRouter();
   const { theme } = useTheme();
   const { colors, spacing, radius, shadows } = theme;
+  const { insets, kavBehavior, hp, scrollBottomPadding, currencyKpiTextProps } = useResponsive();
   const styles = useMemo(() => getStyles(theme), [theme]);
   const { scrollViewRef, handleScroll, handleContentSizeChange } =
     useScrollRestoration("/settings/expense-payments");
@@ -624,7 +627,7 @@ export default function ExpensePaymentManagement() {
   return (
     <View style={styles.screenContainer}>
       {/* Header Bar */}
-      <View style={styles.header}>
+      <View style={[styles.header, { paddingTop: Math.max(insets.top + 8, spacing.sm) }]}>
         <BackButton />
         <View style={styles.headerTitleWrap}>
           <Text style={styles.headerTitle} numberOfLines={1}>
@@ -656,7 +659,7 @@ export default function ExpensePaymentManagement() {
 
       <ScrollView
         ref={scrollViewRef}
-        contentContainerStyle={styles.scrollContent}
+        contentContainerStyle={[styles.scrollContent, { paddingBottom: scrollBottomPadding }]}
         showsVerticalScrollIndicator={false}
         scrollEventThrottle={32}
         onScroll={handleScroll}
@@ -675,7 +678,7 @@ export default function ExpensePaymentManagement() {
                 <MaterialIcons name="arrow-upward" size={14} color={colors.accent.danger || "#EF4444"} />
               </View>
             </View>
-            <Text style={[styles.metricValue, { color: colors.accent.danger || "#EF4444" }]}>
+            <Text style={[styles.metricValue, { color: colors.accent.danger || "#EF4444" }]} {...currencyKpiTextProps}>
               ₹{metrics.totalPaid.toLocaleString("en-IN")}
             </Text>
             <Text style={styles.metricSubtext}>
@@ -691,7 +694,7 @@ export default function ExpensePaymentManagement() {
                 <MaterialIcons name="today" size={14} color={colors.accent.warning || "#F59E0B"} />
               </View>
             </View>
-            <Text style={[styles.metricValue, { color: colors.accent.warning || "#F59E0B" }]}>
+            <Text style={[styles.metricValue, { color: colors.accent.warning || "#F59E0B" }]} {...currencyKpiTextProps}>
               ₹{metrics.todayPaid.toLocaleString("en-IN")}
             </Text>
             <Text style={styles.metricSubtext}>This month: ₹{metrics.monthPaid.toLocaleString("en-IN")}</Text>
@@ -938,7 +941,7 @@ export default function ExpensePaymentManagement() {
         transparent
         onRequestClose={handleCloseRecordModal}
       >
-        <View style={styles.modalOverlay}>
+        <KeyboardAvoidingView behavior={kavBehavior} style={styles.modalOverlay}>
           <View style={styles.modalContainer}>
             <View style={styles.modalHeader}>
               <View style={{ flexDirection: "row", alignItems: "center", gap: 8 }}>
@@ -952,7 +955,7 @@ export default function ExpensePaymentManagement() {
               </Pressable>
             </View>
 
-            <ScrollView style={{ maxHeight: 460 }} showsVerticalScrollIndicator={false}>
+            <ScrollView style={{ maxHeight: Math.round(hp(60)) }} showsVerticalScrollIndicator={false} keyboardShouldPersistTaps="handled">
               {/* Option A: Select an Expense with Pending Balance */}
               {pendingExpenses.length > 0 && (
                 <View style={{ marginBottom: 16 }}>
@@ -1102,7 +1105,7 @@ export default function ExpensePaymentManagement() {
               </Pressable>
             </View>
           </View>
-        </View>
+        </KeyboardAvoidingView>
       </Modal>
 
       {/* PAYMENT DETAILS / VOUCHER MODAL */}
@@ -1112,7 +1115,7 @@ export default function ExpensePaymentManagement() {
         transparent
         onRequestClose={() => setIsDetailModalOpen(false)}
       >
-        <View style={styles.modalOverlay}>
+        <KeyboardAvoidingView behavior={kavBehavior} style={styles.modalOverlay}>
           <View style={[styles.modalContainer, { maxWidth: 440 }]}>
             {selectedPayment && (
               <>
@@ -1200,7 +1203,7 @@ export default function ExpensePaymentManagement() {
               </>
             )}
           </View>
-        </View>
+        </KeyboardAvoidingView>
       </Modal>
 
       {/* ADVANCED FILTER MODAL */}
@@ -1210,7 +1213,7 @@ export default function ExpensePaymentManagement() {
         transparent
         onRequestClose={() => setIsFilterModalOpen(false)}
       >
-        <View style={styles.modalOverlay}>
+        <KeyboardAvoidingView behavior={kavBehavior} style={styles.modalOverlay}>
           <View style={styles.modalContainer}>
             <View style={styles.modalHeader}>
               <Text style={styles.modalTitle}>Filter Outgoing Payments</Text>
@@ -1219,7 +1222,7 @@ export default function ExpensePaymentManagement() {
               </Pressable>
             </View>
 
-            <ScrollView showsVerticalScrollIndicator={false} style={{ maxHeight: 420 }}>
+            <ScrollView showsVerticalScrollIndicator={false} style={{ maxHeight: Math.round(hp(56)) }} keyboardShouldPersistTaps="handled">
               {/* Payment Method */}
               <View style={{ marginBottom: 14 }}>
                 <Text style={styles.fieldLabel}>Payment Method</Text>
@@ -1331,7 +1334,7 @@ export default function ExpensePaymentManagement() {
               </Pressable>
             </View>
           </View>
-        </View>
+        </KeyboardAvoidingView>
       </Modal>
 
       {/* EASY CALENDAR MODALS */}
@@ -1439,11 +1442,13 @@ function getStyles(theme: any) {
     },
     metricGrid: {
       flexDirection: "row",
+      flexWrap: "wrap",
       gap: 12,
       marginBottom: 14,
     },
     metricCard: {
       flex: 1,
+      minWidth: 132,
       backgroundColor: colors.bg.card,
       borderRadius: 14,
       padding: 12,
@@ -1758,6 +1763,7 @@ function getStyles(theme: any) {
     modalContainer: {
       width: "100%",
       maxWidth: 480,
+      maxHeight: "88%",
       backgroundColor: colors.bg.card,
       borderRadius: 16,
       padding: 16,

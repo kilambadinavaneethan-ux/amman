@@ -13,6 +13,7 @@ import {
 } from 'firebase/firestore';
 import { Alert } from 'react-native';
 import { db, normalizeDateValue } from '../config/firebase';
+import { roundCurrency } from '../../utils/currency';
 import {
   DailyCashFlowPoint,
   DateGroupedEntries,
@@ -863,7 +864,7 @@ export function computeAccountBalances(
 
   accounts.forEach((acc) => {
     balances[acc.id] = {
-      balance: Number(acc.openingBalance || 0),
+      balance: roundCurrency(acc.openingBalance || 0),
       inflowTotal: 0,
       outflowTotal: 0,
       count: 0,
@@ -871,30 +872,31 @@ export function computeAccountBalances(
   });
 
   allEntries.forEach((e) => {
+    const amt = roundCurrency(e.amount);
     if (e.type === 'inflow') {
       const accId = e.accountId || 'acc_cash_default';
       if (balances[accId]) {
-        balances[accId].balance += e.amount;
-        balances[accId].inflowTotal += e.amount;
+        balances[accId].balance = roundCurrency(balances[accId].balance + amt);
+        balances[accId].inflowTotal = roundCurrency(balances[accId].inflowTotal + amt);
         balances[accId].count += 1;
       }
     } else if (e.type === 'outflow') {
       const accId = e.accountId || 'acc_cash_default';
       if (balances[accId]) {
-        balances[accId].balance -= e.amount;
-        balances[accId].outflowTotal += e.amount;
+        balances[accId].balance = roundCurrency(balances[accId].balance - amt);
+        balances[accId].outflowTotal = roundCurrency(balances[accId].outflowTotal + amt);
         balances[accId].count += 1;
       }
     } else if (e.type === 'transfer') {
       // Contra: Deduct from source, add to destination
       if (e.accountId && balances[e.accountId]) {
-        balances[e.accountId].balance -= e.amount;
-        balances[e.accountId].outflowTotal += e.amount;
+        balances[e.accountId].balance = roundCurrency(balances[e.accountId].balance - amt);
+        balances[e.accountId].outflowTotal = roundCurrency(balances[e.accountId].outflowTotal + amt);
         balances[e.accountId].count += 1;
       }
       if (e.toAccountId && balances[e.toAccountId]) {
-        balances[e.toAccountId].balance += e.amount;
-        balances[e.toAccountId].inflowTotal += e.amount;
+        balances[e.toAccountId].balance = roundCurrency(balances[e.toAccountId].balance + amt);
+        balances[e.toAccountId].inflowTotal = roundCurrency(balances[e.toAccountId].inflowTotal + amt);
         balances[e.toAccountId].count += 1;
       }
     }
@@ -923,40 +925,42 @@ export function computeFundFlowSummary(
   const outflowCategoryMap = new Map<string, { amount: number; count: number }>();
 
   filteredEntries.forEach((e) => {
+    const amt = roundCurrency(e.amount);
     if (e.type === 'inflow') {
-      totalInflow += e.amount;
+      totalInflow = roundCurrency(totalInflow + amt);
       inflowCount += 1;
       const cat = e.category || 'Other Inflow';
       const cur = inflowCategoryMap.get(cat) || { amount: 0, count: 0 };
-      inflowCategoryMap.set(cat, { amount: cur.amount + e.amount, count: cur.count + 1 });
+      inflowCategoryMap.set(cat, { amount: roundCurrency(cur.amount + amt), count: cur.count + 1 });
     } else if (e.type === 'outflow') {
-      totalOutflow += e.amount;
+      totalOutflow = roundCurrency(totalOutflow + amt);
       outflowCount += 1;
       const cat = e.category || 'Other Outflow';
       const cur = outflowCategoryMap.get(cat) || { amount: 0, count: 0 };
-      outflowCategoryMap.set(cat, { amount: cur.amount + e.amount, count: cur.count + 1 });
+      outflowCategoryMap.set(cat, { amount: roundCurrency(cur.amount + amt), count: cur.count + 1 });
     } else if (e.type === 'transfer') {
-      transferVolume += e.amount;
+      transferVolume = roundCurrency(transferVolume + amt);
       transferCount += 1;
     }
   });
 
-  const netFlow = totalInflow - totalOutflow;
+  const netFlow = roundCurrency(totalInflow - totalOutflow);
   const coverageRatio = totalOutflow > 0 ? totalInflow / totalOutflow : totalInflow > 0 ? 99 : 1;
 
   // Compute Opening Funds at period start
-  let openingLiquidFunds = accounts.reduce((acc, a) => acc + Number(a.openingBalance || 0), 0);
+  let openingLiquidFunds = roundCurrency(accounts.reduce((acc, a) => acc + Number(a.openingBalance || 0), 0));
   const pStartTime = periodStart.getTime();
 
   allEntries.forEach((e) => {
     if (e.date.getTime() < pStartTime) {
-      if (e.type === 'inflow') openingLiquidFunds += e.amount;
-      else if (e.type === 'outflow') openingLiquidFunds -= e.amount;
+      const amt = roundCurrency(e.amount);
+      if (e.type === 'inflow') openingLiquidFunds = roundCurrency(openingLiquidFunds + amt);
+      else if (e.type === 'outflow') openingLiquidFunds = roundCurrency(openingLiquidFunds - amt);
       // transfers don't change net liquid pool
     }
   });
 
-  const closingLiquidFunds = openingLiquidFunds + netFlow;
+  const closingLiquidFunds = roundCurrency(openingLiquidFunds + netFlow);
 
   // Categories Breakdown
   const inflowCategories: FundCategoryBreakdown[] = Array.from(inflowCategoryMap.entries())
@@ -1008,36 +1012,37 @@ export function computeRunningBalances(
 
   if (isSpecificAccount) {
     const targetAcc = accounts.find((a) => a.id === selectedAccountId);
-    running = Number(targetAcc?.openingBalance || 0);
+    running = roundCurrency(targetAcc?.openingBalance || 0);
   } else {
-    running = accounts.reduce((sum, a) => sum + Number(a.openingBalance || 0), 0);
+    running = roundCurrency(accounts.reduce((sum, a) => sum + Number(a.openingBalance || 0), 0));
   }
 
   // Sort ascending (chronological) to accumulate balance
   const ascending = [...allEntries].sort((a, b) => a.date.getTime() - b.date.getTime());
 
   const processed = ascending.map((entry) => {
+    const amt = roundCurrency(entry.amount);
     if (isSpecificAccount) {
       if (entry.type === 'inflow') {
         if (entry.accountId === selectedAccountId || entry.toAccountId === selectedAccountId) {
-          running += entry.amount;
+          running = roundCurrency(running + amt);
         }
       } else if (entry.type === 'outflow') {
         if (entry.accountId === selectedAccountId) {
-          running -= entry.amount;
+          running = roundCurrency(running - amt);
         }
       } else if (entry.type === 'transfer') {
         if (entry.toAccountId === selectedAccountId) {
-          running += entry.amount;
+          running = roundCurrency(running + amt);
         } else if (entry.accountId === selectedAccountId) {
-          running -= entry.amount;
+          running = roundCurrency(running - amt);
         }
       }
     } else {
       if (entry.type === 'inflow') {
-        running += entry.amount;
+        running = roundCurrency(running + amt);
       } else if (entry.type === 'outflow') {
-        running -= entry.amount;
+        running = roundCurrency(running - amt);
       }
       // Internal transfers don't change net portfolio balance across all accounts
     }

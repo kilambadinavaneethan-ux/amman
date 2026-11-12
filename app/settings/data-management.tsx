@@ -1,35 +1,37 @@
 /* eslint-disable import/namespace */
-import React, { useState, useMemo, useEffect, useCallback } from "react";
-import {
-  View,
-  Text,
-  StyleSheet,
-  ScrollView,
-  Pressable,
-  Modal,
-  TextInput,
-  ActivityIndicator,
-  Alert,
-} from "react-native";
-import { useRouter } from "expo-router";
 import { MaterialIcons } from "@expo/vector-icons";
+import AsyncStorage from "@react-native-async-storage/async-storage";
+import * as DocumentPicker from "expo-document-picker";
+import * as FileSystem from "expo-file-system/legacy";
+import { useRouter } from "expo-router";
+import * as Sharing from "expo-sharing";
 import {
   collection,
-  writeBatch,
   doc,
   getCountFromServer,
-  query,
   limit,
+  query,
+  writeBatch,
 } from "firebase/firestore";
+import { useCallback, useEffect, useMemo, useState } from "react";
+import {
+  ActivityIndicator,
+  Alert,
+  KeyboardAvoidingView,
+  Modal,
+  Pressable,
+  ScrollView,
+  StyleSheet,
+  Text,
+  TextInput,
+  View,
+} from "react-native";
 import { db } from "../../src/config/firebase";
 import { getDocsOfflineSafe } from "../../src/utils/offlineHelpers";
+import { useResponsive } from "../../utils/responsive";
 import AnimatedPage from "../components/AnimatedPage";
 import BackButton from "../components/BackButton";
 import ProtectedRoute from "../components/ProtectedRoute";
-import * as FileSystem from "expo-file-system/legacy";
-import * as Sharing from "expo-sharing";
-import * as DocumentPicker from "expo-document-picker";
-import AsyncStorage from "@react-native-async-storage/async-storage";
 import { useTheme } from "../context/ThemeContext";
 
 // ─── Types & Configurations ──────────────────────────────────────────────────
@@ -414,6 +416,7 @@ function formatBytes(bytes: number): string {
 function DataManagement() {
   const { theme } = useTheme();
   const { colors } = theme;
+  const { insets, kavBehavior, scrollBottomPadding } = useResponsive();
   const styles = useMemo(() => getStyles(theme), [theme]);
   const router = useRouter();
 
@@ -481,7 +484,7 @@ function DataManagement() {
       };
       setActivityLogs((prev) => {
         const updated = [newItem, ...prev].slice(0, 30);
-        AsyncStorage.setItem(ACTIVITY_LOGS_STORAGE_KEY, JSON.stringify(updated)).catch(() => {});
+        AsyncStorage.setItem(ACTIVITY_LOGS_STORAGE_KEY, JSON.stringify(updated)).catch(() => { });
         return updated;
       });
     } catch (_e) {
@@ -1291,7 +1294,7 @@ function DataManagement() {
   return (
     <AnimatedPage>
       {/* ── Background Processing Modal ────────────────────────────────────── */}
-      <Modal visible={isProcessing} transparent animationType="fade">
+      <Modal visible={isProcessing} transparent animationType="fade" onRequestClose={() => { }}>
         <View style={styles.loaderBg}>
           <View style={styles.loaderContent}>
             <ActivityIndicator size="large" color={colors.accent.primary} />
@@ -1307,8 +1310,16 @@ function DataManagement() {
       </Modal>
 
       {/* ── Single Wipe Confirmation Modal ─────────────────────────────────── */}
-      <Modal visible={confirmVisible} transparent animationType="slide">
-        <View style={styles.modalBg}>
+      <Modal
+        visible={confirmVisible}
+        transparent
+        animationType="slide"
+        onRequestClose={() => {
+          setConfirmVisible(false);
+          setActiveReset(null);
+        }}
+      >
+        <KeyboardAvoidingView behavior={kavBehavior} style={styles.modalBg}>
           <View style={styles.modalContent}>
             <View style={styles.warningIconWrapper}>
               <MaterialIcons name="warning" size={32} color={colors.accent.warning} />
@@ -1340,12 +1351,12 @@ function DataManagement() {
               </Pressable>
             </View>
           </View>
-        </View>
+        </KeyboardAvoidingView>
       </Modal>
 
       {/* ── Bulk Wipe Confirmation Modal ───────────────────────────────────── */}
-      <Modal visible={bulkWipeVisible} transparent animationType="slide">
-        <View style={styles.modalBg}>
+      <Modal visible={bulkWipeVisible} transparent animationType="slide" onRequestClose={() => setBulkWipeVisible(false)}>
+        <KeyboardAvoidingView behavior={kavBehavior} style={styles.modalBg}>
           <View style={styles.modalContent}>
             <View style={[styles.warningIconWrapper, { backgroundColor: "#fee2e2" }]}>
               <MaterialIcons name="delete-sweep" size={32} color={colors.accent.danger} />
@@ -1372,12 +1383,12 @@ function DataManagement() {
               </Pressable>
             </View>
           </View>
-        </View>
+        </KeyboardAvoidingView>
       </Modal>
 
       {/* ── Detail Inspection & Live Document Browser Modal ─────────────────── */}
-      <Modal visible={inspectModalVisible} transparent animationType="slide">
-        <View style={styles.modalBg}>
+      <Modal visible={inspectModalVisible} transparent animationType="slide" onRequestClose={() => setInspectModalVisible(false)}>
+        <KeyboardAvoidingView behavior={kavBehavior} style={styles.modalBg}>
           <View style={[styles.modalContent, { maxHeight: "88%" }]}>
             {/* Header */}
             <View style={styles.inspectHeaderRow}>
@@ -1544,12 +1555,12 @@ function DataManagement() {
               <Text style={styles.cancelBtnText}>Close</Text>
             </Pressable>
           </View>
-        </View>
+        </KeyboardAvoidingView>
       </Modal>
 
       {/* ── Backup Preview & Selective Restore Modal ───────────────────────── */}
-      <Modal visible={importPreviewVisible} transparent animationType="slide">
-        <View style={styles.modalBg}>
+      <Modal visible={importPreviewVisible} transparent animationType="slide" onRequestClose={() => setImportPreviewVisible(false)}>
+        <KeyboardAvoidingView behavior={kavBehavior} style={styles.modalBg}>
           <View style={[styles.modalContent, { maxHeight: "88%" }]}>
             <View style={[styles.warningIconWrapper, { backgroundColor: `${colors.accent.success}18` }]}>
               <MaterialIcons name="cloud-upload" size={32} color={colors.accent.success} />
@@ -1666,12 +1677,20 @@ function DataManagement() {
               </Pressable>
             </View>
           </View>
-        </View>
+        </KeyboardAvoidingView>
       </Modal>
 
       {/* ── Factory Reset Verification Modal ───────────────────────────────── */}
-      <Modal visible={factoryVisible} transparent animationType="slide">
-        <View style={styles.modalBg}>
+      <Modal
+        visible={factoryVisible}
+        transparent
+        animationType="slide"
+        onRequestClose={() => {
+          setFactoryVisible(false);
+          setFactoryInput("");
+        }}
+      >
+        <KeyboardAvoidingView behavior={kavBehavior} style={styles.modalBg}>
           <View style={styles.modalContent}>
             <View style={[styles.warningIconWrapper, { backgroundColor: "#fee2e2" }]}>
               <MaterialIcons name="delete-forever" size={36} color={colors.accent.danger} />
@@ -1716,11 +1735,17 @@ function DataManagement() {
               </Pressable>
             </View>
           </View>
-        </View>
+        </KeyboardAvoidingView>
       </Modal>
 
       {/* ── Main Screen Content ────────────────────────────────────────────── */}
-      <ScrollView contentContainerStyle={styles.container} showsVerticalScrollIndicator={false}>
+      <ScrollView
+        contentContainerStyle={[
+          styles.container,
+          { paddingTop: Math.max(insets.top + 8, 16), paddingBottom: scrollBottomPadding },
+        ]}
+        showsVerticalScrollIndicator={false}
+      >
         {/* Header navigation */}
         <View style={styles.header}>
           <BackButton label="Settings" onPress={() => router.push("/settings")} style={{ marginBottom: 12 }} />
@@ -2259,7 +2284,7 @@ function DataManagement() {
                 <Pressable
                   onPress={() => {
                     setActivityLogs([]);
-                    AsyncStorage.removeItem(ACTIVITY_LOGS_STORAGE_KEY).catch(() => {});
+                    AsyncStorage.removeItem(ACTIVITY_LOGS_STORAGE_KEY).catch(() => { });
                   }}
                 >
                   <Text style={{ fontSize: 11, color: colors.text.muted, fontWeight: "700" }}>Clear Log</Text>
@@ -2291,20 +2316,20 @@ function DataManagement() {
                           log.action === "export"
                             ? "cloud-download"
                             : log.action === "import"
-                            ? "cloud-upload"
-                            : log.action === "wipe"
-                            ? "delete-sweep"
-                            : log.action === "factory_reset"
-                            ? "delete-forever"
-                            : "cleaning-services"
+                              ? "cloud-upload"
+                              : log.action === "wipe"
+                                ? "delete-sweep"
+                                : log.action === "factory_reset"
+                                  ? "delete-forever"
+                                  : "cleaning-services"
                         }
                         size={16}
                         color={
                           log.action === "export"
                             ? colors.accent.primary
                             : log.action === "import"
-                            ? colors.accent.success
-                            : colors.accent.danger
+                              ? colors.accent.success
+                              : colors.accent.danger
                         }
                       />
                     </View>
@@ -2962,8 +2987,9 @@ const getStyles = (theme: any) => {
       backgroundColor: colors.bg.card,
       borderRadius: 20,
       padding: 18,
-      width: "100%",
-      maxWidth: 420,
+      width: "92%",
+      maxWidth: 440,
+      maxHeight: "88%",
       alignItems: "center",
     },
     warningIconWrapper: {

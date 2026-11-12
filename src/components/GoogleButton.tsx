@@ -22,7 +22,9 @@ export default function GoogleButton({ onPress, disabled = false, style }: Googl
       disabled={disabled}
     >
       <MaterialIcons name="g-mobiledata" size={28} color="#4285F4" style={styles.icon} />
-      <Text style={styles.text}>Continue with Google</Text>
+      <Text style={styles.text} numberOfLines={1} adjustsFontSizeToFit minimumFontScale={0.85}>
+        Continue with Google
+      </Text>
     </Pressable>
   );
 }

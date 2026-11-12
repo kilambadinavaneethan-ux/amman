@@ -1,20 +1,22 @@
-import React, { useContext, useState, useMemo } from "react";
-import { View, Text, StyleSheet, ScrollView, Pressable, ActivityIndicator, Modal, TextInput } from "react-native";
-import { useRouter, useLocalSearchParams } from "expo-router";
 import { MaterialIcons } from "@expo/vector-icons";
-import { RawMaterialSupplierContext } from "../../../context/RawMaterialSupplierContext";
-import { RawMaterialContext } from "../../../context/RawMaterialContext";
-import { UserContext } from "../../../context/UserContext";
+import { useLocalSearchParams, useRouter } from "expo-router";
+import { useContext, useMemo, useState } from "react";
+import { ActivityIndicator, KeyboardAvoidingView, Modal, Pressable, ScrollView, StyleSheet, Text, TextInput, View } from "react-native";
+import { useResponsive } from "../../../../utils/responsive";
+import BackButton from "../../../components/BackButton";
+import EasyCalendarModal from "../../../components/EasyCalendarModal";
+import ProtectedRoute from "../../../components/ProtectedRoute";
 import { ItemContext } from "../../../context/ItemContext";
 import { OrderContext } from "../../../context/OrderContext";
-import ProtectedRoute from "../../../components/ProtectedRoute";
-import BackButton from "../../../components/BackButton";
+import { RawMaterialContext } from "../../../context/RawMaterialContext";
+import { RawMaterialSupplierContext } from "../../../context/RawMaterialSupplierContext";
 import { useTheme } from "../../../context/ThemeContext";
-import EasyCalendarModal from "../../../components/EasyCalendarModal";
+import { UserContext } from "../../../context/UserContext";
 
 function SupplierDetailsScreen() {
   const { theme } = useTheme();
   const { colors, spacing, radius, shadows } = theme;
+  const { insets, kavBehavior, hp, scrollBottomPadding } = useResponsive();
   const styles = useMemo(() => getStyles(theme), [theme]);
   const router = useRouter();
   const { id } = useLocalSearchParams();
@@ -39,7 +41,7 @@ function SupplierDetailsScreen() {
   const [paymentNotes, setPaymentNotes] = useState("");
   const [paymentDate, setPaymentDate] = useState(new Date());
   const [isCalendarOpen, setIsCalendarOpen] = useState(false);
-  
+
   // Purchase form states (for editing purchases)
   const [txQty, setTxQty] = useState("");
   const [txCost, setTxCost] = useState("");
@@ -518,7 +520,12 @@ function SupplierDetailsScreen() {
   };
 
   return (
-    <ScrollView contentContainerStyle={styles.container}>
+    <ScrollView
+      contentContainerStyle={[
+        styles.container,
+        { paddingTop: Math.max(insets.top + 8, 16), paddingBottom: scrollBottomPadding },
+      ]}
+    >
       {/* Header Navigation */}
       <View style={styles.header}>
         <BackButton label="Suppliers" onPress={() => router.push("/settings/raw-materials/suppliers")} />
@@ -672,8 +679,8 @@ function SupplierDetailsScreen() {
 
         <Pressable
           style={({ pressed }) => [
-            styles.recordPaymentBtnFull, 
-            { flex: 1, marginBottom: 0, backgroundColor: colors.accent.success, borderColor: colors.accent.success }, 
+            styles.recordPaymentBtnFull,
+            { flex: 1, marginBottom: 0, backgroundColor: colors.accent.success, borderColor: colors.accent.success },
             pressed && styles.buttonPressed
           ]}
           onPress={handleOpenAdvancePayment}
@@ -745,7 +752,7 @@ function SupplierDetailsScreen() {
             const isOpening = log.type === "opening" || log.isOpening;
             const logDateStr = log.date ? log.date.toLocaleDateString() : "N/A";
             const logTimeStr = log.date ? log.date.toLocaleTimeString([], { hour: "2-digit", minute: "2-digit" }) : "";
-            
+
             if (isOpening) {
               return (
                 <View key={log.id} style={styles.logItem}>
@@ -953,8 +960,13 @@ function SupplierDetailsScreen() {
       </View>
 
       {/* Modal 1: Delete Supplier Confirmation */}
-      <Modal visible={deleteSupplierModal} transparent animationType="fade">
-        <View style={styles.modalBg}>
+      <Modal
+        visible={deleteSupplierModal}
+        transparent
+        animationType="fade"
+        onRequestClose={() => !deletingSupplier && setDeleteSupplierModal(false)}
+      >
+        <KeyboardAvoidingView behavior={kavBehavior} style={styles.modalBg}>
           <View style={styles.modalContent}>
             <MaterialIcons name="warning" size={40} color={colors.accent.danger} style={{ marginBottom: 12 }} />
             <Text style={styles.modalTitle}>Delete Supplier?</Text>
@@ -982,12 +994,17 @@ function SupplierDetailsScreen() {
               </Pressable>
             </View>
           </View>
-        </View>
+        </KeyboardAvoidingView>
       </Modal>
 
       {/* Modal 2: Record Payment */}
-      <Modal visible={paymentModal} transparent animationType="slide">
-        <View style={styles.modalBg}>
+      <Modal
+        visible={paymentModal}
+        transparent
+        animationType="slide"
+        onRequestClose={() => !loggingPayment && handleClosePayment()}
+      >
+        <KeyboardAvoidingView behavior={kavBehavior} style={styles.modalBg}>
           <View style={[styles.modalContent, styles.logModalContent]}>
             <View style={styles.logModalHeader}>
               <Text style={styles.logModalTitle}>{editingLog ? "Edit Payout Payment" : "Record Supplier Payout"}</Text>
@@ -1003,59 +1020,61 @@ function SupplierDetailsScreen() {
               </View>
             ) : null}
 
-            <Text style={styles.modalInputLabel}>Amount to Pay ({currencySymbol}) *</Text>
-            <TextInput
-              style={styles.modalTextInput}
-              value={paymentAmt}
-              onChangeText={setPaymentAmt}
-              placeholder={editingLog ? `Original: ${currencySymbol}${editingLog.amount}` : `Max available: ${currencySymbol}${balance.toFixed(2)}`}
-              placeholderTextColor={colors.text.muted}
-              keyboardType="numeric"
-              editable={!loggingPayment}
-            />
+            <ScrollView style={{ maxHeight: Math.round(hp(64)) }} contentContainerStyle={{ paddingBottom: 10 }} showsVerticalScrollIndicator={false} keyboardShouldPersistTaps="handled">
+              <Text style={styles.modalInputLabel}>Amount to Pay ({currencySymbol}) *</Text>
+              <TextInput
+                style={styles.modalTextInput}
+                value={paymentAmt}
+                onChangeText={setPaymentAmt}
+                placeholder={editingLog ? `Original: ${currencySymbol}${editingLog.amount}` : `Max available: ${currencySymbol}${balance.toFixed(2)}`}
+                placeholderTextColor={colors.text.muted}
+                keyboardType="numeric"
+                editable={!loggingPayment}
+              />
 
-            <Text style={styles.modalInputLabel}>Payment Date</Text>
-            <Pressable
-              style={styles.datePickerBtn}
-              onPress={() => !loggingPayment && setIsCalendarOpen(true)}
-            >
-              <View style={{ flexDirection: "row", alignItems: "center", gap: 8 }}>
-                <MaterialIcons name="event" size={18} color={colors.accent.primary} />
-                <Text style={styles.datePickerBtnText}>
-                  {paymentDate.toLocaleDateString("en-IN", { day: "2-digit", month: "short", year: "numeric" })}
-                </Text>
-              </View>
-              <View style={styles.datePickerChangeChip}>
-                <MaterialIcons name="edit-calendar" size={13} color={colors.accent.primary} />
-                <Text style={styles.datePickerChangeChipText}>Change Date</Text>
-              </View>
-            </Pressable>
+              <Text style={styles.modalInputLabel}>Payment Date</Text>
+              <Pressable
+                style={styles.datePickerBtn}
+                onPress={() => !loggingPayment && setIsCalendarOpen(true)}
+              >
+                <View style={{ flexDirection: "row", alignItems: "center", gap: 8 }}>
+                  <MaterialIcons name="event" size={18} color={colors.accent.primary} />
+                  <Text style={styles.datePickerBtnText}>
+                    {paymentDate.toLocaleDateString("en-IN", { day: "2-digit", month: "short", year: "numeric" })}
+                  </Text>
+                </View>
+                <View style={styles.datePickerChangeChip}>
+                  <MaterialIcons name="edit-calendar" size={13} color={colors.accent.primary} />
+                  <Text style={styles.datePickerChangeChipText}>Change Date</Text>
+                </View>
+              </Pressable>
 
-            <Text style={styles.modalInputLabel}>Transaction Notes / Ref ID</Text>
-            <TextInput
-              style={[styles.modalTextInput, styles.modalTextArea]}
-              value={paymentNotes}
-              onChangeText={setPaymentNotes}
-              placeholder="e.g. Paid in Cash, Check #402, GPay transfer"
-              placeholderTextColor={colors.text.muted}
-              multiline
-              numberOfLines={2}
-              editable={!loggingPayment}
-            />
+              <Text style={styles.modalInputLabel}>Transaction Notes / Ref ID</Text>
+              <TextInput
+                style={[styles.modalTextInput, styles.modalTextArea]}
+                value={paymentNotes}
+                onChangeText={setPaymentNotes}
+                placeholder="e.g. Paid in Cash, Check #402, GPay transfer"
+                placeholderTextColor={colors.text.muted}
+                multiline
+                numberOfLines={2}
+                editable={!loggingPayment}
+              />
 
-            <Pressable
-              style={({ pressed }) => [styles.submitLogBtn, pressed && styles.buttonPressed, loggingPayment && styles.disabledBtn]}
-              onPress={handleSavePayment}
-              disabled={loggingPayment}
-            >
-              {loggingPayment ? (
-                <ActivityIndicator size="small" color={colors.bg.card} />
-              ) : (
-                <Text style={styles.submitLogBtnText}>{editingLog ? "Save Changes" : "Log Payout Payment"}</Text>
-              )}
-            </Pressable>
+              <Pressable
+                style={({ pressed }) => [styles.submitLogBtn, pressed && styles.buttonPressed, loggingPayment && styles.disabledBtn]}
+                onPress={handleSavePayment}
+                disabled={loggingPayment}
+              >
+                {loggingPayment ? (
+                  <ActivityIndicator size="small" color={colors.bg.card} />
+                ) : (
+                  <Text style={styles.submitLogBtnText}>{editingLog ? "Save Changes" : "Log Payout Payment"}</Text>
+                )}
+              </Pressable>
+            </ScrollView>
           </View>
-        </View>
+        </KeyboardAvoidingView>
       </Modal>
 
       {/* Payment Calendar Modal */}
@@ -1071,8 +1090,13 @@ function SupplierDetailsScreen() {
       />
 
       {/* Modal 2.5: Edit Purchase */}
-      <Modal visible={purchaseModal} transparent animationType="slide">
-        <View style={styles.modalBg}>
+      <Modal
+        visible={purchaseModal}
+        transparent
+        animationType="slide"
+        onRequestClose={() => !loggingTx && handleClosePurchase()}
+      >
+        <KeyboardAvoidingView behavior={kavBehavior} style={styles.modalBg}>
           <View style={[styles.modalContent, styles.logModalContent]}>
             <View style={styles.logModalHeader}>
               <Text style={styles.logModalTitle}>Edit Purchase (Stock In)</Text>
@@ -1088,7 +1112,7 @@ function SupplierDetailsScreen() {
               </View>
             ) : null}
 
-            <ScrollView contentContainerStyle={{ paddingBottom: 10 }} showsVerticalScrollIndicator={false} keyboardShouldPersistTaps="handled">
+            <ScrollView style={{ maxHeight: Math.round(hp(64)) }} contentContainerStyle={{ paddingBottom: 10 }} showsVerticalScrollIndicator={false} keyboardShouldPersistTaps="handled">
               <Text style={styles.modalInputLabel}>Quantity to Intake *</Text>
               <TextInput
                 style={styles.modalTextInput}
@@ -1156,13 +1180,18 @@ function SupplierDetailsScreen() {
               </Pressable>
             </ScrollView>
           </View>
-        </View>
+        </KeyboardAvoidingView>
       </Modal>
 
 
       {/* Modal 3: Delete Log/Rollback Confirmation */}
-      <Modal visible={deleteLogModal} transparent animationType="fade">
-        <View style={styles.modalBg}>
+      <Modal
+        visible={deleteLogModal}
+        transparent
+        animationType="fade"
+        onRequestClose={() => !deletingLog && setDeleteLogModal(false)}
+      >
+        <KeyboardAvoidingView behavior={kavBehavior} style={styles.modalBg}>
           <View style={styles.modalContent}>
             <MaterialIcons name="warning" size={40} color="#e11d48" style={{ marginBottom: 12 }} />
             <Text style={styles.modalTitle}>Delete Ledger Record?</Text>
@@ -1190,12 +1219,17 @@ function SupplierDetailsScreen() {
               </Pressable>
             </View>
           </View>
-        </View>
+        </KeyboardAvoidingView>
       </Modal>
 
       {/* Modal 4: Edit Outstanding Owed Balance */}
-      <Modal visible={editBalanceModal} transparent animationType="slide">
-        <View style={styles.modalBg}>
+      <Modal
+        visible={editBalanceModal}
+        transparent
+        animationType="slide"
+        onRequestClose={() => !savingBalance && setEditBalanceModal(false)}
+      >
+        <KeyboardAvoidingView behavior={kavBehavior} style={styles.modalBg}>
           <View style={[styles.modalContent, styles.logModalContent]}>
             <View style={styles.logModalHeader}>
               <Text style={styles.logModalTitle}>Edit Outstanding Balance</Text>
@@ -1211,71 +1245,73 @@ function SupplierDetailsScreen() {
               </View>
             ) : null}
 
-            <Text style={styles.modalInputLabel}>Balance Type</Text>
-            <View style={{ flexDirection: "row", gap: 10, marginBottom: 16 }}>
-              <Pressable
-                style={[
-                  { flex: 1, height: 42, borderRadius: 10, borderWidth: 1.5, borderColor: colors.border.medium, justifyContent: "center", alignItems: "center" },
-                  balanceType === "owed" && { borderColor: colors.accent.danger, backgroundColor: "#fef2f2" },
-                ]}
-                onPress={() => setBalanceType("owed")}
-                disabled={savingBalance}
-              >
-                <Text style={{ fontWeight: "700", color: balanceType === "owed" ? colors.accent.danger : colors.text.muted, fontSize: 13 }}>
-                  Debt Owed (Due)
-                </Text>
-              </Pressable>
+            <ScrollView style={{ maxHeight: Math.round(hp(64)) }} contentContainerStyle={{ paddingBottom: 10 }} showsVerticalScrollIndicator={false} keyboardShouldPersistTaps="handled">
+              <Text style={styles.modalInputLabel}>Balance Type</Text>
+              <View style={{ flexDirection: "row", gap: 10, marginBottom: 16 }}>
+                <Pressable
+                  style={[
+                    { flex: 1, height: 42, borderRadius: 10, borderWidth: 1.5, borderColor: colors.border.medium, justifyContent: "center", alignItems: "center" },
+                    balanceType === "owed" && { borderColor: colors.accent.danger, backgroundColor: "#fef2f2" },
+                  ]}
+                  onPress={() => setBalanceType("owed")}
+                  disabled={savingBalance}
+                >
+                  <Text style={{ fontWeight: "700", color: balanceType === "owed" ? colors.accent.danger : colors.text.muted, fontSize: 13 }}>
+                    Debt Owed (Due)
+                  </Text>
+                </Pressable>
+
+                <Pressable
+                  style={[
+                    { flex: 1, height: 42, borderRadius: 10, borderWidth: 1.5, borderColor: colors.border.medium, justifyContent: "center", alignItems: "center" },
+                    balanceType === "advance" && { borderColor: colors.accent.success, backgroundColor: "#f0fdf4" },
+                  ]}
+                  onPress={() => setBalanceType("advance")}
+                  disabled={savingBalance}
+                >
+                  <Text style={{ fontWeight: "700", color: balanceType === "advance" ? colors.accent.success : colors.text.muted, fontSize: 13 }}>
+                    Advance Credit
+                  </Text>
+                </Pressable>
+              </View>
+
+              <Text style={styles.modalInputLabel}>Outstanding Amount ({currencySymbol}) *</Text>
+              <TextInput
+                style={styles.modalTextInput}
+                value={newBalanceAmt}
+                onChangeText={setNewBalanceAmt}
+                placeholder="0.00"
+                placeholderTextColor={colors.text.muted}
+                keyboardType="numeric"
+                editable={!savingBalance}
+              />
+
+              <Text style={styles.modalInputLabel}>Reason / Adjustment Note</Text>
+              <TextInput
+                style={[styles.modalTextInput, styles.modalTextArea]}
+                value={adjustNotes}
+                onChangeText={setAdjustNotes}
+                placeholder="e.g. Initial balance correction, discount applied"
+                placeholderTextColor={colors.text.muted}
+                multiline
+                numberOfLines={2}
+                editable={!savingBalance}
+              />
 
               <Pressable
-                style={[
-                  { flex: 1, height: 42, borderRadius: 10, borderWidth: 1.5, borderColor: colors.border.medium, justifyContent: "center", alignItems: "center" },
-                  balanceType === "advance" && { borderColor: colors.accent.success, backgroundColor: "#f0fdf4" },
-                ]}
-                onPress={() => setBalanceType("advance")}
+                style={({ pressed }) => [styles.submitLogBtn, pressed && styles.buttonPressed, savingBalance && styles.disabledBtn]}
+                onPress={handleSaveBalance}
                 disabled={savingBalance}
               >
-                <Text style={{ fontWeight: "700", color: balanceType === "advance" ? colors.accent.success : colors.text.muted, fontSize: 13 }}>
-                  Advance Credit
-                </Text>
+                {savingBalance ? (
+                  <ActivityIndicator size="small" color={colors.bg.card} />
+                ) : (
+                  <Text style={styles.submitLogBtnText}>Save Balance Changes</Text>
+                )}
               </Pressable>
-            </View>
-
-            <Text style={styles.modalInputLabel}>Outstanding Amount ({currencySymbol}) *</Text>
-            <TextInput
-              style={styles.modalTextInput}
-              value={newBalanceAmt}
-              onChangeText={setNewBalanceAmt}
-              placeholder="0.00"
-              placeholderTextColor={colors.text.muted}
-              keyboardType="numeric"
-              editable={!savingBalance}
-            />
-
-            <Text style={styles.modalInputLabel}>Reason / Adjustment Note</Text>
-            <TextInput
-              style={[styles.modalTextInput, styles.modalTextArea]}
-              value={adjustNotes}
-              onChangeText={setAdjustNotes}
-              placeholder="e.g. Initial balance correction, discount applied"
-              placeholderTextColor={colors.text.muted}
-              multiline
-              numberOfLines={2}
-              editable={!savingBalance}
-            />
-
-            <Pressable
-              style={({ pressed }) => [styles.submitLogBtn, pressed && styles.buttonPressed, savingBalance && styles.disabledBtn]}
-              onPress={handleSaveBalance}
-              disabled={savingBalance}
-            >
-              {savingBalance ? (
-                <ActivityIndicator size="small" color={colors.bg.card} />
-              ) : (
-                <Text style={styles.submitLogBtnText}>Save Balance Changes</Text>
-              )}
-            </Pressable>
+            </ScrollView>
           </View>
-        </View>
+        </KeyboardAvoidingView>
       </Modal>
     </ScrollView>
   );
@@ -1292,636 +1328,637 @@ export default function DetailsRoute() {
 const getStyles = (theme) => {
   const { colors, spacing, radius, shadows } = theme;
   return StyleSheet.create({
-  container: {
-    padding: 16,
-    backgroundColor: colors.bg.card,
-    flexGrow: 1,
-  },
-  errorContainer: {
-    flex: 1,
-    justifyContent: "center",
-    alignItems: "center",
-    padding: 24,
-    minHeight: 300,
-  },
-  errorTitle: {
-    fontSize: 20,
-    fontWeight: "700",
-    color: colors.text.primary,
-    marginTop: 12,
-    marginBottom: 6,
-  },
-  errorDesc: {
-    fontSize: 14,
-    color: colors.text.muted,
-    textAlign: "center",
-    marginBottom: 20,
-  },
-  backLink: {
-    paddingVertical: 10,
-    paddingHorizontal: 20,
-    backgroundColor: colors.accent.primary,
-    borderRadius: 10,
-  },
-  backLinkText: {
-    color: colors.bg.card,
-    fontWeight: "700",
-  },
-  header: {
-    flexDirection: "row",
-    justifyContent: "space-between",
-    alignItems: "center",
-    marginBottom: 20,
-  },
-  backButton: {
-    flexDirection: "row",
-    alignItems: "center",
-  },
-  backText: {
-    fontSize: 15,
-    fontWeight: "600",
-    color: colors.text.secondary,
-    marginLeft: 6,
-  },
-  headerActions: {
-    flexDirection: "row",
-    gap: 8,
-  },
-  actionButton: {
-    width: 38,
-    height: 38,
-    borderRadius: 19,
-    justifyContent: "center",
-    alignItems: "center",
-    borderWidth: 1.5,
-  },
-  editAction: {
-    backgroundColor: "#6C5CE720",
-    borderColor: "#6C5CE740",
-  },
-  deleteAction: {
-    backgroundColor: "#fff5f5",
-    borderColor: "#fecaca",
-  },
-  buttonPressed: {
-    opacity: 0.75,
-  },
-  profileCard: {
-    backgroundColor: colors.bg.card,
-    borderWidth: 1,
-    borderColor: colors.border.subtle,
-    borderRadius: 16,
-    padding: 16,
-    marginBottom: 20,
-    shadowColor: colors.text.primary,
-    shadowOffset: { width: 0, height: 2 },
-    shadowOpacity: 0.04,
-    shadowRadius: 10,
-    elevation: 2,
-  },
-  profileHeader: {
-    flexDirection: "row",
-    alignItems: "center",
-    marginBottom: 16,
-  },
-  avatarCircle: {
-    width: 54,
-    height: 54,
-    borderRadius: 27,
-    backgroundColor: "#6C5CE720",
-    justifyContent: "center",
-    alignItems: "center",
-  },
-  avatarText: {
-    color: "#0284c7",
-    fontSize: 20,
-    fontWeight: "700",
-  },
-  profileDetails: {
-    marginLeft: 14,
-    flex: 1,
-  },
-  companyTitle: {
-    fontSize: 18,
-    fontWeight: "800",
-    color: colors.text.primary,
-    marginBottom: 4,
-  },
-  agentSubText: {
-    fontSize: 12,
-    color: colors.text.muted,
-    fontWeight: "500",
-  },
-  divider: {
-    height: 1,
-    backgroundColor: colors.border.subtle,
-    marginBottom: 14,
-  },
-  detailsRow: {
-    gap: 10,
-  },
-  detailItem: {
-    flexDirection: "row",
-    alignItems: "center",
-    gap: 10,
-  },
-  detailItemText: {
-    fontSize: 13,
-    color: colors.text.secondary,
-    fontWeight: "500",
-    flex: 1,
-  },
-  notesWrapper: {
-    marginTop: 14,
-    borderTopWidth: 1,
-    borderTopColor: colors.border.subtle,
-    paddingTop: 12,
-  },
-  notesTitle: {
-    fontSize: 11,
-    fontWeight: "700",
-    textTransform: "uppercase",
-    color: colors.text.muted,
-    letterSpacing: 0.5,
-    marginBottom: 6,
-  },
-  notesText: {
-    fontSize: 13,
-    color: colors.text.secondary,
-    lineHeight: 18,
-  },
-  balanceSection: {
-    backgroundColor: colors.bg.primary,
-    borderWidth: 1,
-    borderColor: colors.border.subtle,
-    borderRadius: 16,
-    padding: 16,
-    flexDirection: "row",
-    justifyContent: "space-between",
-    alignItems: "center",
-    marginBottom: 24,
-  },
-  balanceInfo: {
-    flex: 1,
-  },
-  balanceLabel: {
-    fontSize: 10,
-    fontWeight: "700",
-    color: colors.text.muted,
-    textTransform: "uppercase",
-    letterSpacing: 0.5,
-    marginBottom: 4,
-  },
-  balanceValue: {
-    fontSize: 22,
-    fontWeight: "800",
-    marginBottom: 4,
-  },
-  debtText: {
-    color: colors.accent.danger,
-  },
-  clearText: {
-    color: "#16a34a",
-  },
-  balanceSub: {
-    fontSize: 10,
-    color: colors.text.muted,
-    fontWeight: "500",
-  },
-  recordPaymentBtn: {
-    flexDirection: "row",
-    alignItems: "center",
-    backgroundColor: colors.accent.success,
-    paddingHorizontal: 14,
-    paddingVertical: 10,
-    borderRadius: 10,
-    gap: 6,
-  },
-  recordPaymentBtnText: {
-    color: colors.bg.card,
-    fontWeight: "700",
-    fontSize: 13,
-  },
-  sectionTitle: {
-    fontSize: 13,
-    fontWeight: "700",
-    color: colors.text.muted,
-    textTransform: "uppercase",
-    letterSpacing: 0.8,
-    marginBottom: 12,
-    marginLeft: 4,
-  },
-  ledgerContainer: {
-    gap: 12,
-    paddingBottom: 30,
-  },
-  emptyLedgerCard: {
-    padding: 24,
-    alignItems: "center",
-    borderWidth: 1.5,
-    borderStyle: "dashed",
-    borderColor: colors.border.medium,
-    borderRadius: 12,
-    backgroundColor: "#fafafa",
-  },
-  emptyLedgerTitle: {
-    fontSize: 14,
-    fontWeight: "700",
-    color: colors.text.muted,
-    marginTop: 8,
-    marginBottom: 2,
-  },
-  emptyLedgerDesc: {
-    fontSize: 12,
-    color: colors.text.muted,
-    textAlign: "center",
-  },
-  ledgerItem: {
-    flexDirection: "row",
-    justifyContent: "space-between",
-    alignItems: "center",
-    borderWidth: 1,
-    borderColor: colors.border.subtle,
-    borderRadius: 12,
-    padding: 12,
-    backgroundColor: colors.bg.card,
-  },
-  ledgerItemLeft: {
-    flexDirection: "row",
-    gap: 10,
-    flex: 1,
-  },
-  ledgerIndicatorCircle: {
-    width: 28,
-    height: 28,
-    borderRadius: 14,
-    justifyContent: "center",
-    alignItems: "center",
-    marginTop: 2,
-  },
-  ledgerItemTitle: {
-    fontSize: 13,
-    fontWeight: "700",
-    color: colors.text.primary,
-  },
-  ledgerItemDate: {
-    fontSize: 10,
-    color: colors.text.muted,
-    marginTop: 2,
-    marginBottom: 6,
-  },
-  ledgerValues: {
-    backgroundColor: colors.bg.primary,
-    padding: 8,
-    borderRadius: 6,
-    gap: 2,
-  },
-  ledgerValText: {
-    fontSize: 11,
-    color: colors.text.secondary,
-    fontWeight: "500",
-  },
-  ledgerNotes: {
-    fontSize: 11,
-    color: colors.text.muted,
-    backgroundColor: colors.bg.primary,
-    padding: 6,
-    borderRadius: 6,
-    marginTop: 6,
-    lineHeight: 14,
-  },
-  deleteLogBtn: {
-    padding: 6,
-  },
-  modalBg: {
-    flex: 1,
-    backgroundColor: "rgba(0,0,0,0.55)",
-    justifyContent: "center",
-    alignItems: "center",
-    padding: 16,
-  },
-  modalContent: {
-    backgroundColor: colors.bg.card,
-    borderRadius: 16,
-    padding: 20,
-    width: "100%",
-    maxWidth: 340,
-    alignItems: "center",
-    shadowColor: colors.text.primary,
-    shadowOffset: { width: 0, height: 4 },
-    shadowOpacity: 0.1,
-    shadowRadius: 15,
-    elevation: 5,
-  },
-  logModalContent: {
-    maxWidth: 360,
-    alignItems: "stretch",
-  },
-  logModalHeader: {
-    flexDirection: "row",
-    justifyContent: "space-between",
-    alignItems: "center",
-    marginBottom: 16,
-  },
-  logModalTitle: {
-    fontSize: 16,
-    fontWeight: "800",
-    color: colors.text.primary,
-  },
-  modalTitle: {
-    fontSize: 18,
-    fontWeight: "800",
-    color: colors.text.primary,
-    marginBottom: 8,
-  },
-  modalDesc: {
-    fontSize: 13,
-    color: colors.text.muted,
-    textAlign: "center",
-    lineHeight: 18,
-    marginBottom: 20,
-  },
-  modalActions: {
-    flexDirection: "row",
-    gap: 10,
-    width: "100%",
-  },
-  modalBtn: {
-    flex: 1,
-    height: 40,
-    borderRadius: 8,
-    justifyContent: "center",
-    alignItems: "center",
-  },
-  modalCancelBtn: {
-    borderWidth: 1.5,
-    borderColor: colors.border.medium,
-    backgroundColor: colors.bg.card,
-  },
-  modalDeleteBtn: {
-    backgroundColor: colors.accent.danger,
-  },
-  modalCancelText: {
-    color: colors.text.muted,
-    fontWeight: "700",
-  },
-  modalDeleteText: {
-    color: colors.bg.card,
-    fontWeight: "700",
-  },
-  modalError: {
-    flexDirection: "row",
-    alignItems: "center",
-    backgroundColor: "#fef2f2",
-    borderWidth: 1,
-    borderColor: "#fca5a5",
-    borderRadius: 8,
-    padding: 8,
-    gap: 6,
-    marginBottom: 12,
-  },
-  modalErrorText: {
-    color: "#b91c1c",
-    fontSize: 12,
-    fontWeight: "600",
-    flex: 1,
-  },
-  modalInputLabel: {
-    fontSize: 11,
-    fontWeight: "700",
-    color: colors.text.secondary,
-    textTransform: "uppercase",
-    marginBottom: 6,
-    marginTop: 8,
-  },
-  modalTextInput: {
-    backgroundColor: colors.bg.card,
-    borderWidth: 1.5,
-    borderColor: colors.border.medium,
-    borderRadius: 8,
-    paddingHorizontal: 10,
-    height: 40,
-    fontSize: 14,
-    color: colors.text.primary,
-    marginBottom: 10,
-  },
-  datePickerBtn: {
-    flexDirection: "row",
-    alignItems: "center",
-    justifyContent: "space-between",
-    backgroundColor: colors.bg.card,
-    borderWidth: 1.5,
-    borderColor: colors.border.medium,
-    borderRadius: 8,
-    paddingHorizontal: 10,
-    height: 40,
-    marginBottom: 10,
-  },
-  datePickerBtnText: {
-    fontSize: 13,
-    fontWeight: "600",
-    color: colors.text.primary,
-  },
-  datePickerChangeChip: {
-    flexDirection: "row",
-    alignItems: "center",
-    gap: 4,
-    backgroundColor: `${colors.accent.primary}15`,
-    paddingHorizontal: 8,
-    paddingVertical: 4,
-    borderRadius: 6,
-  },
-  datePickerChangeChipText: {
-    fontSize: 11,
-    fontWeight: "700",
-    color: colors.accent.primary,
-  },
-  modalTextArea: {
-    height: 60,
-    paddingVertical: 8,
-  },
-  submitLogBtn: {
-    backgroundColor: colors.accent.success,
-    height: 44,
-    borderRadius: 8,
-    justifyContent: "center",
-    alignItems: "center",
-    marginTop: 10,
-  },
-  submitLogBtnText: {
-    color: colors.bg.card,
-    fontWeight: "700",
-    fontSize: 14,
-  },
-  disabledBtn: {
-    opacity: 0.6,
-  },
-  statusBadge: {
-    paddingHorizontal: 6,
-    paddingVertical: 2,
-    borderRadius: 4,
-  },
-  statusBadgeActive: {
-    backgroundColor: "#ecfdf5",
-  },
-  statusBadgeInactive: {
-    backgroundColor: colors.border.subtle,
-  },
-  statusBadgeText: {
-    fontSize: 9,
-    fontWeight: "700",
-    textTransform: "uppercase",
-  },
-  statusBadgeTextActive: {
-    color: "#059669",
-  },
-  statusBadgeTextInactive: {
-    color: colors.text.muted,
-  },
-  suppliedSection: {
-    marginTop: 14,
-    borderTopWidth: 1,
-    borderTopColor: colors.border.subtle,
-    paddingTop: 12,
-  },
-  suppliedTagsGrid: {
-    flexDirection: "row",
-    flexWrap: "wrap",
-    gap: 8,
-    marginTop: 6,
-  },
-  suppliedBadge: {
-    flexDirection: "row",
-    alignItems: "center",
-    backgroundColor: "#fffbeb",
-    borderWidth: 1,
-    borderColor: "#fde68a",
-    paddingHorizontal: 8,
-    paddingVertical: 4,
-    borderRadius: 6,
-    gap: 4,
-  },
-  suppliedBadgeText: {
-    fontSize: 12,
-    fontWeight: "600",
-    color: colors.accent.warning,
-  },
-  metricsGrid: {
-    flexDirection: "row",
-    gap: 10,
-    marginBottom: 16,
-  },
-  metricCardItem: {
-    flex: 1,
-    backgroundColor: colors.bg.primary,
-    borderWidth: 1.5,
-    borderColor: colors.border.subtle,
-    borderRadius: 12,
-    padding: 12,
-  },
-  metricCardLabel: {
-    fontSize: 9,
-    fontWeight: "700",
-    color: colors.text.muted,
-    textTransform: "uppercase",
-    marginBottom: 4,
-  },
-  metricCardVal: {
-    fontSize: 14,
-    fontWeight: "800",
-    color: colors.text.primary,
-  },
-  recordPaymentBtnFull: {
-    flexDirection: "row",
-    alignItems: "center",
-    justifyContent: "center",
-    backgroundColor: colors.accent.success,
-    height: 44,
-    borderRadius: 10,
-    marginBottom: 24,
-  },
-  recordPaymentBtnTextFull: {
-    color: colors.bg.card,
-    fontWeight: "700",
-    fontSize: 14,
-  },
-  logsContainer: {
-    gap: 12,
-    marginBottom: 24,
-  },
-  emptyLogsCard: {
-    backgroundColor: colors.bg.card,
-    borderWidth: 1.5,
-    borderColor: colors.border.medium,
-    borderRadius: 12,
-    padding: 20,
-    alignItems: "center",
-    justifyContent: "center",
-  },
-  emptyLogsTitle: {
-    fontSize: 14,
-    fontWeight: "700",
-    color: colors.text.secondary,
-    marginTop: 8,
-    marginBottom: 2,
-  },
-  emptyLogsDesc: {
-    fontSize: 12,
-    color: colors.text.muted,
-    textAlign: "center",
-  },
-  logItem: {
-    flexDirection: "row",
-    justifyContent: "space-between",
-    alignItems: "center",
-    borderWidth: 1.5,
-    borderColor: colors.border.subtle,
-    borderRadius: 12,
-    padding: 12,
-    backgroundColor: colors.bg.card,
-  },
-  logItemLeft: {
-    flexDirection: "row",
-    gap: 10,
-    flex: 1,
-  },
-  logIndicatorCircle: {
-    width: 28,
-    height: 28,
-    borderRadius: 14,
-    justifyContent: "center",
-    alignItems: "center",
-    marginTop: 2,
-  },
-  logItemTitle: {
-    fontSize: 13,
-    fontWeight: "700",
-    color: colors.text.primary,
-  },
-  logQtyText: {
-    fontSize: 13,
-    fontWeight: "800",
-  },
-  logItemDate: {
-    fontSize: 10,
-    color: colors.text.muted,
-    marginTop: 2,
-  },
-  logItemCostText: {
-    fontSize: 11,
-    color: colors.text.secondary,
-    fontWeight: "600",
-    marginTop: 4,
-  },
-  logItemNotes: {
-    fontSize: 11,
-    color: colors.text.muted,
-    backgroundColor: colors.bg.primary,
-    padding: 6,
-    borderRadius: 6,
-    marginTop: 6,
-    lineHeight: 15,
-  },
-})
+    container: {
+      padding: 16,
+      backgroundColor: colors.bg.card,
+      flexGrow: 1,
+    },
+    errorContainer: {
+      flex: 1,
+      justifyContent: "center",
+      alignItems: "center",
+      padding: 24,
+      minHeight: 300,
+    },
+    errorTitle: {
+      fontSize: 20,
+      fontWeight: "700",
+      color: colors.text.primary,
+      marginTop: 12,
+      marginBottom: 6,
+    },
+    errorDesc: {
+      fontSize: 14,
+      color: colors.text.muted,
+      textAlign: "center",
+      marginBottom: 20,
+    },
+    backLink: {
+      paddingVertical: 10,
+      paddingHorizontal: 20,
+      backgroundColor: colors.accent.primary,
+      borderRadius: 10,
+    },
+    backLinkText: {
+      color: colors.bg.card,
+      fontWeight: "700",
+    },
+    header: {
+      flexDirection: "row",
+      justifyContent: "space-between",
+      alignItems: "center",
+      marginBottom: 20,
+    },
+    backButton: {
+      flexDirection: "row",
+      alignItems: "center",
+    },
+    backText: {
+      fontSize: 15,
+      fontWeight: "600",
+      color: colors.text.secondary,
+      marginLeft: 6,
+    },
+    headerActions: {
+      flexDirection: "row",
+      gap: 8,
+    },
+    actionButton: {
+      width: 38,
+      height: 38,
+      borderRadius: 19,
+      justifyContent: "center",
+      alignItems: "center",
+      borderWidth: 1.5,
+    },
+    editAction: {
+      backgroundColor: "#6C5CE720",
+      borderColor: "#6C5CE740",
+    },
+    deleteAction: {
+      backgroundColor: "#fff5f5",
+      borderColor: "#fecaca",
+    },
+    buttonPressed: {
+      opacity: 0.75,
+    },
+    profileCard: {
+      backgroundColor: colors.bg.card,
+      borderWidth: 1,
+      borderColor: colors.border.subtle,
+      borderRadius: 16,
+      padding: 16,
+      marginBottom: 20,
+      shadowColor: colors.text.primary,
+      shadowOffset: { width: 0, height: 2 },
+      shadowOpacity: 0.04,
+      shadowRadius: 10,
+      elevation: 2,
+    },
+    profileHeader: {
+      flexDirection: "row",
+      alignItems: "center",
+      marginBottom: 16,
+    },
+    avatarCircle: {
+      width: 54,
+      height: 54,
+      borderRadius: 27,
+      backgroundColor: "#6C5CE720",
+      justifyContent: "center",
+      alignItems: "center",
+    },
+    avatarText: {
+      color: "#0284c7",
+      fontSize: 20,
+      fontWeight: "700",
+    },
+    profileDetails: {
+      marginLeft: 14,
+      flex: 1,
+    },
+    companyTitle: {
+      fontSize: 18,
+      fontWeight: "800",
+      color: colors.text.primary,
+      marginBottom: 4,
+    },
+    agentSubText: {
+      fontSize: 12,
+      color: colors.text.muted,
+      fontWeight: "500",
+    },
+    divider: {
+      height: 1,
+      backgroundColor: colors.border.subtle,
+      marginBottom: 14,
+    },
+    detailsRow: {
+      gap: 10,
+    },
+    detailItem: {
+      flexDirection: "row",
+      alignItems: "center",
+      gap: 10,
+    },
+    detailItemText: {
+      fontSize: 13,
+      color: colors.text.secondary,
+      fontWeight: "500",
+      flex: 1,
+    },
+    notesWrapper: {
+      marginTop: 14,
+      borderTopWidth: 1,
+      borderTopColor: colors.border.subtle,
+      paddingTop: 12,
+    },
+    notesTitle: {
+      fontSize: 11,
+      fontWeight: "700",
+      textTransform: "uppercase",
+      color: colors.text.muted,
+      letterSpacing: 0.5,
+      marginBottom: 6,
+    },
+    notesText: {
+      fontSize: 13,
+      color: colors.text.secondary,
+      lineHeight: 18,
+    },
+    balanceSection: {
+      backgroundColor: colors.bg.primary,
+      borderWidth: 1,
+      borderColor: colors.border.subtle,
+      borderRadius: 16,
+      padding: 16,
+      flexDirection: "row",
+      justifyContent: "space-between",
+      alignItems: "center",
+      marginBottom: 24,
+    },
+    balanceInfo: {
+      flex: 1,
+    },
+    balanceLabel: {
+      fontSize: 10,
+      fontWeight: "700",
+      color: colors.text.muted,
+      textTransform: "uppercase",
+      letterSpacing: 0.5,
+      marginBottom: 4,
+    },
+    balanceValue: {
+      fontSize: 22,
+      fontWeight: "800",
+      marginBottom: 4,
+    },
+    debtText: {
+      color: colors.accent.danger,
+    },
+    clearText: {
+      color: "#16a34a",
+    },
+    balanceSub: {
+      fontSize: 10,
+      color: colors.text.muted,
+      fontWeight: "500",
+    },
+    recordPaymentBtn: {
+      flexDirection: "row",
+      alignItems: "center",
+      backgroundColor: colors.accent.success,
+      paddingHorizontal: 14,
+      paddingVertical: 10,
+      borderRadius: 10,
+      gap: 6,
+    },
+    recordPaymentBtnText: {
+      color: colors.bg.card,
+      fontWeight: "700",
+      fontSize: 13,
+    },
+    sectionTitle: {
+      fontSize: 13,
+      fontWeight: "700",
+      color: colors.text.muted,
+      textTransform: "uppercase",
+      letterSpacing: 0.8,
+      marginBottom: 12,
+      marginLeft: 4,
+    },
+    ledgerContainer: {
+      gap: 12,
+      paddingBottom: 30,
+    },
+    emptyLedgerCard: {
+      padding: 24,
+      alignItems: "center",
+      borderWidth: 1.5,
+      borderStyle: "dashed",
+      borderColor: colors.border.medium,
+      borderRadius: 12,
+      backgroundColor: "#fafafa",
+    },
+    emptyLedgerTitle: {
+      fontSize: 14,
+      fontWeight: "700",
+      color: colors.text.muted,
+      marginTop: 8,
+      marginBottom: 2,
+    },
+    emptyLedgerDesc: {
+      fontSize: 12,
+      color: colors.text.muted,
+      textAlign: "center",
+    },
+    ledgerItem: {
+      flexDirection: "row",
+      justifyContent: "space-between",
+      alignItems: "center",
+      borderWidth: 1,
+      borderColor: colors.border.subtle,
+      borderRadius: 12,
+      padding: 12,
+      backgroundColor: colors.bg.card,
+    },
+    ledgerItemLeft: {
+      flexDirection: "row",
+      gap: 10,
+      flex: 1,
+    },
+    ledgerIndicatorCircle: {
+      width: 28,
+      height: 28,
+      borderRadius: 14,
+      justifyContent: "center",
+      alignItems: "center",
+      marginTop: 2,
+    },
+    ledgerItemTitle: {
+      fontSize: 13,
+      fontWeight: "700",
+      color: colors.text.primary,
+    },
+    ledgerItemDate: {
+      fontSize: 10,
+      color: colors.text.muted,
+      marginTop: 2,
+      marginBottom: 6,
+    },
+    ledgerValues: {
+      backgroundColor: colors.bg.primary,
+      padding: 8,
+      borderRadius: 6,
+      gap: 2,
+    },
+    ledgerValText: {
+      fontSize: 11,
+      color: colors.text.secondary,
+      fontWeight: "500",
+    },
+    ledgerNotes: {
+      fontSize: 11,
+      color: colors.text.muted,
+      backgroundColor: colors.bg.primary,
+      padding: 6,
+      borderRadius: 6,
+      marginTop: 6,
+      lineHeight: 14,
+    },
+    deleteLogBtn: {
+      padding: 6,
+    },
+    modalBg: {
+      flex: 1,
+      backgroundColor: "rgba(0,0,0,0.55)",
+      justifyContent: "center",
+      alignItems: "center",
+      padding: 16,
+    },
+    modalContent: {
+      backgroundColor: colors.bg.card,
+      borderRadius: 16,
+      padding: 20,
+      width: "92%",
+      maxWidth: 400,
+      maxHeight: "88%",
+      alignItems: "center",
+      shadowColor: colors.text.primary,
+      shadowOffset: { width: 0, height: 4 },
+      shadowOpacity: 0.1,
+      shadowRadius: 15,
+      elevation: 5,
+    },
+    logModalContent: {
+      maxWidth: 440,
+      alignItems: "stretch",
+    },
+    logModalHeader: {
+      flexDirection: "row",
+      justifyContent: "space-between",
+      alignItems: "center",
+      marginBottom: 16,
+    },
+    logModalTitle: {
+      fontSize: 16,
+      fontWeight: "800",
+      color: colors.text.primary,
+    },
+    modalTitle: {
+      fontSize: 18,
+      fontWeight: "800",
+      color: colors.text.primary,
+      marginBottom: 8,
+    },
+    modalDesc: {
+      fontSize: 13,
+      color: colors.text.muted,
+      textAlign: "center",
+      lineHeight: 18,
+      marginBottom: 20,
+    },
+    modalActions: {
+      flexDirection: "row",
+      gap: 10,
+      width: "100%",
+    },
+    modalBtn: {
+      flex: 1,
+      height: 40,
+      borderRadius: 8,
+      justifyContent: "center",
+      alignItems: "center",
+    },
+    modalCancelBtn: {
+      borderWidth: 1.5,
+      borderColor: colors.border.medium,
+      backgroundColor: colors.bg.card,
+    },
+    modalDeleteBtn: {
+      backgroundColor: colors.accent.danger,
+    },
+    modalCancelText: {
+      color: colors.text.muted,
+      fontWeight: "700",
+    },
+    modalDeleteText: {
+      color: colors.bg.card,
+      fontWeight: "700",
+    },
+    modalError: {
+      flexDirection: "row",
+      alignItems: "center",
+      backgroundColor: "#fef2f2",
+      borderWidth: 1,
+      borderColor: "#fca5a5",
+      borderRadius: 8,
+      padding: 8,
+      gap: 6,
+      marginBottom: 12,
+    },
+    modalErrorText: {
+      color: "#b91c1c",
+      fontSize: 12,
+      fontWeight: "600",
+      flex: 1,
+    },
+    modalInputLabel: {
+      fontSize: 11,
+      fontWeight: "700",
+      color: colors.text.secondary,
+      textTransform: "uppercase",
+      marginBottom: 6,
+      marginTop: 8,
+    },
+    modalTextInput: {
+      backgroundColor: colors.bg.card,
+      borderWidth: 1.5,
+      borderColor: colors.border.medium,
+      borderRadius: 8,
+      paddingHorizontal: 10,
+      height: 40,
+      fontSize: 14,
+      color: colors.text.primary,
+      marginBottom: 10,
+    },
+    datePickerBtn: {
+      flexDirection: "row",
+      alignItems: "center",
+      justifyContent: "space-between",
+      backgroundColor: colors.bg.card,
+      borderWidth: 1.5,
+      borderColor: colors.border.medium,
+      borderRadius: 8,
+      paddingHorizontal: 10,
+      height: 40,
+      marginBottom: 10,
+    },
+    datePickerBtnText: {
+      fontSize: 13,
+      fontWeight: "600",
+      color: colors.text.primary,
+    },
+    datePickerChangeChip: {
+      flexDirection: "row",
+      alignItems: "center",
+      gap: 4,
+      backgroundColor: `${colors.accent.primary}15`,
+      paddingHorizontal: 8,
+      paddingVertical: 4,
+      borderRadius: 6,
+    },
+    datePickerChangeChipText: {
+      fontSize: 11,
+      fontWeight: "700",
+      color: colors.accent.primary,
+    },
+    modalTextArea: {
+      height: 60,
+      paddingVertical: 8,
+    },
+    submitLogBtn: {
+      backgroundColor: colors.accent.success,
+      height: 44,
+      borderRadius: 8,
+      justifyContent: "center",
+      alignItems: "center",
+      marginTop: 10,
+    },
+    submitLogBtnText: {
+      color: colors.bg.card,
+      fontWeight: "700",
+      fontSize: 14,
+    },
+    disabledBtn: {
+      opacity: 0.6,
+    },
+    statusBadge: {
+      paddingHorizontal: 6,
+      paddingVertical: 2,
+      borderRadius: 4,
+    },
+    statusBadgeActive: {
+      backgroundColor: "#ecfdf5",
+    },
+    statusBadgeInactive: {
+      backgroundColor: colors.border.subtle,
+    },
+    statusBadgeText: {
+      fontSize: 9,
+      fontWeight: "700",
+      textTransform: "uppercase",
+    },
+    statusBadgeTextActive: {
+      color: "#059669",
+    },
+    statusBadgeTextInactive: {
+      color: colors.text.muted,
+    },
+    suppliedSection: {
+      marginTop: 14,
+      borderTopWidth: 1,
+      borderTopColor: colors.border.subtle,
+      paddingTop: 12,
+    },
+    suppliedTagsGrid: {
+      flexDirection: "row",
+      flexWrap: "wrap",
+      gap: 8,
+      marginTop: 6,
+    },
+    suppliedBadge: {
+      flexDirection: "row",
+      alignItems: "center",
+      backgroundColor: "#fffbeb",
+      borderWidth: 1,
+      borderColor: "#fde68a",
+      paddingHorizontal: 8,
+      paddingVertical: 4,
+      borderRadius: 6,
+      gap: 4,
+    },
+    suppliedBadgeText: {
+      fontSize: 12,
+      fontWeight: "600",
+      color: colors.accent.warning,
+    },
+    metricsGrid: {
+      flexDirection: "row",
+      gap: 10,
+      marginBottom: 16,
+    },
+    metricCardItem: {
+      flex: 1,
+      backgroundColor: colors.bg.primary,
+      borderWidth: 1.5,
+      borderColor: colors.border.subtle,
+      borderRadius: 12,
+      padding: 12,
+    },
+    metricCardLabel: {
+      fontSize: 9,
+      fontWeight: "700",
+      color: colors.text.muted,
+      textTransform: "uppercase",
+      marginBottom: 4,
+    },
+    metricCardVal: {
+      fontSize: 14,
+      fontWeight: "800",
+      color: colors.text.primary,
+    },
+    recordPaymentBtnFull: {
+      flexDirection: "row",
+      alignItems: "center",
+      justifyContent: "center",
+      backgroundColor: colors.accent.success,
+      height: 44,
+      borderRadius: 10,
+      marginBottom: 24,
+    },
+    recordPaymentBtnTextFull: {
+      color: colors.bg.card,
+      fontWeight: "700",
+      fontSize: 14,
+    },
+    logsContainer: {
+      gap: 12,
+      marginBottom: 24,
+    },
+    emptyLogsCard: {
+      backgroundColor: colors.bg.card,
+      borderWidth: 1.5,
+      borderColor: colors.border.medium,
+      borderRadius: 12,
+      padding: 20,
+      alignItems: "center",
+      justifyContent: "center",
+    },
+    emptyLogsTitle: {
+      fontSize: 14,
+      fontWeight: "700",
+      color: colors.text.secondary,
+      marginTop: 8,
+      marginBottom: 2,
+    },
+    emptyLogsDesc: {
+      fontSize: 12,
+      color: colors.text.muted,
+      textAlign: "center",
+    },
+    logItem: {
+      flexDirection: "row",
+      justifyContent: "space-between",
+      alignItems: "center",
+      borderWidth: 1.5,
+      borderColor: colors.border.subtle,
+      borderRadius: 12,
+      padding: 12,
+      backgroundColor: colors.bg.card,
+    },
+    logItemLeft: {
+      flexDirection: "row",
+      gap: 10,
+      flex: 1,
+    },
+    logIndicatorCircle: {
+      width: 28,
+      height: 28,
+      borderRadius: 14,
+      justifyContent: "center",
+      alignItems: "center",
+      marginTop: 2,
+    },
+    logItemTitle: {
+      fontSize: 13,
+      fontWeight: "700",
+      color: colors.text.primary,
+    },
+    logQtyText: {
+      fontSize: 13,
+      fontWeight: "800",
+    },
+    logItemDate: {
+      fontSize: 10,
+      color: colors.text.muted,
+      marginTop: 2,
+    },
+    logItemCostText: {
+      fontSize: 11,
+      color: colors.text.secondary,
+      fontWeight: "600",
+      marginTop: 4,
+    },
+    logItemNotes: {
+      fontSize: 11,
+      color: colors.text.muted,
+      backgroundColor: colors.bg.primary,
+      padding: 6,
+      borderRadius: 6,
+      marginTop: 6,
+      lineHeight: 15,
+    },
+  })
 };
 ;

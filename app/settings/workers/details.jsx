@@ -5,6 +5,7 @@ import { useContext, useEffect, useMemo, useState } from "react";
 import {
     ActivityIndicator,
     Alert,
+    KeyboardAvoidingView,
     Modal,
     Pressable,
     ScrollView,
@@ -18,6 +19,7 @@ import BackButton from "../../components/BackButton";
 import EasyCalendarModal from "../../components/EasyCalendarModal";
 import { ItemContext } from "../../context/ItemContext";
 import { useTheme } from "../../context/ThemeContext";
+import { useResponsive } from "../../../utils/responsive";
 import { WorkerContext } from "../../context/WorkerContext";
 import { OrderContext } from "../../context/OrderContext";
 import { db, normalizeDateValue } from "../../../src/config/firebase";
@@ -25,6 +27,7 @@ import { db, normalizeDateValue } from "../../../src/config/firebase";
 function WorkerDetails() {
   const { theme } = useTheme();
   const { colors, spacing, radius, shadows } = theme;
+  const { insets, kavBehavior, hp, scrollBottomPadding } = useResponsive();
   const styles = useMemo(() => getStyles(theme), [theme]);
   const router = useRouter();
   const { id } = useLocalSearchParams();
@@ -606,9 +609,15 @@ function WorkerDetails() {
     if (!selectedLog) return null;
 
     return (
-      <Modal visible={showEditLogModal} transparent animationType="slide">
-        <View style={styles.modalBg}>
+      <Modal
+        visible={showEditLogModal}
+        transparent
+        animationType="slide"
+        onRequestClose={() => setShowEditLogModal(false)}
+      >
+        <KeyboardAvoidingView behavior={kavBehavior} style={styles.modalBg}>
           <View style={styles.modalContent}>
+            <ScrollView style={{ maxHeight: Math.round(hp(74)) }} showsVerticalScrollIndicator={false} keyboardShouldPersistTaps="handled" contentContainerStyle={{ gap: 10 }}>
             <Text style={styles.modalTitle}>
               Edit {selectedLog.type === "attendance" ? "Attendance" : selectedLog.type === "bonus" ? "Bonus" : "Payment"} Log
             </Text>
@@ -815,8 +824,9 @@ function WorkerDetails() {
             >
               <Text style={{ color: colors.text.muted, fontWeight: "700" }}>Cancel</Text>
             </Pressable>
+            </ScrollView>
           </View>
-        </View>
+        </KeyboardAvoidingView>
       </Modal>
     );
   };
@@ -1066,9 +1076,15 @@ function WorkerDetails() {
   return (
     <>
       {/* Attendance Modal */}
-      <Modal visible={showAttendanceModal} transparent animationType="slide">
-        <View style={styles.modalBg}>
+      <Modal
+        visible={showAttendanceModal}
+        transparent
+        animationType="slide"
+        onRequestClose={() => !attSaving && setShowAttendanceModal(false)}
+      >
+        <KeyboardAvoidingView behavior={kavBehavior} style={styles.modalBg}>
           <View style={styles.modalContent}>
+            <ScrollView style={{ maxHeight: Math.round(hp(74)) }} showsVerticalScrollIndicator={false} keyboardShouldPersistTaps="handled" contentContainerStyle={{ gap: 10 }}>
             <Text style={styles.modalTitle}>Log Attendance</Text>
 
             <Text style={styles.label}>Status</Text>
@@ -1163,14 +1179,21 @@ function WorkerDetails() {
                 )}
               </Pressable>
             </View>
+            </ScrollView>
           </View>
-        </View>
+        </KeyboardAvoidingView>
       </Modal>
 
       {/* Payment Modal */}
-      <Modal visible={showPaymentModal} transparent animationType="slide">
-        <View style={styles.modalBg}>
+      <Modal
+        visible={showPaymentModal}
+        transparent
+        animationType="slide"
+        onRequestClose={() => !paySaving && setShowPaymentModal(false)}
+      >
+        <KeyboardAvoidingView behavior={kavBehavior} style={styles.modalBg}>
           <View style={styles.modalContent}>
+            <ScrollView style={{ maxHeight: Math.round(hp(74)) }} showsVerticalScrollIndicator={false} keyboardShouldPersistTaps="handled" contentContainerStyle={{ gap: 10 }}>
             <Text style={styles.modalTitle}>Log Payment</Text>
 
             <Text style={styles.label}>Amount (₹)</Text>
@@ -1237,14 +1260,21 @@ function WorkerDetails() {
                 )}
               </Pressable>
             </View>
+            </ScrollView>
           </View>
-        </View>
+        </KeyboardAvoidingView>
       </Modal>
 
       {/* Log Bonus Modal */}
-      <Modal visible={showBonusModal} transparent animationType="slide">
-        <View style={styles.modalBg}>
+      <Modal
+        visible={showBonusModal}
+        transparent
+        animationType="slide"
+        onRequestClose={() => !bonusSaving && setShowBonusModal(false)}
+      >
+        <KeyboardAvoidingView behavior={kavBehavior} style={styles.modalBg}>
           <View style={styles.modalContent}>
+            <ScrollView style={{ maxHeight: Math.round(hp(74)) }} showsVerticalScrollIndicator={false} keyboardShouldPersistTaps="handled" contentContainerStyle={{ gap: 10 }}>
             <Text style={styles.modalTitle}>Award Worker Bonus</Text>
 
             <Text style={styles.label}>Bonus Amount (₹) *</Text>
@@ -1318,8 +1348,9 @@ function WorkerDetails() {
                 )}
               </Pressable>
             </View>
+            </ScrollView>
           </View>
-        </View>
+        </KeyboardAvoidingView>
       </Modal>
 
       {renderEditLogModal()}
@@ -1346,7 +1377,12 @@ function WorkerDetails() {
         title={pickerTarget === "start" ? "Select Filter Start Date" : "Select Filter End Date"}
       />
 
-      <ScrollView contentContainerStyle={styles.container}>
+      <ScrollView
+        contentContainerStyle={[
+          styles.container,
+          { paddingTop: Math.max(insets.top + 8, 16), paddingBottom: scrollBottomPadding },
+        ]}
+      >
         {/* Header */}
         <View style={styles.header}>
           <BackButton
@@ -2207,8 +2243,8 @@ function WorkerDetails() {
         animationType="fade"
         onRequestClose={() => setShowEarnedDetailsModal(false)}
       >
-        <View style={styles.modalBg}>
-          <View style={[styles.modalContent, { maxWidth: 460, maxHeight: "85%", gap: 12 }]}>
+        <KeyboardAvoidingView behavior={kavBehavior} style={styles.modalBg}>
+          <View style={[styles.modalContent, { maxWidth: 460, maxHeight: "88%", gap: 12 }]}>
             <View style={{ flexDirection: "row", justifyContent: "space-between", alignItems: "center", borderBottomWidth: 1.5, borderBottomColor: colors.border.subtle, paddingBottom: 10 }}>
               <View style={{ flex: 1 }}>
                 <Text style={{ fontSize: 18, fontWeight: "800", color: "#7c3aed" }}>
@@ -2298,7 +2334,7 @@ function WorkerDetails() {
               <Text style={[styles.modalCancelText, { color: "#FFF" }]}>Close</Text>
             </Pressable>
           </View>
-        </View>
+        </KeyboardAvoidingView>
       </Modal>
 
       {/* Total Paid Details Modal */}
@@ -2308,8 +2344,8 @@ function WorkerDetails() {
         animationType="fade"
         onRequestClose={() => setShowPaidDetailsModal(false)}
       >
-        <View style={styles.modalBg}>
-          <View style={[styles.modalContent, { maxWidth: 460, maxHeight: "85%", gap: 12 }]}>
+        <KeyboardAvoidingView behavior={kavBehavior} style={styles.modalBg}>
+          <View style={[styles.modalContent, { maxWidth: 460, maxHeight: "88%", gap: 12 }]}>
             <View style={{ flexDirection: "row", justifyContent: "space-between", alignItems: "center", borderBottomWidth: 1.5, borderBottomColor: colors.border.subtle, paddingBottom: 10 }}>
               <View style={{ flex: 1 }}>
                 <Text style={{ fontSize: 18, fontWeight: "800", color: "#059669" }}>
@@ -2389,7 +2425,7 @@ function WorkerDetails() {
               <Text style={[styles.modalCancelText, { color: "#FFF" }]}>Close</Text>
             </Pressable>
           </View>
-        </View>
+        </KeyboardAvoidingView>
       </Modal>
     </>
   );
@@ -2566,8 +2602,9 @@ const getStyles = (theme) => {
       backgroundColor: colors.bg.card,
       borderRadius: 20,
       padding: 20,
-      width: "100%",
-      maxWidth: 400,
+      width: "92%",
+      maxWidth: 440,
+      maxHeight: "88%",
       gap: 10,
     },
     modalTitle: {
@@ -2592,9 +2629,10 @@ const getStyles = (theme) => {
       color: colors.text.primary,
       backgroundColor: colors.bg.primary,
     },
-    segmentRow: { flexDirection: "row", gap: 8 },
+    segmentRow: { flexDirection: "row", flexWrap: "wrap", gap: 8 },
     segmentBtn: {
-      flex: 1,
+      flexGrow: 1,
+      minWidth: 74,
       height: 38,
       borderRadius: 10,
       justifyContent: "center",
@@ -2820,11 +2858,13 @@ const getStyles = (theme) => {
     },
     metricsGrid: {
       flexDirection: "row",
+      flexWrap: "wrap",
       gap: 10,
       marginBottom: 16,
     },
     metricCardItem: {
-      flex: 1,
+      flexGrow: 1,
+      minWidth: 130,
       backgroundColor: colors.bg.primary,
       borderWidth: 1.5,
       borderColor: colors.border.subtle,

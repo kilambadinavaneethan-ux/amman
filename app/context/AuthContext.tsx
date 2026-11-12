@@ -4,3 +4,4 @@ export { AuthContext, AuthProvider } from "../../src/context/AuthContext";
 export default function AuthRoutePlaceholder() {
   return null;
 }
+

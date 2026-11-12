@@ -1,12 +1,16 @@
 import { MaterialIcons } from "@expo/vector-icons";
 import { useRouter, useLocalSearchParams } from "expo-router";
-import React, { useContext, useState, useMemo, useEffect } from "react";
+import React, { useContext, useState, useMemo, useEffect, useCallback } from "react";
 import { useTheme } from "../context/ThemeContext";
 import { useScrollRestoration } from "../context/ScrollContext";
+import { useResponsive } from "../../utils/responsive";
 import {
   ActivityIndicator,
   Alert,
+  FlatList,
+  KeyboardAvoidingView,
   Modal,
+  Platform,
   Pressable,
   RefreshControl,
   ScrollView,
@@ -33,6 +37,17 @@ import { DeliveryPartnerContext } from "../context/DeliveryPartnerContext";
 import { db, normalizeDateValue } from "../../src/config/firebase";
 import { collection, doc, addDoc, updateDoc, increment, query, where, onSnapshot, deleteDoc } from "firebase/firestore";
 import { getDocsOfflineSafe } from "../../src/utils/offlineHelpers";
+import { roundCurrency } from "../../utils/currency";
+import {
+  computeWorkerFinancialsMap,
+  computeDeliveryFinancialsMap,
+  computeExpenseMetrics,
+  computeSupplierMetrics,
+  computeWorkerBalanceMetrics,
+  computeDeliveryBalanceMetrics,
+  WorkerFinancialSummary,
+  DeliveryFinancialSummary,
+} from "../../utils/ledgerCalculations";
 
 // Components
 import AnimatedCounter from "../components/AnimatedCounter";
@@ -54,11 +69,750 @@ const CATEGORY_CONFIG: Record<string, { icon: string; color: string; label: stri
   "Miscellaneous": { icon: "help-center", color: "#5A5F72", label: "Miscellaneous" },
 };
 
+const WORKER_ROLE_ICONS: Record<string, string> = {
+  Labour: "construction",
+  Operator: "engineering",
+  Helper: "handyman",
+  Driver: "local-shipping",
+  Supervisor: "supervisor-account",
+};
+
+const getDayLabel = (dateObj: Date): string => {
+  const today = new Date();
+  today.setHours(0, 0, 0, 0);
+  const yesterday = new Date(today);
+  yesterday.setDate(yesterday.getDate() - 1);
+
+  const checkDate = new Date(dateObj);
+  checkDate.setHours(0, 0, 0, 0);
+
+  if (checkDate.getTime() === today.getTime()) return "Today";
+  if (checkDate.getTime() === yesterday.getTime()) return "Yesterday";
+
+  return checkDate.toLocaleDateString("en-IN", { day: "2-digit", month: "short", year: "numeric" });
+};
+
+type ExpenseBalanceFeedItem =
+  | { kind: "sectionHeader"; id: string; title: string; color?: string; isFirst: boolean }
+  | { kind: "expense"; id: string; expense: any; index: number }
+  | { kind: "supplier"; id: string; supplier: any; index: number }
+  | { kind: "worker"; id: string; worker: any; index: number }
+  | { kind: "delivery"; id: string; partner: any; index: number }
+  | { kind: "payment"; id: string; payment: any };
+
+type BalanceStyles = ReturnType<typeof getStyles>;
+
+interface PendingExpenseCardProps {
+  expense: any;
+  index: number;
+  isExpanded: boolean;
+  onToggleExpand: (id: string) => void;
+  onPay: (expense: any, type: "expense") => void;
+  styles: BalanceStyles;
+  colors: any;
+}
+
+const PendingExpenseCard = React.memo(function PendingExpenseCard({
+  expense,
+  index,
+  isExpanded,
+  onToggleExpand,
+  onPay,
+  styles,
+  colors,
+}: PendingExpenseCardProps) {
+    const catInfo = CATEGORY_CONFIG[expense.category] || CATEGORY_CONFIG["Miscellaneous"];
+    const expDate = expense.expenseDate instanceof Date ? expense.expenseDate : new Date(expense.expenseDate);
+    const remainingAmt = roundCurrency(
+      expense.remainingAmount !== undefined
+        ? Number(expense.remainingAmount)
+        : expense.paymentMethod === "Balance"
+        ? Number(expense.amount || 0)
+        : 0
+    );
+    const paidAmt = roundCurrency(
+      expense.paidAmount !== undefined
+        ? Number(expense.paidAmount)
+        : expense.paymentMethod === "Balance"
+        ? 0
+        : Number(expense.amount || 0)
+    );
+
+    return (
+      <Animated.View
+        entering={FadeInDown.delay(Math.min(index, 5) * 30).duration(200)}
+        style={styles.expenseCard}
+      >
+        <Pressable
+          onPress={() => onToggleExpand(expense.id)}
+          style={({ pressed }) => pressed && styles.pressedCardFade}
+        >
+          <View style={styles.cardHeader}>
+            <View style={[styles.categoryBadge, { backgroundColor: `${catInfo.color}15` }]}>
+              <MaterialIcons name={catInfo.icon as any} size={20} color={catInfo.color} />
+            </View>
+            <View style={styles.cardHeaderInfo}>
+              <Text style={styles.expenseTitle} numberOfLines={1}>
+                {expense.title}
+              </Text>
+              <Text style={styles.categoryLabel}>{expense.category}</Text>
+            </View>
+            <View style={styles.cardDateChevronRow}>
+              <Text style={styles.expenseDateText}>
+                {expDate.toLocaleDateString("en-IN", {
+                  day: "2-digit",
+                  month: "short",
+                })}
+              </Text>
+              <MaterialIcons
+                name={isExpanded ? "expand-less" : "expand-more"}
+                size={20}
+                color={colors.text.muted}
+              />
+            </View>
+          </View>
+
+          <View style={styles.divider} />
+
+          <View style={styles.cardDetailsRow}>
+            <View style={styles.detailCol}>
+              <Text style={styles.detailLabel}>Total Amount</Text>
+              <Text style={styles.detailValue}>
+                ₹{Number(expense.amount || expense.totalAmount).toLocaleString("en-IN")}
+              </Text>
+            </View>
+            <View style={styles.detailCol}>
+              <Text style={styles.detailLabel}>Paid</Text>
+              <Text style={[styles.detailValue, { color: colors.accent.success }]}>
+                ₹{paidAmt.toLocaleString("en-IN")}
+              </Text>
+            </View>
+            <View style={styles.detailCol}>
+              <Text style={styles.detailLabel}>Balance Due</Text>
+              <Text style={[styles.detailValue, { color: colors.accent.danger }]}>
+                ₹{remainingAmt.toLocaleString("en-IN")}
+              </Text>
+            </View>
+          </View>
+        </Pressable>
+
+        {isExpanded && (
+          <Animated.View entering={FadeInDown.duration(200)} style={styles.expenseExpandedBox}>
+            <Text style={styles.expenseExpandedLabel}>Expense Profile / Details</Text>
+            {expense.description ? (
+              <Text style={styles.expenseExpandedDesc}>{expense.description}</Text>
+            ) : (
+              <Text style={styles.expenseExpandedNoDesc}>No description provided for this expense.</Text>
+            )}
+
+            <View style={styles.expenseMetaRow}>
+              <View style={styles.expenseMetaCol}>
+                <Text style={styles.expenseMetaLabel}>Payment Method</Text>
+                <Text style={styles.expenseMetaValue}>{expense.paymentMethod || "Balance / Unpaid"}</Text>
+              </View>
+              <View style={styles.expenseMetaCol}>
+                <Text style={styles.expenseMetaLabel}>Logged Date</Text>
+                <Text style={styles.expenseMetaValue}>
+                  {expDate.toLocaleDateString("en-IN", {
+                    day: "2-digit",
+                    month: "short",
+                    year: "numeric",
+                  })}
+                </Text>
+              </View>
+            </View>
+
+            {expense.billImageUrl ? (
+              <View style={styles.expenseInvoiceWrap}>
+                <Text style={styles.expenseInvoiceLabel}>Attached Invoice / Receipt</Text>
+                <Image
+                  source={{ uri: expense.billImageUrl }}
+                  style={styles.expenseInvoiceImg}
+                  contentFit="cover"
+                  cachePolicy="memory-disk"
+                  transition={150}
+                />
+              </View>
+            ) : null}
+          </Animated.View>
+        )}
+
+        <Pressable style={styles.payBtn} onPress={() => onPay(expense, "expense")}>
+          <MaterialIcons name="payment" size={16} color="#1A1D27" />
+          <Text style={styles.payBtnText}>Pay Balance</Text>
+        </Pressable>
+      </Animated.View>
+    );
+  }
+);
+
+interface PendingSupplierCardProps {
+  supplier: any;
+  index: number;
+  totalPurchased: number;
+  totalPaid: number;
+  onOpenDetails: (id: string) => void;
+  onOpenCalcModal: (target: any, type: "supplier") => void;
+  onPay: (target: any, type: "supplier", initialRepayMode?: boolean) => void;
+  onShare: (target: any, type: "supplier") => void;
+  styles: BalanceStyles;
+  colors: any;
+}
+
+const PendingSupplierCard = React.memo(function PendingSupplierCard({
+  supplier,
+  index,
+  totalPurchased,
+  totalPaid,
+  onOpenDetails,
+  onOpenCalcModal,
+  onPay,
+  onShare,
+  styles,
+  colors,
+}: PendingSupplierCardProps) {
+    const balance = roundCurrency(supplier.balance || 0);
+
+    return (
+      <Animated.View
+        entering={FadeInDown.delay(Math.min(index, 5) * 30).duration(200)}
+        style={[styles.expenseCard, { borderColor: colors.border.accent, borderWidth: 1 }]}
+      >
+        <Pressable
+          onPress={() => onOpenDetails(supplier.id)}
+          onLongPress={() => onOpenCalcModal(supplier, "supplier")}
+          delayLongPress={350}
+        >
+          <View style={styles.cardHeader}>
+            <View style={[styles.categoryBadge, { backgroundColor: colors.accent.primaryMuted }]}>
+              <MaterialIcons name="local-shipping" size={20} color={colors.accent.warning} />
+            </View>
+            <View style={styles.cardHeaderInfo}>
+              <View style={styles.cardTitleChipRow}>
+                <Text style={styles.expenseTitle} numberOfLines={1}>
+                  {supplier.name}
+                </Text>
+                <View style={styles.longPressHintChip}>
+                  <MaterialIcons name="calculate" size={11} color={colors.accent.warning} />
+                  <Text style={[styles.longPressHintText, { color: colors.accent.warning }]}>Hold: Accounts</Text>
+                </View>
+              </View>
+              <Text style={styles.categoryLabel} numberOfLines={1}>
+                Agent: {supplier.contactPerson || "N/A"}
+              </Text>
+            </View>
+            <MaterialIcons name="chevron-right" size={20} color={colors.border.medium} />
+          </View>
+
+          <View style={styles.divider} />
+
+          <View style={styles.cardDetailsRow}>
+            <View style={styles.detailCol}>
+              <Text style={styles.detailLabel}>Total Purchased</Text>
+              <Text style={styles.detailValue}>₹{totalPurchased.toLocaleString("en-IN")}</Text>
+            </View>
+            <View style={styles.detailCol}>
+              <Text style={styles.detailLabel}>Total Paid</Text>
+              <Text style={styles.detailValue}>₹{totalPaid.toLocaleString("en-IN")}</Text>
+            </View>
+            <View style={styles.detailCol}>
+              <Text style={styles.detailLabel}>{balance < 0 ? "Advance Paid" : "Balance Due"}</Text>
+              <Text style={[styles.detailValue, { color: balance < 0 ? "#10b981" : "#b45309" }]}>
+                ₹{Math.abs(balance).toLocaleString("en-IN")}
+              </Text>
+            </View>
+          </View>
+        </Pressable>
+
+        {balance < 0 ? (
+          <View style={styles.cardBtnRow}>
+            <Pressable
+              style={[styles.payBtnFlex, { backgroundColor: colors.accent.danger }]}
+              onPress={() => onPay(supplier, "supplier", false)}
+            >
+              <MaterialIcons name="add-circle-outline" size={16} color="#ffffff" />
+              <Text style={[styles.payBtnText, { color: "#ffffff" }]}>Pay Advance</Text>
+            </Pressable>
+
+            <Pressable
+              style={[styles.repayBtnFlex, styles.repayBtnSurface]}
+              onPress={() => onPay(supplier, "supplier", true)}
+            >
+              <MaterialIcons name="remove-circle-outline" size={16} color="#10b981" />
+              <Text style={[styles.repayBtnText, { color: "#10b981" }]}>Repay Advance</Text>
+            </Pressable>
+
+            <Pressable
+              style={[
+                styles.shareBtnFlex,
+                { borderColor: `${colors.accent.warning}50`, backgroundColor: `${colors.accent.warning}15` },
+              ]}
+              onPress={() => onShare(supplier, "supplier")}
+            >
+              <MaterialIcons name="share" size={15} color={colors.accent.warning} />
+            </Pressable>
+          </View>
+        ) : (
+          <View style={styles.cardBtnRow}>
+            <Pressable
+              style={[styles.payBtnFlex, { backgroundColor: colors.accent.warning }]}
+              onPress={() => onPay(supplier, "supplier", false)}
+            >
+              <MaterialIcons name="payment" size={16} color="#1A1D27" />
+              <Text style={[styles.payBtnText, { color: "#1A1D27" }]}>Pay Balance</Text>
+            </Pressable>
+
+            <Pressable
+              style={[
+                styles.shareBtnFlex,
+                { borderColor: `${colors.accent.warning}50`, backgroundColor: `${colors.accent.warning}15` },
+              ]}
+              onPress={() => onShare(supplier, "supplier")}
+            >
+              <MaterialIcons name="share" size={15} color={colors.accent.warning} />
+              <Text style={[styles.shareBtnLabel, { color: colors.accent.warning }]}>Share</Text>
+            </Pressable>
+          </View>
+        )}
+      </Animated.View>
+    );
+  }
+);
+
+interface PendingWorkerCardProps {
+  worker: any;
+  index: number;
+  fin?: WorkerFinancialSummary;
+  onOpenDetails: (id: string) => void;
+  onOpenCalcModal: (target: any, type: "worker") => void;
+  onPay: (target: any, type: "worker", initialRepayMode?: boolean) => void;
+  onShare: (target: any, type: "worker") => void;
+  styles: BalanceStyles;
+  colors: any;
+}
+
+const PendingWorkerCard = React.memo(function PendingWorkerCard({
+  worker,
+  index,
+  fin,
+  onOpenDetails,
+  onOpenCalcModal,
+  onPay,
+  onShare,
+  styles,
+  colors,
+}: PendingWorkerCardProps) {
+    const pending = roundCurrency(
+      fin
+        ? fin.pending
+        : worker.totalPending !== undefined
+        ? Number(worker.totalPending)
+        : Number(worker.totalWages || 0) - Number(worker.totalPaid || 0)
+    );
+    const storedAdvance = roundCurrency(worker.advanceAmount || 0);
+    const effectiveAdvance = roundCurrency(
+      fin ? fin.effectiveAdvance : pending < 0 ? Math.abs(pending) : storedAdvance
+    );
+    const isAdvance = fin ? fin.isAdvance : pending < 0 || (pending === 0 && storedAdvance > 0);
+    const totalEarned = roundCurrency(fin ? fin.totalEarned : Number(worker.totalWages || 0));
+    const totalPaid = roundCurrency(fin ? fin.totalPaid : Number(worker.totalPaid || 0));
+    const roleIcon = WORKER_ROLE_ICONS[worker.role] || "person";
+
+    return (
+      <Animated.View
+        entering={FadeInDown.delay(Math.min(index, 5) * 30).duration(200)}
+        style={[styles.expenseCard, { borderColor: colors.border.accent, borderWidth: 1 }]}
+      >
+        <Pressable
+          onPress={() => onOpenDetails(worker.id)}
+          onLongPress={() => onOpenCalcModal(worker, "worker")}
+          delayLongPress={350}
+        >
+          <View style={styles.cardHeader}>
+            <View style={[styles.categoryBadge, { backgroundColor: colors.accent.primaryMuted }]}>
+              <MaterialIcons name={roleIcon as any} size={20} color={colors.accent.primary} />
+            </View>
+            <View style={styles.cardHeaderInfo}>
+              <View style={styles.cardTitleChipRow}>
+                <Text style={styles.expenseTitle} numberOfLines={1}>
+                  {worker.name}
+                </Text>
+                <View style={styles.longPressHintChip}>
+                  <MaterialIcons name="calculate" size={11} color={colors.accent.primary} />
+                  <Text style={[styles.longPressHintText, { color: colors.accent.primary }]}>Hold: Accounts</Text>
+                </View>
+              </View>
+              <Text style={styles.categoryLabel} numberOfLines={1}>
+                {worker.role || "Worker"} • {worker.billingSystem === "Piece-Rate" ? "Piece-Rate" : "Time-Based"}
+              </Text>
+            </View>
+            <MaterialIcons name="chevron-right" size={20} color="#363B4D" />
+          </View>
+
+          <View style={styles.divider} />
+
+          <View style={styles.cardDetailsRow}>
+            <View style={styles.detailCol}>
+              <Text style={styles.detailLabel}>Total Earned</Text>
+              <Text style={styles.detailValue}>₹{totalEarned.toLocaleString("en-IN")}</Text>
+            </View>
+            <View style={styles.detailCol}>
+              <Text style={styles.detailLabel}>Total Paid</Text>
+              <Text style={[styles.detailValue, { color: "#00D68F" }]}>₹{totalPaid.toLocaleString("en-IN")}</Text>
+            </View>
+            <View style={styles.detailCol}>
+              <Text style={styles.detailLabel}>{isAdvance ? "Advance Paid" : "Pending Due"}</Text>
+              <Text style={[styles.detailValue, { color: isAdvance ? "#10b981" : "#8B5CF6" }]}>
+                ₹{(isAdvance ? effectiveAdvance : Math.abs(pending)).toLocaleString("en-IN")}
+              </Text>
+            </View>
+          </View>
+        </Pressable>
+
+        {pending < 0 ? (
+          <View style={styles.cardBtnRow}>
+            <Pressable
+              style={[styles.payBtnFlex, { backgroundColor: colors.accent.danger }]}
+              onPress={() => onPay(worker, "worker", false)}
+            >
+              <MaterialIcons name="add-circle-outline" size={16} color="#ffffff" />
+              <Text style={[styles.payBtnText, { color: "#ffffff" }]}>Pay Advance</Text>
+            </Pressable>
+
+            <Pressable
+              style={[styles.repayBtnFlex, styles.repayBtnSurface]}
+              onPress={() => onPay(worker, "worker", true)}
+            >
+              <MaterialIcons name="remove-circle-outline" size={16} color="#10b981" />
+              <Text style={[styles.repayBtnText, { color: "#10b981" }]}>Repay Advance</Text>
+            </Pressable>
+
+            <Pressable
+              style={[
+                styles.shareBtnFlex,
+                { borderColor: `${colors.accent.primary}50`, backgroundColor: `${colors.accent.primary}15` },
+              ]}
+              onPress={() => onShare(worker, "worker")}
+            >
+              <MaterialIcons name="share" size={15} color={colors.accent.primary} />
+            </Pressable>
+          </View>
+        ) : (
+          <View style={styles.cardBtnRow}>
+            <Pressable
+              style={[styles.payBtnFlex, { backgroundColor: colors.accent.primary }]}
+              onPress={() => onPay(worker, "worker", false)}
+            >
+              <MaterialIcons name="payment" size={16} color="#1A1D27" />
+              <Text style={[styles.payBtnText, { color: "#1A1D27" }]}>Pay Balance</Text>
+            </Pressable>
+
+            <Pressable
+              style={[
+                styles.shareBtnFlex,
+                { borderColor: `${colors.accent.primary}50`, backgroundColor: `${colors.accent.primary}15` },
+              ]}
+              onPress={() => onShare(worker, "worker")}
+            >
+              <MaterialIcons name="share" size={15} color={colors.accent.primary} />
+              <Text style={[styles.shareBtnLabel, { color: colors.accent.primary }]}>Share</Text>
+            </Pressable>
+          </View>
+        )}
+      </Animated.View>
+    );
+  }
+);
+
+interface PendingDeliveryCardProps {
+  partner: any;
+  index: number;
+  fin?: DeliveryFinancialSummary;
+  onOpenDetails: (id: string) => void;
+  onOpenCalcModal: (target: any, type: "delivery") => void;
+  onPay: (target: any, type: "delivery", initialRepayMode?: boolean) => void;
+  onShare: (target: any, type: "delivery") => void;
+  styles: BalanceStyles;
+  colors: any;
+}
+
+const PendingDeliveryCard = React.memo(function PendingDeliveryCard({
+  partner,
+  index,
+  fin,
+  onOpenDetails,
+  onOpenCalcModal,
+  onPay,
+  onShare,
+  styles,
+  colors,
+}: PendingDeliveryCardProps) {
+    const pending = roundCurrency(fin ? fin.pending : Number(partner.totalPending || 0));
+    const totalPaid = roundCurrency(fin ? fin.totalPaid : Number(partner.totalPaid || 0));
+    const totalEarned = roundCurrency(fin ? fin.totalEarned : Number(partner.totalPayable || 0));
+
+    return (
+      <Animated.View
+        entering={FadeInDown.delay(Math.min(index, 5) * 30).duration(200)}
+        style={[styles.expenseCard, { borderColor: `${colors.accent.info}40`, borderWidth: 1 }]}
+      >
+        <Pressable
+          onPress={() => onOpenDetails(partner.id)}
+          onLongPress={() => onOpenCalcModal(partner, "delivery")}
+          delayLongPress={350}
+        >
+          <View style={styles.cardHeader}>
+            <View style={[styles.categoryBadge, { backgroundColor: `${colors.accent.info}18` }]}>
+              <MaterialIcons name="local-shipping" size={20} color={colors.accent.info} />
+            </View>
+            <View style={styles.cardHeaderInfo}>
+              <View style={styles.cardTitleChipRow}>
+                <Text style={styles.expenseTitle} numberOfLines={1}>
+                  {partner.name}
+                </Text>
+                <View style={styles.longPressHintChip}>
+                  <MaterialIcons name="calculate" size={11} color={colors.accent.info} />
+                  <Text style={[styles.longPressHintText, { color: colors.accent.info }]}>Hold: Accounts</Text>
+                </View>
+              </View>
+              <Text style={styles.categoryLabel} numberOfLines={1}>
+                Vehicle: {partner.vehicleNo || partner.vehicleNumber || "N/A"} • Phone: {partner.phone || partner.mobile || "N/A"}
+              </Text>
+            </View>
+            <MaterialIcons name="chevron-right" size={20} color="#363B4D" />
+          </View>
+
+          <View style={styles.divider} />
+
+          <View style={styles.cardDetailsRow}>
+            <View style={styles.detailCol}>
+              <Text style={styles.detailLabel}>Total Owed</Text>
+              <Text style={styles.detailValue}>₹{totalEarned.toLocaleString("en-IN")}</Text>
+            </View>
+            <View style={styles.detailCol}>
+              <Text style={styles.detailLabel}>Total Paid</Text>
+              <Text style={[styles.detailValue, { color: "#10b981" }]}>₹{totalPaid.toLocaleString("en-IN")}</Text>
+            </View>
+            <View style={styles.detailCol}>
+              <Text style={styles.detailLabel}>{pending < 0 ? "Advance Paid" : "Pending Due"}</Text>
+              <Text style={[styles.detailValue, { color: pending < 0 ? "#10b981" : colors.accent.info }]}>
+                ₹{Math.abs(pending).toLocaleString("en-IN")}
+              </Text>
+            </View>
+          </View>
+        </Pressable>
+
+        {pending < 0 ? (
+          <View style={styles.cardBtnRow}>
+            <Pressable
+              style={[styles.payBtnFlex, { backgroundColor: colors.accent.danger }]}
+              onPress={() => onPay(partner, "delivery", false)}
+            >
+              <MaterialIcons name="add-circle-outline" size={16} color="#ffffff" />
+              <Text style={[styles.payBtnText, { color: "#ffffff" }]}>Pay Advance</Text>
+            </Pressable>
+
+            <Pressable
+              style={[styles.repayBtnFlex, styles.repayBtnSurface]}
+              onPress={() => onPay(partner, "delivery", true)}
+            >
+              <MaterialIcons name="remove-circle-outline" size={16} color="#10b981" />
+              <Text style={[styles.repayBtnText, { color: "#10b981" }]}>Repay Advance</Text>
+            </Pressable>
+
+            <Pressable
+              style={[
+                styles.shareBtnFlex,
+                { borderColor: `${colors.accent.info}50`, backgroundColor: `${colors.accent.info}15` },
+              ]}
+              onPress={() => onShare(partner, "delivery")}
+            >
+              <MaterialIcons name="share" size={15} color={colors.accent.info} />
+            </Pressable>
+          </View>
+        ) : (
+          <View style={styles.cardBtnRow}>
+            <Pressable
+              style={[styles.payBtnFlex, { backgroundColor: colors.accent.info }]}
+              onPress={() => onPay(partner, "delivery", false)}
+            >
+              <MaterialIcons name="payment" size={16} color="#1A1D27" />
+              <Text style={[styles.payBtnText, { color: "#1A1D27" }]}>Pay Balance</Text>
+            </Pressable>
+
+            <Pressable
+              style={[
+                styles.shareBtnFlex,
+                { borderColor: `${colors.accent.info}50`, backgroundColor: `${colors.accent.info}15` },
+              ]}
+              onPress={() => onShare(partner, "delivery")}
+            >
+              <MaterialIcons name="share" size={15} color={colors.accent.info} />
+              <Text style={[styles.shareBtnLabel, { color: colors.accent.info }]}>Share</Text>
+            </Pressable>
+          </View>
+        )}
+      </Animated.View>
+    );
+  }
+);
+
+interface PaymentHistoryRowProps {
+  payment: any;
+  onUndo: (payment: any) => void;
+  styles: BalanceStyles;
+}
+
+const PaymentHistoryRow = React.memo(function PaymentHistoryRow({
+  payment,
+  onUndo,
+  styles,
+}: PaymentHistoryRowProps) {
+  return (
+  <View style={styles.historyRow}>
+    <View style={styles.historyLeft}>
+      <View style={[styles.historyIconBox, { backgroundColor: `${payment.iconColor}18` }]}>
+        <MaterialIcons name={payment.icon as any} size={20} color={payment.iconColor} />
+      </View>
+      <View style={styles.historyInfoCol}>
+        <Text style={styles.historyTitle} numberOfLines={1}>
+          {payment.title}
+        </Text>
+        <Text style={styles.historyDetails} numberOfLines={1}>
+          {payment.category} • {payment.paymentMethod}
+          {payment.notes ? ` • ${payment.notes}` : ""}
+        </Text>
+      </View>
+    </View>
+    <View style={styles.historyRightCol}>
+      <Text style={[styles.historyAmt, { color: payment.amount < 0 ? "#ef4444" : "#10b981" }]}>
+        {payment.amount < 0 ? "-" : ""}₹{Math.abs(Number(payment.amount)).toLocaleString("en-IN")}
+      </Text>
+      <Text style={styles.historyTime}>
+        {getDayLabel(payment.paidAt)}{" "}
+        {payment.paidAt.toLocaleTimeString([], { hour: "2-digit", minute: "2-digit" })}
+      </Text>
+      <Pressable style={styles.undoPaymentBtn} onPress={() => onUndo(payment)}>
+        <MaterialIcons name="undo" size={12} color="#ef4444" />
+        <Text style={styles.undoPaymentBtnText}>Undo</Text>
+      </Pressable>
+    </View>
+  </View>
+  );
+});
+
+interface AccountLedgerRowProps {
+  entry: any;
+  idx: number;
+  styles: BalanceStyles;
+  colors: any;
+}
+
+const AccountLedgerRow = React.memo(function AccountLedgerRow({
+  entry,
+  idx,
+  styles,
+  colors,
+}: AccountLedgerRowProps) {
+  const entryDate = entry.date instanceof Date ? entry.date : new Date(entry.date);
+  const isPayment = entry.type === "payment";
+  const isCr = (entry.credit || 0) > 0;
+  const isDr = (entry.debit || 0) > 0;
+  const balVal = Number(entry.runningBalance || 0);
+  const balType = balVal > 0 ? "Cr (Due)" : balVal < 0 ? "Dr (Adv)" : "Nil";
+  const balColor =
+    balVal < 0 ? colors.accent.success : balVal > 0 ? colors.accent.danger : colors.text.muted;
+  const balBadgeBg =
+    balVal < 0
+      ? `${colors.accent.success}18`
+      : balVal > 0
+      ? `${colors.accent.danger}18`
+      : `${colors.border.subtle}40`;
+
+  return (
+    <View
+      style={[
+        styles.ledgerDataRow,
+        { backgroundColor: idx % 2 === 0 ? colors.bg.primary : `${colors.bg.card}60` },
+      ]}
+    >
+      <View style={styles.ledgerDateCol}>
+        <View style={styles.ledgerTypeRow}>
+          <View
+            style={[
+              styles.ledgerTypeBadge,
+              { backgroundColor: isPayment ? `${colors.accent.success}18` : `${colors.accent.primary}18` },
+            ]}
+          >
+            <Text
+              style={[
+                styles.ledgerTypeBadgeText,
+                { color: isPayment ? colors.accent.success : colors.accent.primary },
+              ]}
+            >
+              {entry.type}
+            </Text>
+          </View>
+          <Text style={styles.ledgerDateText}>
+            {entryDate.toLocaleDateString("en-IN", {
+              day: "2-digit",
+              month: "short",
+              year: "numeric",
+            })}
+          </Text>
+        </View>
+
+        <Text style={styles.ledgerTitleText} numberOfLines={1}>
+          {entry.title}
+        </Text>
+
+        {entry.subtitle ? (
+          <Text style={styles.ledgerSubtitleText} numberOfLines={2}>
+            {entry.subtitle}
+          </Text>
+        ) : null}
+      </View>
+
+      <View style={styles.ledgerAmountCol}>
+        {isDr ? (
+          <View style={styles.alignEnd}>
+            <Text style={styles.ledgerDrValue}>₹{Number(entry.debit).toLocaleString("en-IN")}</Text>
+            <Text style={styles.ledgerDrSub}>Dr (Paid)</Text>
+          </View>
+        ) : (
+          <Text style={styles.ledgerDashText}>—</Text>
+        )}
+      </View>
+
+      <View style={styles.ledgerAmountCol}>
+        {isCr ? (
+          <View style={styles.alignEnd}>
+            <Text style={styles.ledgerCrValue}>₹{Number(entry.credit).toLocaleString("en-IN")}</Text>
+            <Text style={styles.ledgerCrSub}>Cr (Owed)</Text>
+          </View>
+        ) : (
+          <Text style={styles.ledgerDashText}>—</Text>
+        )}
+      </View>
+
+      <View style={styles.ledgerBalCol}>
+        <Text style={[styles.ledgerBalValue, { color: balColor }]}>
+          ₹{Math.abs(balVal).toLocaleString("en-IN")}
+        </Text>
+        <View style={[styles.ledgerBalBadge, { backgroundColor: balBadgeBg }]}>
+          <Text style={[styles.ledgerBalBadgeText, { color: balColor }]}>{balType}</Text>
+        </View>
+      </View>
+    </View>
+  );
+});
+
 
 export default function ExpenseBalances() {
   const router = useRouter();
   const params = useLocalSearchParams();
   const { theme } = useTheme();
+  const { kavBehavior, scrollBottomPadding, compactBadgeTextProps, currencyKpiTextProps, insets } = useResponsive();
 
   // Add Expense Modal State
   const [isAddExpenseModalOpen, setIsAddExpenseModalOpen] = useState(false);
@@ -205,13 +959,13 @@ export default function ExpenseBalances() {
   const [calcViewTab, setCalcViewTab] = useState<"ledger" | "breakdown">("ledger");
   const [ledgerSortOrder, setLedgerSortOrder] = useState<"desc" | "asc">("desc");
 
-  const handleOpenCalcModal = (target: any, type: "supplier" | "worker" | "delivery") => {
+  const handleOpenCalcModal = useCallback((target: any, type: "supplier" | "worker" | "delivery") => {
     setCalcTarget(target);
     setCalcTargetType(type);
     setCalcViewTab("ledger");
     setLedgerSortOrder("desc");
     setIsCalcModalOpen(true);
-  };
+  }, []);
 
   const handleCloseCalcModal = () => {
     setIsCalcModalOpen(false);
@@ -297,66 +1051,17 @@ export default function ExpenseBalances() {
     };
   }, []);
 
-  // Live financial metrics computed exactly matching the Worker Profile Financial Summary (details.jsx)
-  const workerFinancialsMap = useMemo(() => {
-    const map = new Map<string, { totalEarned: number; totalPaid: number; pending: number; isAdvance: boolean; effectiveAdvance: number }>();
-    (workers || []).forEach((worker: any) => {
-      // 1. Attendance & Shift Wages
-      const workerAtts = (workerAttendance || []).filter(
-        (a: any) => String(a.workerId) === String(worker.id) && a.status !== "absent"
-      );
-      const totalAttendanceWages = workerAtts.reduce((sum: number, att: any) => {
-        let wage = 0;
-        if (worker.billingSystem === "Piece-Rate") {
-          wage = Number(att.piecesProduced || 0) * Number(worker.pieceRate || 0);
-        } else {
-          const dailyWage = Number(worker.dailyWage || 0);
-          const otHours = Number(att.overtimeHours || 0);
-          const overtimeRate = Number(worker.overtimeRate || dailyWage / 8);
-          if (att.status === "present") {
-            wage = dailyWage;
-          } else if (att.status === "half-day") {
-            wage = dailyWage / 2;
-          }
-          wage += otHours * overtimeRate;
-        }
-        return sum + wage;
-      }, 0);
-
-      // 2. Loading Charges from Orders
-      const totalLoadingWages = (orders || [])
-        .filter((o: any) => String(o.loadingWorkerId) === String(worker.id))
-        .reduce((sum: number, o: any) => sum + Number(o.loadingCharge || 0), 0);
-
-      // 3. Unloading Charges from Orders
-      const totalUnloadingWages = (orders || [])
-        .filter((o: any) => String(o.unloadingWorkerId) === String(worker.id))
-        .reduce((sum: number, o: any) => sum + Number(o.unloadingCharge || 0), 0);
-
-      // 4. Live Total Earned (Attendance + Loading + Unloading)
-      const totalEarned = totalAttendanceWages + totalLoadingWages + totalUnloadingWages;
-
-      // 5. Live Total Paid from workerPayments
-      const totalPaid = (workerPayments || [])
-        .filter((p: any) => String(p.workerId) === String(worker.id))
-        .reduce((sum: number, p: any) => sum + Number(p.amount || 0), 0);
-
-      // 6. Net Pending & Advance
-      const pending = totalEarned - totalPaid;
-      const storedAdvance = Number(worker.advanceAmount || 0);
-      const effectiveAdvance = pending < 0 ? Math.abs(pending) : storedAdvance;
-      const isAdvance = pending < 0 || (pending === 0 && storedAdvance > 0);
-
-      map.set(worker.id, {
-        totalEarned,
-        totalPaid,
-        pending,
-        isAdvance,
-        effectiveAdvance,
-      });
-    });
-    return map;
-  }, [workers, workerAttendance, orders, workerPayments]);
+  // Live financial metrics computed via pure helper matching Worker Profile Financial Summary
+  const workerFinancialsMap = useMemo(
+    () =>
+      computeWorkerFinancialsMap({
+        workers,
+        workerAttendance,
+        orders,
+        workerPayments,
+      }),
+    [workers, workerAttendance, orders, workerPayments]
+  );
 
   // Self-heal any divergent worker totals in Firestore to keep other screens in sync
   useEffect(() => {
@@ -387,91 +1092,75 @@ export default function ExpenseBalances() {
     });
   }, [attendanceLoaded, workers, workerFinancialsMap]);
 
-  // Live financial metrics for Delivery Partners matching details.jsx & accounting ledger
-  const deliveryFinancialsMap = useMemo(() => {
-    const map = new Map<string, {
-      totalEarned: number;
-      totalPaid: number;
-      productOrderDue: number;
-      pending: number;
-      isAdvance: boolean;
-      effectiveAdvance: number;
-    }>();
+  // Live financial metrics for Delivery Partners computed via pure helper
+  const deliveryFinancialsMap = useMemo(
+    () =>
+      computeDeliveryFinancialsMap({
+        deliveryPartners,
+        deliveryTrips,
+        deliveryPayments,
+        orders,
+      }),
+    [deliveryPartners, deliveryTrips, deliveryPayments, orders]
+  );
 
-    (deliveryPartners || []).forEach((partner: any) => {
-      const pId = String(partner.id);
-
-      // 1. Delivery Trips Earnings (Base freight + loading + unloading)
-      const tripsForPartner = (deliveryTrips || []).filter((t: any) => String(t.partnerId) === pId);
-      const tripEarnings = tripsForPartner.reduce((sum: number, t: any) => {
-        const load = Number(t.loadingCharge || 0);
-        const unload = Number(t.unloadingCharge || 0);
-        let base = 0;
-        if (t.baseDeliveryCharge !== undefined && t.baseDeliveryCharge !== null) {
-          base = Number(t.baseDeliveryCharge);
-        } else if (t.deliveryCharge !== undefined && t.deliveryCharge !== null) {
-          const rawDelCharge = Number(t.deliveryCharge || 0);
-          base = rawDelCharge >= load + unload ? rawDelCharge - load - unload : rawDelCharge;
-        }
-        const total = (t.deliveryCharge !== undefined && Number(t.deliveryCharge) > 0)
-          ? Math.max(Number(t.deliveryCharge), base + load + unload)
-          : (base + load + unload);
-        return sum + total;
-      }, 0);
-
-      // 2. Driver Bonuses (tracked separately as awarded reward incentives)
-      const bonusEarned = (deliveryBonuses || [])
-        .filter((b: any) => String(b.partnerId) === pId)
-        .reduce((sum: number, b: any) => sum + Number(b.amount || 0), 0);
-
-      // 3. Total Freight Earned / Payable (Trip freight charges)
-      const totalEarned = tripEarnings;
-
-      // 4. Net Driver Payouts Paid (Payouts - Repayments)
-      let grossDisbursed = 0;
-      let grossRepaid = 0;
-      (deliveryPayments || [])
-        .filter((p: any) => String(p.partnerId) === pId)
-        .forEach((p: any) => {
-          const rawAmt = Number(p.amount || 0);
-          const isRepay = p.isRepayment || rawAmt < 0;
-          const absAmt = Math.abs(rawAmt);
-          if (isRepay) grossRepaid += absAmt;
-          else grossDisbursed += absAmt;
-        });
-      const totalPaid = grossDisbursed - grossRepaid;
-
-      // 5. Product Orders Purchased by the Delivery Partner as Customer
-      const productOrders = (orders || []).filter(
-        (o: any) =>
-          String(o.customerId) === pId ||
-          String(o.customerId) === `partner_${pId}` ||
-          String(o.customerId) === `dp_${pId}`
-      );
-      const productOrderDue = productOrders.reduce((sum: number, o: any) => {
-        const balDue = o.balanceDue !== undefined && o.balanceDue !== null
-          ? Number(o.balanceDue)
-          : Math.max(0, Number(o.total || 0) - Number(o.paidAmount || 0));
-        return sum + balDue;
-      }, 0);
-
-      // 6. Net Pending Due & Advance (Wages earned - Payouts paid - Product purchases offset)
-      const pending = totalEarned - totalPaid - productOrderDue;
-      const isAdvance = pending < 0;
-      const effectiveAdvance = isAdvance ? Math.abs(pending) : 0;
-
-      map.set(partner.id, {
-        totalEarned,
-        totalPaid,
-        productOrderDue,
-        pending,
-        isAdvance,
-        effectiveAdvance,
-      });
+  // Precomputed per-supplier purchase & payout stats (O(logs + orders + suppliers))
+  const supplierStatsMap = useMemo(() => {
+    const purchasedBySup = new Map<string, number>();
+    const paidByLogBySup = new Map<string, number>();
+    (logs || []).forEach((log: any) => {
+      const supId = log.supplierId;
+      if (!supId) return;
+      if (log.type === "purchase") {
+        purchasedBySup.set(
+          supId,
+          roundCurrency((purchasedBySup.get(supId) || 0) + Number(log.totalCost || 0))
+        );
+        paidByLogBySup.set(
+          supId,
+          roundCurrency((paidByLogBySup.get(supId) || 0) + Number(log.amountPaid || 0))
+        );
+      } else if (log.type === "payment") {
+        paidByLogBySup.set(
+          supId,
+          roundCurrency((paidByLogBySup.get(supId) || 0) + Number(log.amount || 0))
+        );
+      }
     });
 
+    const rawOrderOffsetByKey = new Map<string, number>();
+    (orders || []).forEach((o: any) => {
+      const custId = o.customerId ? String(o.customerId) : "";
+      if (!custId) return;
+      const tot = Number(o.total || 0);
+      const paid = Number(o.paidAmount || 0);
+      const due =
+        o.balanceDue !== undefined && o.balanceDue !== null
+          ? Number(o.balanceDue)
+          : Math.max(0, tot - paid);
+      const offset = due > 0 ? due : paid === 0 ? tot : 0;
+      if (offset > 0) {
+        rawOrderOffsetByKey.set(
+          custId,
+          roundCurrency((rawOrderOffsetByKey.get(custId) || 0) + offset)
+        );
+      }
+    });
+
+    const map = new Map<string, { totalPurchased: number; totalPaid: number }>();
+    (suppliers || []).forEach((supplier: any) => {
+      const orderOffsets = roundCurrency(
+        (rawOrderOffsetByKey.get(String(supplier.id)) || 0) +
+          (rawOrderOffsetByKey.get(`sup_${supplier.id}`) || 0) +
+          (rawOrderOffsetByKey.get(`supplier_${supplier.id}`) || 0)
+      );
+      map.set(supplier.id, {
+        totalPurchased: purchasedBySup.get(supplier.id) || 0,
+        totalPaid: roundCurrency((paidByLogBySup.get(supplier.id) || 0) + orderOffsets),
+      });
+    });
     return map;
-  }, [deliveryPartners, deliveryTrips, deliveryBonuses, deliveryPayments, orders]);
+  }, [logs, orders, suppliers]);
 
   // Self-heal any divergent delivery partner totals in Firestore to keep other screens in sync
   useEffect(() => {
@@ -615,73 +1304,30 @@ export default function ExpenseBalances() {
   }), [expenses, searchQuery]);
 
   // Single-pass expense metrics (outstanding + advance)
-  const { totalOutstandingBalance, totalExpenseAdvance } = useMemo(() => {
-    let outstanding = 0;
-    let advance = 0;
-    (expenses || []).forEach((e: any) => {
-      const remaining = e.remainingAmount !== undefined 
-        ? Number(e.remainingAmount) 
-        : (e.paymentMethod === "Balance" ? Number(e.amount || 0) : 0);
-      if (remaining > 0) outstanding += remaining;
-      else if (remaining < 0) advance += Math.abs(remaining);
-    });
-    return { totalOutstandingBalance: outstanding, totalExpenseAdvance: advance };
-  }, [expenses]);
+  const { totalOutstandingBalance, totalExpenseAdvance } = useMemo(
+    () => computeExpenseMetrics(expenses),
+    [expenses]
+  );
 
   // Single-pass supplier metrics
-  const { totalSupplierBalance, totalSupplierAdvance } = useMemo(() => {
-    let outstanding = 0;
-    let advance = 0;
-    (suppliers || []).forEach((s: any) => {
-      const bal = Number(s.balance || 0);
-      if (bal > 0) outstanding += bal;
-      else if (bal < 0) advance += Math.abs(bal);
-    });
-    return { totalSupplierBalance: outstanding, totalSupplierAdvance: advance };
-  }, [suppliers]);
+  const { totalSupplierBalance, totalSupplierAdvance } = useMemo(
+    () => computeSupplierMetrics(suppliers),
+    [suppliers]
+  );
 
   // Single-pass worker metrics
-  const { totalWorkerPending, totalWorkerAdvance } = useMemo(() => {
-    let outstanding = 0;
-    let advance = 0;
-    (workers || []).forEach((w: any) => {
-      if (w.status === "Active" || !w.status) {
-        const fin = workerFinancialsMap.get(w.id);
-        const pending = fin
-          ? fin.pending
-          : (w.totalPending !== undefined
-              ? Number(w.totalPending)
-              : (Number(w.totalWages || 0) - Number(w.totalPaid || 0)));
-        const storedAdvance = Number(w.advanceAmount || 0);
-
-        if (pending > 0) {
-          outstanding += pending;
-        } else if (pending < 0) {
-          advance += Math.abs(pending);
-        }
-
-        if (storedAdvance > 0 && pending >= 0) {
-          advance += storedAdvance;
-        }
-      }
-    });
-    return { totalWorkerPending: outstanding, totalWorkerAdvance: advance };
-  }, [workers, workerFinancialsMap]);
+  const { totalWorkerPending, totalWorkerAdvance } = useMemo(
+    () => computeWorkerBalanceMetrics(workers, workerFinancialsMap),
+    [workers, workerFinancialsMap]
+  );
 
   // Single-pass delivery partner metrics
-  const { totalDeliveryPending, totalDeliveryAdvance } = useMemo(() => {
-    let outstanding = 0;
-    let advance = 0;
-    (deliveryPartners || []).forEach((p: any) => {
-      const fin = deliveryFinancialsMap.get(p.id);
-      const pend = fin ? fin.pending : Number(p.totalPending || 0);
-      if (pend > 0) outstanding += pend;
-      else if (pend < 0) advance += Math.abs(pend);
-    });
-    return { totalDeliveryPending: outstanding, totalDeliveryAdvance: advance };
-  }, [deliveryPartners, deliveryFinancialsMap]);
+  const { totalDeliveryPending, totalDeliveryAdvance } = useMemo(
+    () => computeDeliveryBalanceMetrics(deliveryPartners, deliveryFinancialsMap),
+    [deliveryPartners, deliveryFinancialsMap]
+  );
 
-  const totalAdvancePaid = useMemo(() => totalExpenseAdvance + totalSupplierAdvance + totalWorkerAdvance + totalDeliveryAdvance, [totalExpenseAdvance, totalSupplierAdvance, totalWorkerAdvance, totalDeliveryAdvance]);
+  const totalAdvancePaid = useMemo(() => roundCurrency(totalExpenseAdvance + totalSupplierAdvance + totalWorkerAdvance + totalDeliveryAdvance), [totalExpenseAdvance, totalSupplierAdvance, totalWorkerAdvance, totalDeliveryAdvance]);
 
   // Filter suppliers (pending balance, advance paid, or search match)
   const pendingSuppliers = useMemo(() => (suppliers || []).filter((s: any) => {
@@ -737,33 +1383,22 @@ export default function ExpenseBalances() {
   }, []);
 
   const totalPaidToday = useMemo(() => {
-    return allPaymentHistory
-      .filter((p: any) => p.paidAt >= todayStart)
-      .reduce((sum: number, p: any) => sum + p.amount, 0);
+    return roundCurrency(
+      allPaymentHistory
+        .filter((p: any) => p.paidAt >= todayStart)
+        .reduce((sum: number, p: any) => sum + Number(p.amount || 0), 0)
+    );
   }, [allPaymentHistory, todayStart]);
 
   const totalPaidThisMonth = useMemo(() => {
-    return allPaymentHistory
-      .filter((p: any) => p.paidAt >= monthStart)
-      .reduce((sum: number, p: any) => sum + p.amount, 0);
+    return roundCurrency(
+      allPaymentHistory
+        .filter((p: any) => p.paidAt >= monthStart)
+        .reduce((sum: number, p: any) => sum + Number(p.amount || 0), 0)
+    );
   }, [allPaymentHistory, monthStart]);
 
-  const getDayLabel = (dateObj: Date) => {
-    const today = new Date();
-    today.setHours(0, 0, 0, 0);
-    const yesterday = new Date(today);
-    yesterday.setDate(yesterday.getDate() - 1);
-
-    const checkDate = new Date(dateObj);
-    checkDate.setHours(0, 0, 0, 0);
-
-    if (checkDate.getTime() === today.getTime()) return "Today";
-    if (checkDate.getTime() === yesterday.getTime()) return "Yesterday";
-    
-    return checkDate.toLocaleDateString("en-IN", { day: "2-digit", month: "short", year: "numeric" });
-  };
-
-  const handleUndoPayment = (payment: any) => {
+  const handleUndoPayment = useCallback((payment: any) => {
     Alert.alert(
       "Undo Payment?",
       `Reverse ₹${Number(payment.amount).toLocaleString("en-IN")} payment for "${payment.title}"? The balance will be restored.`,
@@ -809,16 +1444,16 @@ export default function ExpenseBalances() {
         },
       ]
     );
-  };
+  }, [undoExpensePayment, deleteRawTransaction, deleteWorkerPayment]);
 
-  const onRefresh = () => {
+  const onRefresh = useCallback(() => {
     setRefreshing(true);
     setTimeout(() => {
       setRefreshing(false);
     }, 1000);
-  };
+  }, []);
 
-  const handleOpenPayModal = (target: any, type: "expense" | "supplier" | "worker" | "delivery", initialRepayMode = false) => {
+  const handleOpenPayModal = useCallback((target: any, type: "expense" | "supplier" | "worker" | "delivery", initialRepayMode = false) => {
     let effectiveTarget = target;
     if (type === "worker") {
       const fin = workerFinancialsMap.get(target.id);
@@ -866,7 +1501,7 @@ export default function ExpenseBalances() {
 
     setIsPayModalOpen(true);
     setShowSuccessAnim(false);
-  };
+  }, [workerFinancialsMap, deliveryFinancialsMap]);
 
   const handleClosePayModal = () => {
     setIsPayModalOpen(false);
@@ -1133,12 +1768,14 @@ export default function ExpenseBalances() {
       });
 
       // Reconcile unallocated initial balance if target.balance has an opening balance not covered by transaction logs
-      const netTransacted = rawEntries.reduce(
-        (sum, e) => sum + (Number(e.creditAmount || 0) - Number(e.debitAmount || 0)),
-        0
+      const netTransacted = roundCurrency(
+        rawEntries.reduce(
+          (sum, e) => sum + (Number(e.creditAmount || 0) - Number(e.debitAmount || 0)),
+          0
+        )
       );
-      const currentStoredBal = Number(target.balance !== undefined ? target.balance : netTransacted);
-      const unallocatedDiff = currentStoredBal - netTransacted;
+      const currentStoredBal = roundCurrency(target.balance !== undefined ? target.balance : netTransacted);
+      const unallocatedDiff = roundCurrency(currentStoredBal - netTransacted);
 
       if (Math.abs(unallocatedDiff) > 0.01 && !rawEntries.some((e: any) => e.type === "adjustment" || e.type === "opening")) {
         const isOpeningPayable = unallocatedDiff > 0;
@@ -1187,23 +1824,23 @@ export default function ExpenseBalances() {
       let totalAdjustments = 0;
 
       const ledger = rawEntries.map((entry) => {
-        const cr = Number(entry.creditAmount || 0);
-        const dr = Number(entry.debitAmount || 0);
+        const cr = roundCurrency(entry.creditAmount || 0);
+        const dr = roundCurrency(entry.debitAmount || 0);
 
         if (entry.type === "purchase") {
-          totalPurchases += cr;
-          totalPaidDirect += dr;
+          totalPurchases = roundCurrency(totalPurchases + cr);
+          totalPaidDirect = roundCurrency(totalPaidDirect + dr);
         } else if (entry.type === "payment") {
-          totalPaidDirect += dr;
+          totalPaidDirect = roundCurrency(totalPaidDirect + dr);
         } else if (entry.type === "order") {
-          totalOrderOffsets += dr;
+          totalOrderOffsets = roundCurrency(totalOrderOffsets + dr);
         } else if (entry.type === "adjustment") {
-          totalAdjustments += (cr - dr);
+          totalAdjustments = roundCurrency(totalAdjustments + (cr - dr));
         }
 
-        totalCredit += cr;
-        totalDebit += dr;
-        running += (cr - dr);
+        totalCredit = roundCurrency(totalCredit + cr);
+        totalDebit = roundCurrency(totalDebit + dr);
+        running = roundCurrency(running + (cr - dr));
         return {
           ...entry,
           credit: cr,
@@ -1214,7 +1851,7 @@ export default function ExpenseBalances() {
       });
 
       const displayLedger = [...ledger].reverse();
-      const netBalance = Number(target.balance !== undefined ? target.balance : (totalCredit - totalDebit));
+      const netBalance = roundCurrency(target.balance !== undefined ? target.balance : (totalCredit - totalDebit));
       const isAdvance = netBalance < 0;
 
       return {
@@ -1389,16 +2026,16 @@ export default function ExpenseBalances() {
       let bonusEarned = 0;
 
       const ledger = rawEntries.map((entry) => {
-        const cr = Number(entry.creditAmount || 0);
-        const dr = Number(entry.debitAmount || 0);
-        if (entry.type === "wage") attEarned += cr;
-        if (entry.type === "loading") loadEarned += cr;
-        if (entry.type === "unloading") unloadEarned += cr;
-        if (entry.type === "bonus") bonusEarned += cr;
+        const cr = roundCurrency(entry.creditAmount || 0);
+        const dr = roundCurrency(entry.debitAmount || 0);
+        if (entry.type === "wage") attEarned = roundCurrency(attEarned + cr);
+        if (entry.type === "loading") loadEarned = roundCurrency(loadEarned + cr);
+        if (entry.type === "unloading") unloadEarned = roundCurrency(unloadEarned + cr);
+        if (entry.type === "bonus") bonusEarned = roundCurrency(bonusEarned + cr);
 
-        totalCredit += cr;
-        totalDebit += dr;
-        running += (cr - dr);
+        totalCredit = roundCurrency(totalCredit + cr);
+        totalDebit = roundCurrency(totalDebit + dr);
+        running = roundCurrency(running + (cr - dr));
 
         return {
           ...entry,
@@ -1411,9 +2048,9 @@ export default function ExpenseBalances() {
 
       const displayLedger = [...ledger].reverse();
       const fin = workerFinancialsMap.get(target.id);
-      const pending = fin ? fin.pending : (totalCredit - totalDebit);
-      const storedAdvance = Number(target.advanceAmount || 0);
-      const effectiveAdvance = fin ? fin.effectiveAdvance : (pending < 0 ? Math.abs(pending) : storedAdvance);
+      const pending = roundCurrency(fin ? fin.pending : (totalCredit - totalDebit));
+      const storedAdvance = roundCurrency(target.advanceAmount || 0);
+      const effectiveAdvance = roundCurrency(fin ? fin.effectiveAdvance : (pending < 0 ? Math.abs(pending) : storedAdvance));
       const isAdvance = fin ? fin.isAdvance : (pending < 0 || (pending === 0 && storedAdvance > 0));
 
       return {
@@ -1580,25 +2217,25 @@ export default function ExpenseBalances() {
       let totalPaidDirect = 0;
 
       const ledger = rawEntries.map((entry) => {
-        const cr = Number(entry.creditAmount || 0);
-        const dr = Number(entry.debitAmount || 0);
+        const cr = roundCurrency(entry.creditAmount || 0);
+        const dr = roundCurrency(entry.debitAmount || 0);
 
         if (entry.type === "trip") {
-          const b = Number(entry.baseFreight !== undefined ? entry.baseFreight : (entry.raw.baseDeliveryCharge || 0));
-          const lu = Number(entry.loadingUnloading !== undefined ? entry.loadingUnloading : (cr - b));
-          baseFreight += b;
-          loadUnload += lu;
+          const b = roundCurrency(entry.baseFreight !== undefined ? entry.baseFreight : (entry.raw.baseDeliveryCharge || 0));
+          const lu = roundCurrency(entry.loadingUnloading !== undefined ? entry.loadingUnloading : (cr - b));
+          baseFreight = roundCurrency(baseFreight + b);
+          loadUnload = roundCurrency(loadUnload + lu);
         } else if (entry.type === "bonus") {
-          bonusEarned += cr;
+          bonusEarned = roundCurrency(bonusEarned + cr);
         } else if (entry.type === "payment") {
-          totalPaidDirect += dr;
+          totalPaidDirect = roundCurrency(totalPaidDirect + dr);
         } else if (entry.type === "order") {
-          totalOrderOffsets += dr;
+          totalOrderOffsets = roundCurrency(totalOrderOffsets + dr);
         }
 
-        totalCredit += cr;
-        totalDebit += dr;
-        running += (cr - dr);
+        totalCredit = roundCurrency(totalCredit + cr);
+        totalDebit = roundCurrency(totalDebit + dr);
+        running = roundCurrency(running + (cr - dr));
 
         return {
           ...entry,
@@ -1611,7 +2248,7 @@ export default function ExpenseBalances() {
 
       const displayLedger = [...ledger].reverse();
       const fin = deliveryFinancialsMap.get(target.id);
-      const pending = fin ? fin.pending : (totalCredit - totalDebit);
+      const pending = roundCurrency(fin ? fin.pending : (totalCredit - totalDebit));
       const isAdvance = pending < 0;
 
       return {
@@ -1732,6 +2369,664 @@ export default function ExpenseBalances() {
       : calcAccountDetails.ledger;
   }, [calcAccountDetails, ledgerSortOrder]);
 
+  const handleToggleExpand = useCallback((id: string) => {
+    setExpandedExpenseId((prev) => (prev === id ? null : id));
+  }, []);
+
+  const handleOpenSupplierDetails = useCallback(
+    (id: string) => {
+      router.push({ pathname: "/settings/raw-materials/suppliers/details", params: { id } } as any);
+    },
+    [router]
+  );
+
+  const handleOpenWorkerDetails = useCallback(
+    (id: string) => {
+      router.push({ pathname: "/settings/workers/details", params: { id } } as any);
+    },
+    [router]
+  );
+
+  const handleOpenDeliveryDetails = useCallback(
+    (id: string) => {
+      router.push({ pathname: "/settings/delivery-partners/details", params: { id } } as any);
+    },
+    [router]
+  );
+
+  const mainFeedData = useMemo<ExpenseBalanceFeedItem[]>(() => {
+    if (loading) return [];
+    if (activeTab === "pending") {
+      const rows: ExpenseBalanceFeedItem[] = [];
+      let hasSectionBefore = false;
+
+      if (pendingExpenses.length > 0) {
+        rows.push({
+          kind: "sectionHeader",
+          id: "section-expenses",
+          title: `Pending Expenses (${pendingExpenses.length})`,
+          isFirst: true,
+        });
+        pendingExpenses.forEach((expense: any, index: number) => {
+          rows.push({ kind: "expense", id: `exp-${expense.id || index}`, expense, index });
+        });
+        hasSectionBefore = true;
+      }
+
+      if (pendingSuppliers.length > 0) {
+        rows.push({
+          kind: "sectionHeader",
+          id: "section-suppliers",
+          title: `Pending Supplier Balances (${pendingSuppliers.length})`,
+          color: colors.accent.warning,
+          isFirst: !hasSectionBefore,
+        });
+        pendingSuppliers.forEach((supplier: any, index: number) => {
+          rows.push({ kind: "supplier", id: `sup-${supplier.id || index}`, supplier, index });
+        });
+        hasSectionBefore = true;
+      }
+
+      if (pendingWorkers.length > 0) {
+        rows.push({
+          kind: "sectionHeader",
+          id: "section-workers",
+          title: `Worker Accounts & Balances (${pendingWorkers.length})`,
+          color: colors.accent.primary,
+          isFirst: !hasSectionBefore,
+        });
+        pendingWorkers.forEach((worker: any, index: number) => {
+          rows.push({ kind: "worker", id: `wrk-${worker.id || index}`, worker, index });
+        });
+        hasSectionBefore = true;
+      }
+
+      if (pendingDeliveries.length > 0) {
+        rows.push({
+          kind: "sectionHeader",
+          id: "section-deliveries",
+          title: `Delivery Partner Accounts (${pendingDeliveries.length})`,
+          color: colors.accent.info,
+          isFirst: !hasSectionBefore,
+        });
+        pendingDeliveries.forEach((partner: any, index: number) => {
+          rows.push({ kind: "delivery", id: `del-${partner.id || index}`, partner, index });
+        });
+      }
+
+      return rows;
+    }
+
+    if (filteredPayments.length === 0) return [];
+    const historyRows: ExpenseBalanceFeedItem[] = [
+      {
+        kind: "sectionHeader",
+        id: "section-history",
+        title: `Due Payments List (${filteredPayments.length})`,
+        isFirst: true,
+      },
+    ];
+    filteredPayments.forEach((payment: any, i: number) => {
+      historyRows.push({
+        kind: "payment",
+        id: String(payment.id || `pay-${i}`),
+        payment,
+      });
+    });
+    return historyRows;
+  }, [
+    loading,
+    activeTab,
+    pendingExpenses,
+    pendingSuppliers,
+    pendingWorkers,
+    pendingDeliveries,
+    filteredPayments,
+    colors.accent.warning,
+    colors.accent.primary,
+    colors.accent.info,
+  ]);
+
+  const feedKeyExtractor = useCallback((item: ExpenseBalanceFeedItem) => item.id, []);
+
+  const renderFeedItem = useCallback(
+    ({ item }: { item: ExpenseBalanceFeedItem }) => {
+      switch (item.kind) {
+        case "sectionHeader":
+          return (
+            <Text
+              style={[
+                styles.sectionTitle,
+                item.color ? { color: item.color } : undefined,
+                !item.isFirst && styles.sectionHeaderSpacing,
+              ]}
+            >
+              {item.title}
+            </Text>
+          );
+        case "expense":
+          return (
+            <PendingExpenseCard
+              expense={item.expense}
+              index={item.index}
+              isExpanded={expandedExpenseId === item.expense.id}
+              onToggleExpand={handleToggleExpand}
+              onPay={handleOpenPayModal}
+              styles={styles}
+              colors={colors}
+            />
+          );
+        case "supplier": {
+          const stats = supplierStatsMap.get(item.supplier.id);
+          return (
+            <PendingSupplierCard
+              supplier={item.supplier}
+              index={item.index}
+              totalPurchased={stats?.totalPurchased || 0}
+              totalPaid={stats?.totalPaid || 0}
+              onOpenDetails={handleOpenSupplierDetails}
+              onOpenCalcModal={handleOpenCalcModal}
+              onPay={handleOpenPayModal}
+              onShare={handleShareAccountStatement}
+              styles={styles}
+              colors={colors}
+            />
+          );
+        }
+        case "worker":
+          return (
+            <PendingWorkerCard
+              worker={item.worker}
+              index={item.index}
+              fin={workerFinancialsMap.get(item.worker.id)}
+              onOpenDetails={handleOpenWorkerDetails}
+              onOpenCalcModal={handleOpenCalcModal}
+              onPay={handleOpenPayModal}
+              onShare={handleShareAccountStatement}
+              styles={styles}
+              colors={colors}
+            />
+          );
+        case "delivery":
+          return (
+            <PendingDeliveryCard
+              partner={item.partner}
+              index={item.index}
+              fin={deliveryFinancialsMap.get(item.partner.id)}
+              onOpenDetails={handleOpenDeliveryDetails}
+              onOpenCalcModal={handleOpenCalcModal}
+              onPay={handleOpenPayModal}
+              onShare={handleShareAccountStatement}
+              styles={styles}
+              colors={colors}
+            />
+          );
+        case "payment":
+          return (
+            <PaymentHistoryRow
+              payment={item.payment}
+              onUndo={handleUndoPayment}
+              styles={styles}
+            />
+          );
+      }
+    },
+    [
+      styles,
+      colors,
+      expandedExpenseId,
+      handleToggleExpand,
+      handleOpenPayModal,
+      supplierStatsMap,
+      handleOpenSupplierDetails,
+      handleOpenCalcModal,
+      handleShareAccountStatement,
+      workerFinancialsMap,
+      handleOpenWorkerDetails,
+      deliveryFinancialsMap,
+      handleOpenDeliveryDetails,
+      handleUndoPayment,
+    ]
+  );
+
+  const ledgerKeyExtractor = useCallback(
+    (entry: any, idx: number) => String(entry.id || `ledger-${idx}`),
+    []
+  );
+
+  const renderLedgerRow = useCallback(
+    ({ item, index }: { item: any; index: number }) => (
+      <AccountLedgerRow entry={item} idx={index} styles={styles} colors={colors} />
+    ),
+    [styles, colors]
+  );
+
+  const mainListHeader = activeTab === "pending" ? (
+    <View>
+      {/* Unified KPI Dashboard Card */}
+      <Animated.View entering={FadeInDown.duration(200)} style={styles.unifiedCard}>
+        <View style={styles.unifiedHeader}>
+          <View style={[styles.unifiedIconWrap, { backgroundColor: `${colors.accent.danger}18` }]}>
+            <MaterialIcons name="account-balance-wallet" size={24} color={colors.accent.danger} />
+          </View>
+          <View style={styles.unifiedHeaderInfo}>
+            <Text style={styles.unifiedLabel}>Total Outstanding Dues</Text>
+            <AnimatedCounter
+              value={totalOutstandingBalance + totalSupplierBalance + totalWorkerPending + totalDeliveryPending}
+              prefix="₹"
+              style={styles.unifiedValue}
+            />
+          </View>
+        </View>
+
+        <View style={styles.unifiedDivider} />
+
+        <View style={styles.breakdownRow}>
+          <View style={styles.breakdownCol}>
+            <Text style={styles.breakdownLabel} {...compactBadgeTextProps}>EXPENSES</Text>
+            <Text style={[styles.breakdownValue, { color: colors.accent.danger }]} {...currencyKpiTextProps}>
+              ₹{totalOutstandingBalance.toLocaleString("en-IN")}
+            </Text>
+          </View>
+          <View style={styles.verticalDivider} />
+          <View style={styles.breakdownCol}>
+            <Text style={styles.breakdownLabel} {...compactBadgeTextProps}>SUPPLIERS</Text>
+            <Text style={[styles.breakdownValue, { color: colors.accent.warning }]} {...currencyKpiTextProps}>
+              ₹{totalSupplierBalance.toLocaleString("en-IN")}
+            </Text>
+          </View>
+          <View style={styles.verticalDivider} />
+          <View style={styles.breakdownCol}>
+            <Text style={styles.breakdownLabel} {...compactBadgeTextProps}>WORKERS</Text>
+            <Text style={[styles.breakdownValue, { color: colors.accent.primary }]} {...currencyKpiTextProps}>
+              ₹{totalWorkerPending.toLocaleString("en-IN")}
+            </Text>
+          </View>
+          <View style={styles.verticalDivider} />
+          <View style={styles.breakdownCol}>
+            <Text style={styles.breakdownLabel} {...compactBadgeTextProps}>DELIVERY</Text>
+            <Text style={[styles.breakdownValue, { color: colors.accent.info }]} {...currencyKpiTextProps}>
+              ₹{totalDeliveryPending.toLocaleString("en-IN")}
+            </Text>
+          </View>
+        </View>
+      </Animated.View>
+
+      {totalAdvancePaid > 0 && (
+        <Animated.View
+          entering={FadeInDown.duration(200)}
+          style={[styles.unifiedCard, { marginTop: 10, borderColor: `${colors.accent.success}40` }]}
+        >
+          <View style={styles.unifiedHeader}>
+            <View style={[styles.unifiedIconWrap, { backgroundColor: `${colors.accent.success}18` }]}>
+              <MaterialIcons name="paid" size={24} color={colors.accent.success} />
+            </View>
+            <View style={styles.unifiedHeaderInfo}>
+              <Text style={styles.unifiedLabel}>Total Advance Paid</Text>
+              <AnimatedCounter
+                value={totalAdvancePaid}
+                prefix="₹"
+                style={[styles.unifiedValue, { color: colors.accent.success }]}
+              />
+            </View>
+          </View>
+
+          <View style={styles.unifiedDivider} />
+
+          <View style={styles.breakdownRow}>
+            <View style={styles.breakdownCol}>
+              <Text style={styles.breakdownLabel} {...compactBadgeTextProps}>SUPPLIERS</Text>
+              <Text style={[styles.breakdownValue, { color: colors.accent.success }]} {...currencyKpiTextProps}>
+                ₹{totalSupplierAdvance.toLocaleString("en-IN")}
+              </Text>
+            </View>
+            <View style={styles.verticalDivider} />
+            <View style={styles.breakdownCol}>
+              <Text style={styles.breakdownLabel} {...compactBadgeTextProps}>WORKERS</Text>
+              <Text style={[styles.breakdownValue, { color: colors.accent.success }]} {...currencyKpiTextProps}>
+                ₹{totalWorkerAdvance.toLocaleString("en-IN")}
+              </Text>
+            </View>
+            <View style={styles.verticalDivider} />
+            <View style={styles.breakdownCol}>
+              <Text style={styles.breakdownLabel} {...compactBadgeTextProps}>DELIVERY</Text>
+              <Text style={[styles.breakdownValue, { color: colors.accent.success }]} {...currencyKpiTextProps}>
+                ₹{totalDeliveryAdvance.toLocaleString("en-IN")}
+              </Text>
+            </View>
+            {totalExpenseAdvance > 0 && (
+              <>
+                <View style={styles.verticalDivider} />
+                <View style={styles.breakdownCol}>
+                  <Text style={styles.breakdownLabel} {...compactBadgeTextProps}>EXPENSES</Text>
+                  <Text style={[styles.breakdownValue, { color: colors.accent.success }]} {...currencyKpiTextProps}>
+                    ₹{totalExpenseAdvance.toLocaleString("en-IN")}
+                  </Text>
+                </View>
+              </>
+            )}
+          </View>
+        </Animated.View>
+      )}
+
+      {/* Search Bar */}
+      <View style={styles.searchBarBox}>
+        <MaterialIcons name="search" size={20} color={colors.text.muted} style={{ marginRight: 8 }} />
+        <TextInput
+          style={styles.searchInput}
+          placeholder="Search pending by title or category..."
+          value={searchQuery}
+          onChangeText={setSearchQuery}
+          placeholderTextColor={colors.text.muted}
+        />
+        {searchQuery !== "" && (
+          <Pressable onPress={() => setSearchQuery("")}>
+            <MaterialIcons name="close" size={20} color="#5A5F72" />
+          </Pressable>
+        )}
+      </View>
+    </View>
+  ) : (
+    <View>
+      {/* KPI Stats Grid Card */}
+      <Animated.View entering={FadeInDown.duration(200)} style={styles.receivedCard}>
+        <View style={styles.receivedHeader}>
+          <View>
+            <Text style={styles.receivedCardEmoji}>💸</Text>
+            <Text style={styles.receivedCardTitle}>Due Balance Payments</Text>
+          </View>
+        </View>
+
+        <View style={styles.receivedDivider} />
+
+        <View style={styles.receivedStatsGrid}>
+          <View style={styles.receivedStatCol}>
+            <Text style={styles.receivedStatLabel}>Total Paid Today</Text>
+            <AnimatedCounter value={totalPaidToday} prefix="₹" style={styles.receivedStatValue} />
+          </View>
+          <View style={styles.receivedStatCol}>
+            <Text style={styles.receivedStatLabel}>Total Paid This Month</Text>
+            <AnimatedCounter value={totalPaidThisMonth} prefix="₹" style={styles.receivedStatValue} />
+          </View>
+        </View>
+      </Animated.View>
+
+      {/* Search Bar */}
+      <View style={styles.searchBarBox}>
+        <MaterialIcons name="search" size={20} color="#5A5F72" style={{ marginRight: 8 }} />
+        <TextInput
+          style={styles.searchInput}
+          placeholder="Search history by title, method or notes..."
+          value={searchQuery}
+          onChangeText={setSearchQuery}
+          placeholderTextColor="#5A5F72"
+        />
+        {searchQuery !== "" && (
+          <Pressable onPress={() => setSearchQuery("")}>
+            <MaterialIcons name="close" size={20} color="#5A5F72" />
+          </Pressable>
+        )}
+      </View>
+    </View>
+  );
+
+  const mainListEmpty = loading ? (
+    <View style={styles.loaderContainer}>
+      <ActivityIndicator size="large" color={colors.accent.danger} />
+      <Text style={styles.loadingText}>
+        {activeTab === "pending" ? "Fetching pending balances..." : "Fetching payment history..."}
+      </Text>
+    </View>
+  ) : activeTab === "pending" ? (
+    <View style={styles.emptyState}>
+      <View style={styles.emptyCircle}>
+        <MaterialIcons name="check-circle" size={48} color={colors.accent.success} />
+      </View>
+      <Text style={styles.emptyHeading}>All Balances Cleared! 🎉</Text>
+      <Text style={styles.emptyText}>
+        There are no pending expense, supplier, worker, or delivery partner balances matching your query.
+      </Text>
+    </View>
+  ) : (
+    <View style={styles.emptyState}>
+      <View style={styles.emptyCircle}>
+        <MaterialIcons name="history" size={48} color="#363B4D" />
+      </View>
+      <Text style={styles.emptyHeading}>No Payments Found</Text>
+      <Text style={styles.emptyText}>
+        No payments towards outstanding balances matched your search query.
+      </Text>
+    </View>
+  );
+
+  const ledgerTableHeader = (
+    <View style={styles.ledgerHeaderRow}>
+      <Text style={styles.ledgerHeaderDateCol} {...compactBadgeTextProps}>Date & Particulars</Text>
+      <Text style={[styles.ledgerHeaderDrCol, { color: colors.accent.success }]} {...compactBadgeTextProps}>Debit (Dr)</Text>
+      <Text style={[styles.ledgerHeaderCrCol, { color: colors.accent.danger }]} {...compactBadgeTextProps}>Credit (Cr)</Text>
+      <Text style={[styles.ledgerHeaderBalCol, { color: colors.text.primary }]} {...compactBadgeTextProps}>Balance</Text>
+    </View>
+  );
+
+  const ledgerTableEmpty = (
+    <View style={styles.ledgerEmptyWrap}>
+      <MaterialIcons name="receipt-long" size={38} color={colors.text.muted} />
+      <Text style={styles.ledgerEmptyText}>No ledger entries logged yet for this account.</Text>
+    </View>
+  );
+
+  const ledgerTableFooter =
+    displayedLedger.length > 0 ? (
+      <View style={styles.ledgerFooterRow}>
+        <View style={styles.ledgerFooterTitleCol}>
+          <Text style={styles.ledgerFooterTitle}>Total / Closing</Text>
+          <Text style={styles.ledgerFooterSub}>Account Totals</Text>
+        </View>
+
+        <View style={styles.ledgerAmountCol}>
+          <Text style={styles.ledgerDrValue}>
+            ₹{Number(calcAccountDetails?.totalDebit || 0).toLocaleString("en-IN")}
+          </Text>
+          <Text style={styles.ledgerDrSub}>Total Dr</Text>
+        </View>
+
+        <View style={styles.ledgerAmountCol}>
+          <Text style={styles.ledgerCrValue}>
+            ₹{Number(calcAccountDetails?.totalCredit || 0).toLocaleString("en-IN")}
+          </Text>
+          <Text style={styles.ledgerCrSub}>Total Cr</Text>
+        </View>
+
+        <View style={styles.ledgerBalCol}>
+          <Text
+            style={[
+              styles.ledgerBalValue,
+              { color: calcAccountDetails?.isAdvance ? colors.accent.success : colors.accent.danger },
+            ]}
+          >
+            ₹{Math.abs(calcAccountDetails?.netBalance || 0).toLocaleString("en-IN")}
+          </Text>
+          <Text
+            style={[
+              styles.ledgerBalBadgeText,
+              { color: calcAccountDetails?.isAdvance ? colors.accent.success : colors.accent.danger },
+            ]}
+          >
+            {calcAccountDetails?.isAdvance ? "Dr (Advance Paid)" : "Cr (Outstanding Due)"}
+          </Text>
+        </View>
+      </View>
+    ) : undefined;
+
+  const calcHeroAndSwitcher = (
+    <View style={styles.calcHeroWrapper}>
+      <View
+        style={[
+          styles.calcHeroCard,
+          {
+            borderColor: calcAccountDetails?.isAdvance
+              ? `${colors.accent.success}40`
+              : `${colors.accent.danger}40`,
+          },
+        ]}
+      >
+        <View style={styles.calcHeroTopRow}>
+          <View>
+            <Text style={styles.calcHeroLabel}>Net Accounting Position</Text>
+            <Text
+              style={[
+                styles.calcHeroValue,
+                { color: calcAccountDetails?.isAdvance ? colors.accent.success : colors.accent.danger },
+              ]}
+            >
+              {calcAccountDetails?.isAdvance
+                ? `₹${Math.abs(calcAccountDetails.netBalance).toLocaleString("en-IN")} Advance Paid`
+                : `₹${Math.abs(calcAccountDetails?.netBalance || 0).toLocaleString("en-IN")} Outstanding Due`}
+            </Text>
+          </View>
+          <View
+            style={[
+              styles.calcStatusChip,
+              {
+                backgroundColor: calcAccountDetails?.isAdvance
+                  ? `${colors.accent.success}18`
+                  : `${colors.accent.danger}18`,
+              },
+            ]}
+          >
+            <Text
+              style={[
+                styles.calcStatusChipText,
+                { color: calcAccountDetails?.isAdvance ? colors.accent.success : colors.accent.danger },
+              ]}
+            >
+              {calcAccountDetails?.isAdvance ? "Dr (Advance Paid)" : "Cr (Outstanding Due)"}
+            </Text>
+          </View>
+        </View>
+
+        <View style={styles.calcEquationRow}>
+          <View style={styles.calcEquationColWide}>
+            <Text style={styles.calcEquationLabel}>Total Credit (Cr)</Text>
+            <Text style={[styles.calcEquationVal, { color: colors.accent.danger }]}>
+              ₹{(calcAccountDetails?.totalCredit || 0).toLocaleString("en-IN")}
+            </Text>
+          </View>
+          <Text style={styles.calcEquationOp}>-</Text>
+          <View style={styles.calcEquationCol}>
+            <Text style={styles.calcEquationLabel}>Total Debit (Dr)</Text>
+            <Text style={[styles.calcEquationVal, { color: colors.accent.success }]}>
+              ₹{(calcAccountDetails?.totalDebit || 0).toLocaleString("en-IN")}
+            </Text>
+          </View>
+          <Text style={styles.calcEquationOp}>=</Text>
+          <View style={styles.calcEquationColRight}>
+            <Text style={styles.calcEquationLabel}>Closing Balance</Text>
+            <Text
+              style={[
+                styles.calcEquationClosingVal,
+                { color: calcAccountDetails?.isAdvance ? colors.accent.success : colors.accent.danger },
+              ]}
+            >
+              ₹{Math.abs(calcAccountDetails?.netBalance || 0).toLocaleString("en-IN")}{" "}
+              {calcAccountDetails?.isAdvance ? "Dr" : "Cr"}
+            </Text>
+          </View>
+        </View>
+      </View>
+
+      <View style={styles.calcTabSwitchRow}>
+        <Pressable
+          style={[
+            styles.calcTabSwitchBtn,
+            calcViewTab === "ledger" && styles.calcTabSwitchBtnActive,
+          ]}
+          onPress={() => setCalcViewTab("ledger")}
+        >
+          <Text
+            style={[
+              styles.calcTabSwitchText,
+              calcViewTab === "ledger" && styles.calcTabSwitchTextActive,
+            ]}
+          >
+            Accounting Ledger ({displayedLedger.length})
+          </Text>
+        </Pressable>
+
+        <Pressable
+          style={[
+            styles.calcTabSwitchBtn,
+            calcViewTab === "breakdown" && styles.calcTabSwitchBtnActive,
+          ]}
+          onPress={() => setCalcViewTab("breakdown")}
+        >
+          <Text
+            style={[
+              styles.calcTabSwitchText,
+              calcViewTab === "breakdown" && styles.calcTabSwitchTextActive,
+            ]}
+          >
+            Formula Breakdown
+          </Text>
+        </Pressable>
+      </View>
+    </View>
+  );
+
+  const calcModalActionsFooter = (
+    <View style={styles.calcFooterActions}>
+      <Pressable
+        style={styles.calcShareActionBtn}
+        onPress={() => {
+          if (calcTarget && calcTargetType) {
+            handleShareAccountStatement(calcTarget, calcTargetType);
+          }
+        }}
+      >
+        <MaterialIcons name="share" size={18} color={colors.accent.primary} />
+        <Text style={styles.calcShareActionText}>
+          Share Account Statement (அறிக்கை பகிர்)
+        </Text>
+      </Pressable>
+
+      <Pressable
+        style={styles.calcPayActionBtn}
+        onPress={() => {
+          const tgt = calcTarget;
+          const type = calcTargetType;
+          handleCloseCalcModal();
+          if (tgt && type) {
+            setTimeout(() => {
+              handleOpenPayModal(tgt, type as any, false);
+            }, 200);
+          }
+        }}
+      >
+        <MaterialIcons name="payment" size={18} color="#1A1D27" />
+        <Text style={styles.calcPayActionText}>Record / Settle Payment</Text>
+      </Pressable>
+
+      <Pressable
+        style={styles.calcProfileActionBtn}
+        onPress={() => {
+          const tgt = calcTarget;
+          const type = calcTargetType;
+          handleCloseCalcModal();
+          if (type === "supplier") {
+            router.push({ pathname: "/settings/raw-materials/suppliers/details", params: { id: tgt.id } } as any);
+          } else if (type === "worker") {
+            router.push({ pathname: "/settings/workers/details", params: { id: tgt.id } } as any);
+          } else if (type === "delivery") {
+            router.push({ pathname: "/settings/delivery-partners/details", params: { id: tgt.id } } as any);
+          }
+        }}
+      >
+        <MaterialIcons name="person" size={18} color={colors.text.primary} />
+        <Text style={styles.calcProfileActionText}>Open Full Profile & History Page</Text>
+      </Pressable>
+    </View>
+  );
+
   return (
     <AnimatedPage style={{ flex: 1, backgroundColor: colors.bg.primary }}>
       {/* Header Bar */}
@@ -1780,13 +3075,22 @@ export default function ExpenseBalances() {
         })}
       </View>
 
-      <ScrollView
+      <FlatList
         ref={scrollViewRef}
-        contentContainerStyle={styles.scrollContainer}
+        data={mainFeedData}
+        keyExtractor={feedKeyExtractor}
+        renderItem={renderFeedItem}
+        ListHeaderComponent={mainListHeader}
+        ListEmptyComponent={mainListEmpty}
+        contentContainerStyle={[styles.scrollContainer, { paddingBottom: scrollBottomPadding }]}
         showsVerticalScrollIndicator={false}
         scrollEventThrottle={32}
         onScroll={handleScroll}
         onContentSizeChange={handleContentSizeChange}
+        keyboardShouldPersistTaps="handled"
+        initialNumToRender={12}
+        maxToRenderPerBatch={12}
+        windowSize={7}
         refreshControl={
           <RefreshControl
             refreshing={refreshing}
@@ -1795,974 +3099,7 @@ export default function ExpenseBalances() {
             tintColor={colors.accent.danger}
           />
         }
-      >
-        {activeTab === "pending" ? (
-          /* PENDING BALANCES TAB */
-          <View>
-            {/* Unified KPI Dashboard Card */}
-            <Animated.View
-              entering={FadeInDown.duration(200)}
-              style={styles.unifiedCard}
-            >
-              <View style={styles.unifiedHeader}>
-                <View style={[styles.unifiedIconWrap, { backgroundColor: `${colors.accent.danger}18` }]}>
-                  <MaterialIcons name="account-balance-wallet" size={24} color={colors.accent.danger} />
-                </View>
-                <View style={styles.unifiedHeaderInfo}>
-                  <Text style={styles.unifiedLabel}>Total Outstanding Dues</Text>
-                  <AnimatedCounter
-                    value={totalOutstandingBalance + totalSupplierBalance + totalWorkerPending + totalDeliveryPending}
-                    prefix="₹"
-                    style={styles.unifiedValue}
-                  />
-                </View>
-              </View>
-
-              <View style={styles.unifiedDivider} />
-
-              <View style={styles.breakdownRow}>
-                <View style={styles.breakdownCol}>
-                  <Text style={styles.breakdownLabel}>EXPENSES</Text>
-                  <Text style={[styles.breakdownValue, { color: colors.accent.danger }]}>
-                    ₹{totalOutstandingBalance.toLocaleString("en-IN")}
-                  </Text>
-                </View>
-                <View style={styles.verticalDivider} />
-                <View style={styles.breakdownCol}>
-                  <Text style={styles.breakdownLabel}>SUPPLIERS</Text>
-                  <Text style={[styles.breakdownValue, { color: colors.accent.warning }]}>
-                    ₹{totalSupplierBalance.toLocaleString("en-IN")}
-                  </Text>
-                </View>
-                <View style={styles.verticalDivider} />
-                <View style={styles.breakdownCol}>
-                  <Text style={styles.breakdownLabel}>WORKERS</Text>
-                  <Text style={[styles.breakdownValue, { color: colors.accent.primary }]}>
-                    ₹{totalWorkerPending.toLocaleString("en-IN")}
-                  </Text>
-                </View>
-                <View style={styles.verticalDivider} />
-                <View style={styles.breakdownCol}>
-                  <Text style={styles.breakdownLabel}>DELIVERY</Text>
-                  <Text style={[styles.breakdownValue, { color: colors.accent.info }]}>
-                    ₹{totalDeliveryPending.toLocaleString("en-IN")}
-                  </Text>
-                </View>
-              </View>
-            </Animated.View>
-
-            {totalAdvancePaid > 0 && (
-              <Animated.View
-                entering={FadeInDown.duration(200)}
-                style={[styles.unifiedCard, { marginTop: 10, borderColor: `${colors.accent.success}40` }]}
-              >
-                <View style={styles.unifiedHeader}>
-                  <View style={[styles.unifiedIconWrap, { backgroundColor: `${colors.accent.success}18` }]}>
-                    <MaterialIcons name="paid" size={24} color={colors.accent.success} />
-                  </View>
-                  <View style={styles.unifiedHeaderInfo}>
-                    <Text style={styles.unifiedLabel}>Total Advance Paid</Text>
-                    <AnimatedCounter
-                      value={totalAdvancePaid}
-                      prefix="₹"
-                      style={[styles.unifiedValue, { color: colors.accent.success }]}
-                    />
-                  </View>
-                </View>
-
-                <View style={styles.unifiedDivider} />
-
-                <View style={styles.breakdownRow}>
-                  <View style={styles.breakdownCol}>
-                    <Text style={styles.breakdownLabel}>SUPPLIERS</Text>
-                    <Text style={[styles.breakdownValue, { color: colors.accent.success }]}>
-                      ₹{totalSupplierAdvance.toLocaleString("en-IN")}
-                    </Text>
-                  </View>
-                  <View style={styles.verticalDivider} />
-                  <View style={styles.breakdownCol}>
-                    <Text style={styles.breakdownLabel}>WORKERS</Text>
-                    <Text style={[styles.breakdownValue, { color: colors.accent.success }]}>
-                      ₹{totalWorkerAdvance.toLocaleString("en-IN")}
-                    </Text>
-                  </View>
-                  <View style={styles.verticalDivider} />
-                  <View style={styles.breakdownCol}>
-                    <Text style={styles.breakdownLabel}>DELIVERY</Text>
-                    <Text style={[styles.breakdownValue, { color: colors.accent.success }]}>
-                      ₹{totalDeliveryAdvance.toLocaleString("en-IN")}
-                    </Text>
-                  </View>
-                  {totalExpenseAdvance > 0 && (
-                    <>
-                      <View style={styles.verticalDivider} />
-                      <View style={styles.breakdownCol}>
-                        <Text style={styles.breakdownLabel}>EXPENSES</Text>
-                        <Text style={[styles.breakdownValue, { color: colors.accent.success }]}>
-                          ₹{totalExpenseAdvance.toLocaleString("en-IN")}
-                        </Text>
-                      </View>
-                    </>
-                  )}
-                </View>
-              </Animated.View>
-            )}
-
-            {/* Search Bar */}
-            <View style={styles.searchBarBox}>
-              <MaterialIcons name="search" size={20} color={colors.text.muted} style={{ marginRight: 8 }} />
-              <TextInput
-                style={styles.searchInput}
-                placeholder="Search pending by title or category..."
-                value={searchQuery}
-                onChangeText={setSearchQuery}
-                placeholderTextColor={colors.text.muted}
-              />
-              {searchQuery !== "" && (
-                <Pressable onPress={() => setSearchQuery("")}>
-                  <MaterialIcons name="close" size={20} color="#5A5F72" />
-                </Pressable>
-              )}
-            </View>
-
-            {/* Loading / List Content */}
-            {loading ? (
-              <View style={styles.loaderContainer}>
-                <ActivityIndicator size="large" color={colors.accent.danger} />
-                <Text style={styles.loadingText}>Fetching pending balances...</Text>
-              </View>
-            ) : pendingExpenses.length === 0 && pendingSuppliers.length === 0 && pendingWorkers.length === 0 && pendingDeliveries.length === 0 ? (
-              <View style={styles.emptyState}>
-                <View style={styles.emptyCircle}>
-                  <MaterialIcons name="check-circle" size={48} color={colors.accent.success} />
-                </View>
-                <Text style={styles.emptyHeading}>All Balances Cleared! 🎉</Text>
-                <Text style={styles.emptyText}>
-                  There are no pending expense, supplier, worker, or delivery partner balances matching your query.
-                </Text>
-              </View>
-            ) : (
-              <View>
-                {/* 1. Pending Expenses Section */}
-                {pendingExpenses.length > 0 && (
-                  <View style={styles.listContainer}>
-                    <Text style={styles.sectionTitle}>
-                      Pending Expenses ({pendingExpenses.length})
-                    </Text>
-                    {pendingExpenses.map((expense: any, index: number) => {
-                      const catInfo = CATEGORY_CONFIG[expense.category] || CATEGORY_CONFIG["Miscellaneous"];
-                      const expDate = expense.expenseDate instanceof Date 
-                        ? expense.expenseDate 
-                        : new Date(expense.expenseDate);
-                      
-                      const remainingAmt = expense.remainingAmount !== undefined 
-                        ? Number(expense.remainingAmount) 
-                        : (expense.paymentMethod === "Balance" ? Number(expense.amount || 0) : 0);
-                      
-                      const paidAmt = expense.paidAmount !== undefined 
-                        ? Number(expense.paidAmount) 
-                        : (expense.paymentMethod === "Balance" ? 0 : Number(expense.amount || 0));
-
-                      const isExpanded = expandedExpenseId === expense.id;
-
-                      return (
-                        <Animated.View
-                          key={expense.id}
-                          entering={FadeInDown.delay(Math.min(index, 5) * 30).duration(200)}
-                          style={styles.expenseCard}
-                        >
-                          <Pressable
-                            onPress={() => setExpandedExpenseId(isExpanded ? null : expense.id)}
-                            style={({ pressed }) => pressed && { opacity: 0.85 }}
-                          >
-                            <View style={styles.cardHeader}>
-                              <View style={[styles.categoryBadge, { backgroundColor: `${catInfo.color}15` }]}>
-                                <MaterialIcons name={catInfo.icon as any} size={20} color={catInfo.color} />
-                              </View>
-                              <View style={styles.cardHeaderInfo}>
-                                <Text style={styles.expenseTitle} numberOfLines={1}>
-                                  {expense.title}
-                                </Text>
-                                <Text style={styles.categoryLabel}>{expense.category}</Text>
-                              </View>
-                              <View style={{ flexDirection: "row", alignItems: "center", gap: 4 }}>
-                                <Text style={styles.expenseDateText}>
-                                  {expDate.toLocaleDateString("en-IN", {
-                                    day: "2-digit",
-                                    month: "short",
-                                  })}
-                                </Text>
-                                <MaterialIcons 
-                                  name={isExpanded ? "expand-less" : "expand-more"} 
-                                  size={20} 
-                                  color={colors.text.muted} 
-                                />
-                              </View>
-                            </View>
-
-                            <View style={styles.divider} />
-
-                            <View style={styles.cardDetailsRow}>
-                              <View style={styles.detailCol}>
-                                <Text style={styles.detailLabel}>Total Amount</Text>
-                                <Text style={styles.detailValue}>
-                                  ₹{Number(expense.amount || expense.totalAmount).toLocaleString("en-IN")}
-                                </Text>
-                              </View>
-                              <View style={styles.detailCol}>
-                                <Text style={styles.detailLabel}>Paid</Text>
-                                <Text style={[styles.detailValue, { color: colors.accent.success }]}>
-                                  ₹{paidAmt.toLocaleString("en-IN")}
-                                </Text>
-                              </View>
-                              <View style={styles.detailCol}>
-                                <Text style={styles.detailLabel}>Balance Due</Text>
-                                <Text style={[styles.detailValue, { color: colors.accent.danger }]}>
-                                  ₹{remainingAmt.toLocaleString("en-IN")}
-                                </Text>
-                              </View>
-                            </View>
-                          </Pressable>
-
-                          {isExpanded && (
-                            <Animated.View 
-                              entering={FadeInDown.duration(200)}
-                              style={{ 
-                                marginTop: 4, 
-                                padding: 12, 
-                                backgroundColor: colors.bg.primary, 
-                                borderRadius: 10,
-                                borderWidth: 1,
-                                borderColor: colors.border.subtle,
-                                marginBottom: 12
-                              }}
-                            >
-                              <Text style={{ fontSize: 11, fontWeight: "600", color: colors.text.secondary, marginBottom: 4, textTransform: "uppercase", letterSpacing: 0.5 }}>
-                                Expense Profile / Details
-                              </Text>
-                              
-                              {expense.description ? (
-                                <Text style={{ fontSize: 13, color: colors.text.primary, lineHeight: 18, marginBottom: 10 }}>
-                                  {expense.description}
-                                </Text>
-                              ) : (
-                                <Text style={{ fontSize: 13, color: colors.text.muted, fontStyle: "italic", marginBottom: 10 }}>
-                                  No description provided for this expense.
-                                </Text>
-                              )}
-
-                              <View style={{ flexDirection: "row", justifyContent: "space-between", gap: 16 }}>
-                                <View style={{ flex: 1 }}>
-                                  <Text style={{ fontSize: 10, color: colors.text.muted, textTransform: "uppercase", fontWeight: "600" }}>
-                                    Payment Method
-                                  </Text>
-                                  <Text style={{ fontSize: 13, color: colors.text.primary, fontWeight: "600", marginTop: 2 }}>
-                                    {expense.paymentMethod || "Balance / Unpaid"}
-                                  </Text>
-                                </View>
-                                <View style={{ flex: 1 }}>
-                                  <Text style={{ fontSize: 10, color: colors.text.muted, textTransform: "uppercase", fontWeight: "600" }}>
-                                    Logged Date
-                                  </Text>
-                                  <Text style={{ fontSize: 13, color: colors.text.primary, fontWeight: "600", marginTop: 2 }}>
-                                    {expDate.toLocaleDateString("en-IN", {
-                                      day: "2-digit",
-                                      month: "short",
-                                      year: "numeric"
-                                    })}
-                                  </Text>
-                                </View>
-                              </View>
-
-                              {expense.billImageUrl ? (
-                                <View style={{ marginTop: 12, borderTopWidth: 1, borderTopColor: colors.border.subtle, paddingTop: 12 }}>
-                                  <Text style={{ fontSize: 10, color: colors.text.muted, textTransform: "uppercase", fontWeight: "600", marginBottom: 6 }}>
-                                    Attached Invoice / Receipt
-                                  </Text>
-                                  <Image 
-                                    source={{ uri: expense.billImageUrl }} 
-                                    style={{ width: "100%", height: 160, borderRadius: 8, backgroundColor: colors.bg.elevated }} 
-                                    contentFit="cover"
-                                    cachePolicy="memory-disk"
-                                    transition={150}
-                                  />
-                                </View>
-                              ) : null}
-                            </Animated.View>
-                          )}
-
-                          <Pressable
-                            style={styles.payBtn}
-                            onPress={() => handleOpenPayModal(expense, "expense")}
-                          >
-                            <MaterialIcons name="payment" size={16} color="#1A1D27" />
-                            <Text style={styles.payBtnText}>Pay Balance</Text>
-                          </Pressable>
-                        </Animated.View>
-                      );
-                    })}
-                  </View>
-                )}
-
-                {/* 2. Pending Supplier Balances Section */}
-                {pendingSuppliers.length > 0 && (
-                  <View style={[styles.listContainer, pendingExpenses.length > 0 && { marginTop: 20 }]}>
-                    <Text style={[styles.sectionTitle, { color: colors.accent.warning }]}>
-                      Pending Supplier Balances ({pendingSuppliers.length})
-                    </Text>
-                    {pendingSuppliers.map((supplier: any, index: number) => {
-                      const balance = Number(supplier.balance || 0);
-                      return (
-                        <Animated.View
-                          key={supplier.id}
-                          entering={FadeInDown.delay(Math.min(index, 5) * 30).duration(200)}
-                          style={[styles.expenseCard, { borderColor: colors.border.accent, borderWidth: 1 }]}
-                        >
-                          <Pressable
-                            onPress={() => router.push({ pathname: "/settings/raw-materials/suppliers/details", params: { id: supplier.id } } as any)}
-                            onLongPress={() => handleOpenCalcModal(supplier, "supplier")}
-                            delayLongPress={350}
-                          >
-                            <View style={styles.cardHeader}>
-                              <View style={[styles.categoryBadge, { backgroundColor: colors.accent.primaryMuted }]}>
-                                <MaterialIcons name="local-shipping" size={20} color={colors.accent.warning} />
-                              </View>
-                              <View style={styles.cardHeaderInfo}>
-                                <View style={{ flexDirection: "row", alignItems: "center", gap: 6 }}>
-                                  <Text style={styles.expenseTitle} numberOfLines={1}>
-                                    {supplier.name}
-                                  </Text>
-                                  <View style={styles.longPressHintChip}>
-                                    <MaterialIcons name="calculate" size={11} color={colors.accent.warning} />
-                                    <Text style={[styles.longPressHintText, { color: colors.accent.warning }]}>Hold: Accounts</Text>
-                                  </View>
-                                </View>
-                                <Text style={styles.categoryLabel} numberOfLines={1}>Agent: {supplier.contactPerson || "N/A"}</Text>
-                              </View>
-                              <MaterialIcons name="chevron-right" size={20} color={colors.border.medium} />
-                            </View>
-
-                            <View style={styles.divider} />
-
-                            {(() => {
-                              const totalPurchased = (logs || [])
-                                .filter((log: any) => log.supplierId === supplier.id && log.type === "purchase")
-                                .reduce((sum: number, log: any) => sum + Number(log.totalCost || 0), 0);
-                              
-                              const totalAdjustments = (logs || [])
-                                .filter((log: any) => log.supplierId === supplier.id && (log.type === "adjustment" || log.materialName?.toLowerCase().includes("adjustment")))
-                                .reduce((sum: number, log: any) => sum + Number(log.amount || 0), 0);
-
-                              const totalOrderOffsets = (orders || [])
-                                .filter((o: any) => o.customerId === supplier.id || o.customerId === `sup_${supplier.id}` || o.customerId === `supplier_${supplier.id}`)
-                                .reduce((sum: number, o: any) => {
-                                  const tot = Number(o.total || 0);
-                                  const paid = Number(o.paidAmount || 0);
-                                  const due = o.balanceDue !== undefined && o.balanceDue !== null ? Number(o.balanceDue) : Math.max(0, tot - paid);
-                                  return sum + (due > 0 ? due : (paid === 0 ? tot : 0));
-                                }, 0);
-
-                              const totalPaid = (logs || [])
-                                .filter((log: any) => log.supplierId === supplier.id)
-                                .reduce((sum: number, log: any) => {
-                                  if (log.type === "purchase") {
-                                    return sum + Number(log.amountPaid || 0);
-                                  } else if (log.type === "payment") {
-                                    return sum + Number(log.amount || 0);
-                                  }
-                                  return sum;
-                                }, 0) + totalOrderOffsets;
-
-                              return (
-                                <View style={styles.cardDetailsRow}>
-                                  <View style={styles.detailCol}>
-                                    <Text style={styles.detailLabel}>Total Purchased</Text>
-                                    <Text style={styles.detailValue}>₹{totalPurchased.toLocaleString("en-IN")}</Text>
-                                  </View>
-                                  <View style={styles.detailCol}>
-                                    <Text style={styles.detailLabel}>Total Paid</Text>
-                                    <Text style={styles.detailValue}>₹{totalPaid.toLocaleString("en-IN")}</Text>
-                                  </View>
-                                  <View style={styles.detailCol}>
-                                    <Text style={styles.detailLabel}>{balance < 0 ? "Advance Paid" : "Balance Due"}</Text>
-                                    <Text style={[styles.detailValue, { color: balance < 0 ? "#10b981" : "#b45309" }]}>
-                                      ₹{Math.abs(balance).toLocaleString("en-IN")}
-                                    </Text>
-                                  </View>
-                                </View>
-                              );
-                            })()}
-                          </Pressable>
-
-                          {balance < 0 ? (
-                            <View style={styles.cardBtnRow}>
-                              <Pressable
-                                style={[
-                                  styles.payBtnFlex,
-                                  {
-                                    backgroundColor: colors.accent.danger,
-                                  }
-                                ]}
-                                onPress={() => handleOpenPayModal(supplier, "supplier", false)}
-                              >
-                                <MaterialIcons
-                                  name="add-circle-outline"
-                                  size={16}
-                                  color="#ffffff"
-                                />
-                                <Text style={[styles.payBtnText, { color: "#ffffff" }]}>
-                                  Pay Advance
-                                </Text>
-                              </Pressable>
-
-                              <Pressable
-                                style={[
-                                  styles.repayBtnFlex,
-                                  {
-                                    borderColor: "#10b981",
-                                    backgroundColor: "#10b98115",
-                                  }
-                                ]}
-                                onPress={() => handleOpenPayModal(supplier, "supplier", true)}
-                              >
-                                <MaterialIcons
-                                  name="remove-circle-outline"
-                                  size={16}
-                                  color="#10b981"
-                                />
-                                <Text style={[styles.repayBtnText, { color: "#10b981" }]}>
-                                  Repay Advance
-                                </Text>
-                              </Pressable>
-
-                              <Pressable
-                                style={[
-                                  styles.shareBtnFlex,
-                                  {
-                                    borderColor: `${colors.accent.warning}50`,
-                                    backgroundColor: `${colors.accent.warning}15`,
-                                  }
-                                ]}
-                                onPress={() => handleShareAccountStatement(supplier, "supplier")}
-                              >
-                                <MaterialIcons name="share" size={15} color={colors.accent.warning} />
-                              </Pressable>
-                            </View>
-                          ) : (
-                            <View style={styles.cardBtnRow}>
-                              <Pressable
-                                style={[
-                                  styles.payBtnFlex,
-                                  {
-                                    backgroundColor: colors.accent.warning,
-                                  }
-                                ]}
-                                onPress={() => handleOpenPayModal(supplier, "supplier", false)}
-                              >
-                                <MaterialIcons
-                                  name="payment"
-                                  size={16}
-                                  color="#1A1D27"
-                                />
-                                <Text style={[styles.payBtnText, { color: "#1A1D27" }]}>
-                                  Pay Balance
-                                </Text>
-                              </Pressable>
-
-                              <Pressable
-                                style={[
-                                  styles.shareBtnFlex,
-                                  {
-                                    borderColor: `${colors.accent.warning}50`,
-                                    backgroundColor: `${colors.accent.warning}15`,
-                                  }
-                                ]}
-                                onPress={() => handleShareAccountStatement(supplier, "supplier")}
-                              >
-                                <MaterialIcons name="share" size={15} color={colors.accent.warning} />
-                                <Text style={{ fontSize: 12, fontWeight: "700", color: colors.accent.warning }}>
-                                  Share
-                                </Text>
-                              </Pressable>
-                            </View>
-                          )}
-                        </Animated.View>
-                      );
-                    })}
-                  </View>
-                )}
-
-                {/* 3. Pending Worker Dues Section */}
-                {pendingWorkers.length > 0 && (
-                  <View style={[styles.listContainer, (pendingExpenses.length > 0 || pendingSuppliers.length > 0) && { marginTop: 20 }]}>
-                    <Text style={[styles.sectionTitle, { color: colors.accent.primary }]}>
-                      Worker Accounts & Balances ({pendingWorkers.length})
-                    </Text>
-                    {pendingWorkers.map((worker: any, index: number) => {
-                      const fin = workerFinancialsMap.get(worker.id);
-                      const pending = fin
-                        ? fin.pending
-                        : (worker.totalPending !== undefined
-                            ? Number(worker.totalPending)
-                            : (Number(worker.totalWages || 0) - Number(worker.totalPaid || 0)));
-                      const storedAdvance = Number(worker.advanceAmount || 0);
-                      const effectiveAdvance = fin ? fin.effectiveAdvance : (pending < 0 ? Math.abs(pending) : storedAdvance);
-                      const isAdvance = fin ? fin.isAdvance : (pending < 0 || (pending === 0 && storedAdvance > 0));
-                      const totalEarned = fin ? fin.totalEarned : Number(worker.totalWages || 0);
-                      const totalPaid = fin ? fin.totalPaid : Number(worker.totalPaid || 0);
-                      const roleIcons: Record<string, string> = {
-                        Labour: "construction",
-                        Operator: "engineering",
-                        Helper: "handyman",
-                        Driver: "local-shipping",
-                        Supervisor: "supervisor-account",
-                      };
-                      const roleIcon = roleIcons[worker.role] || "person";
-
-                      return (
-                        <Animated.View
-                          key={worker.id}
-                          entering={FadeInDown.delay(Math.min(index, 5) * 30).duration(200)}
-                          style={[styles.expenseCard, { borderColor: colors.border.accent, borderWidth: 1 }]}
-                        >
-                          <Pressable
-                            onPress={() => router.push({ pathname: "/settings/workers/details", params: { id: worker.id } } as any)}
-                            onLongPress={() => handleOpenCalcModal(worker, "worker")}
-                            delayLongPress={350}
-                          >
-                            <View style={styles.cardHeader}>
-                              <View style={[styles.categoryBadge, { backgroundColor: colors.accent.primaryMuted }]}>
-                                <MaterialIcons name={roleIcon as any} size={20} color={colors.accent.primary} />
-                              </View>
-                              <View style={styles.cardHeaderInfo}>
-                                <View style={{ flexDirection: "row", alignItems: "center", gap: 6 }}>
-                                  <Text style={styles.expenseTitle} numberOfLines={1}>
-                                    {worker.name}
-                                  </Text>
-                                  <View style={styles.longPressHintChip}>
-                                    <MaterialIcons name="calculate" size={11} color={colors.accent.primary} />
-                                    <Text style={[styles.longPressHintText, { color: colors.accent.primary }]}>Hold: Accounts</Text>
-                                  </View>
-                                </View>
-                                <Text style={styles.categoryLabel} numberOfLines={1}>
-                                  {worker.role || "Worker"} • {worker.billingSystem === "Piece-Rate" ? "Piece-Rate" : "Time-Based"}
-                                </Text>
-                              </View>
-                              <MaterialIcons name="chevron-right" size={20} color="#363B4D" />
-                            </View>
-
-                            <View style={styles.divider} />
-
-                            <View style={styles.cardDetailsRow}>
-                              <View style={styles.detailCol}>
-                                <Text style={styles.detailLabel}>Total Earned</Text>
-                                <Text style={styles.detailValue}>
-                                  ₹{totalEarned.toLocaleString("en-IN")}
-                                </Text>
-                              </View>
-                              <View style={styles.detailCol}>
-                                <Text style={styles.detailLabel}>Total Paid</Text>
-                                <Text style={[styles.detailValue, { color: "#00D68F" }]}>
-                                  ₹{totalPaid.toLocaleString("en-IN")}
-                                </Text>
-                              </View>
-                              <View style={styles.detailCol}>
-                                <Text style={styles.detailLabel}>{isAdvance ? "Advance Paid" : "Pending Due"}</Text>
-                                <Text style={[styles.detailValue, { color: isAdvance ? "#10b981" : "#8B5CF6" }]}>
-                                  ₹{(isAdvance ? effectiveAdvance : Math.abs(pending)).toLocaleString("en-IN")}
-                                </Text>
-                              </View>
-                            </View>
-                          </Pressable>
-
-                          {pending < 0 ? (
-                            <View style={styles.cardBtnRow}>
-                              <Pressable
-                                style={[
-                                  styles.payBtnFlex,
-                                  {
-                                    backgroundColor: colors.accent.danger,
-                                  }
-                                ]}
-                                onPress={() => handleOpenPayModal(worker, "worker", false)}
-                              >
-                                <MaterialIcons
-                                  name="add-circle-outline"
-                                  size={16}
-                                  color="#ffffff"
-                                />
-                                <Text style={[styles.payBtnText, { color: "#ffffff" }]}>
-                                  Pay Advance
-                                </Text>
-                              </Pressable>
-
-                              <Pressable
-                                style={[
-                                  styles.repayBtnFlex,
-                                  {
-                                    borderColor: "#10b981",
-                                    backgroundColor: "#10b98115",
-                                  }
-                                ]}
-                                onPress={() => handleOpenPayModal(worker, "worker", true)}
-                              >
-                                <MaterialIcons
-                                  name="remove-circle-outline"
-                                  size={16}
-                                  color="#10b981"
-                                />
-                                <Text style={[styles.repayBtnText, { color: "#10b981" }]}>
-                                  Repay Advance
-                                </Text>
-                              </Pressable>
-
-                              <Pressable
-                                style={[
-                                  styles.shareBtnFlex,
-                                  {
-                                    borderColor: `${colors.accent.primary}50`,
-                                    backgroundColor: `${colors.accent.primary}15`,
-                                  }
-                                ]}
-                                onPress={() => handleShareAccountStatement(worker, "worker")}
-                              >
-                                <MaterialIcons name="share" size={15} color={colors.accent.primary} />
-                              </Pressable>
-                            </View>
-                          ) : (
-                            <View style={styles.cardBtnRow}>
-                              <Pressable
-                                style={[
-                                  styles.payBtnFlex,
-                                  {
-                                    backgroundColor: colors.accent.primary,
-                                  }
-                                ]}
-                                onPress={() => handleOpenPayModal(worker, "worker", false)}
-                              >
-                                <MaterialIcons
-                                  name="payment"
-                                  size={16}
-                                  color="#1A1D27"
-                                />
-                                <Text style={[styles.payBtnText, { color: "#1A1D27" }]}>
-                                  Pay Balance
-                                </Text>
-                              </Pressable>
-
-                              <Pressable
-                                style={[
-                                  styles.shareBtnFlex,
-                                  {
-                                    borderColor: `${colors.accent.primary}50`,
-                                    backgroundColor: `${colors.accent.primary}15`,
-                                  }
-                                ]}
-                                onPress={() => handleShareAccountStatement(worker, "worker")}
-                              >
-                                <MaterialIcons name="share" size={15} color={colors.accent.primary} />
-                                <Text style={{ fontSize: 12, fontWeight: "700", color: colors.accent.primary }}>
-                                  Share
-                                </Text>
-                              </Pressable>
-                            </View>
-                          )}
-                        </Animated.View>
-                      );
-                    })}
-                  </View>
-                )}
-
-                {/* 4. Pending Delivery Partner Balances Section */}
-                {pendingDeliveries.length > 0 && (
-                  <View style={[styles.listContainer, (pendingExpenses.length > 0 || pendingSuppliers.length > 0 || pendingWorkers.length > 0) && { marginTop: 20 }]}>
-                    <Text style={[styles.sectionTitle, { color: colors.accent.info }]}>
-                      Delivery Partner Accounts ({pendingDeliveries.length})
-                    </Text>
-                    {pendingDeliveries.map((partner: any, index: number) => {
-                      const fin = deliveryFinancialsMap.get(partner.id);
-                      const pending = fin ? fin.pending : Number(partner.totalPending || 0);
-                      const totalPaid = fin ? fin.totalPaid : Number(partner.totalPaid || 0);
-                      const totalEarned = fin ? fin.totalEarned : Number(partner.totalPayable || 0);
-                      const productPurchasesDue = fin ? fin.productOrderDue : 0;
-
-                      return (
-                        <Animated.View
-                          key={partner.id}
-                          entering={FadeInDown.delay(Math.min(index, 5) * 30).duration(200)}
-                          style={[styles.expenseCard, { borderColor: `${colors.accent.info}40`, borderWidth: 1 }]}
-                        >
-                          <Pressable
-                            onPress={() => router.push({ pathname: "/settings/delivery-partners/details", params: { id: partner.id } } as any)}
-                            onLongPress={() => handleOpenCalcModal(partner, "delivery")}
-                            delayLongPress={350}
-                          >
-                            <View style={styles.cardHeader}>
-                              <View style={[styles.categoryBadge, { backgroundColor: `${colors.accent.info}18` }]}>
-                                <MaterialIcons name="local-shipping" size={20} color={colors.accent.info} />
-                              </View>
-                              <View style={styles.cardHeaderInfo}>
-                                <View style={{ flexDirection: "row", alignItems: "center", gap: 6 }}>
-                                  <Text style={styles.expenseTitle} numberOfLines={1}>
-                                    {partner.name}
-                                  </Text>
-                                  <View style={styles.longPressHintChip}>
-                                    <MaterialIcons name="calculate" size={11} color={colors.accent.info} />
-                                    <Text style={[styles.longPressHintText, { color: colors.accent.info }]}>Hold: Accounts</Text>
-                                  </View>
-                                </View>
-                                <Text style={styles.categoryLabel} numberOfLines={1}>
-                                  Vehicle: {partner.vehicleNo || partner.vehicleNumber || "N/A"} • Phone: {partner.phone || partner.mobile || "N/A"}
-                                </Text>
-                              </View>
-                              <MaterialIcons name="chevron-right" size={20} color="#363B4D" />
-                            </View>
-
-                            <View style={styles.divider} />
-
-                            <View style={styles.cardDetailsRow}>
-                              <View style={styles.detailCol}>
-                                <Text style={styles.detailLabel}>Total Owed</Text>
-                                <Text style={styles.detailValue}>
-                                  ₹{totalEarned.toLocaleString("en-IN")}
-                                </Text>
-                              </View>
-                              <View style={styles.detailCol}>
-                                <Text style={styles.detailLabel}>Total Paid</Text>
-                                <Text style={[styles.detailValue, { color: "#10b981" }]}>
-                                  ₹{totalPaid.toLocaleString("en-IN")}
-                                </Text>
-                              </View>
-                              <View style={styles.detailCol}>
-                                <Text style={styles.detailLabel}>{pending < 0 ? "Advance Paid" : "Pending Due"}</Text>
-                                <Text style={[styles.detailValue, { color: pending < 0 ? "#10b981" : colors.accent.info }]}>
-                                  ₹{Math.abs(pending).toLocaleString("en-IN")}
-                                </Text>
-                              </View>
-                            </View>
-                          </Pressable>
-
-                          {pending < 0 ? (
-                            <View style={styles.cardBtnRow}>
-                              <Pressable
-                                style={[
-                                  styles.payBtnFlex,
-                                  {
-                                    backgroundColor: colors.accent.danger,
-                                  }
-                                ]}
-                                onPress={() => handleOpenPayModal(partner, "delivery", false)}
-                              >
-                                <MaterialIcons
-                                  name="add-circle-outline"
-                                  size={16}
-                                  color="#ffffff"
-                                />
-                                <Text style={[styles.payBtnText, { color: "#ffffff" }]}>
-                                  Pay Advance
-                                </Text>
-                              </Pressable>
-
-                              <Pressable
-                                style={[
-                                  styles.repayBtnFlex,
-                                  {
-                                    borderColor: "#10b981",
-                                    backgroundColor: "#10b98115",
-                                  }
-                                ]}
-                                onPress={() => handleOpenPayModal(partner, "delivery", true)}
-                              >
-                                <MaterialIcons
-                                  name="remove-circle-outline"
-                                  size={16}
-                                  color="#10b981"
-                                />
-                                <Text style={[styles.repayBtnText, { color: "#10b981" }]}>
-                                  Repay Advance
-                                </Text>
-                              </Pressable>
-
-                              <Pressable
-                                style={[
-                                  styles.shareBtnFlex,
-                                  {
-                                    borderColor: `${colors.accent.info}50`,
-                                    backgroundColor: `${colors.accent.info}15`,
-                                  }
-                                ]}
-                                onPress={() => handleShareAccountStatement(partner, "delivery")}
-                              >
-                                <MaterialIcons name="share" size={15} color={colors.accent.info} />
-                              </Pressable>
-                            </View>
-                          ) : (
-                            <View style={styles.cardBtnRow}>
-                              <Pressable
-                                style={[
-                                  styles.payBtnFlex,
-                                  {
-                                    backgroundColor: colors.accent.info,
-                                  }
-                                ]}
-                                onPress={() => handleOpenPayModal(partner, "delivery", false)}
-                              >
-                                <MaterialIcons
-                                  name="payment"
-                                  size={16}
-                                  color="#1A1D27"
-                                />
-                                <Text style={[styles.payBtnText, { color: "#1A1D27" }]}>
-                                  Pay Balance
-                                </Text>
-                              </Pressable>
-
-                              <Pressable
-                                style={[
-                                  styles.shareBtnFlex,
-                                  {
-                                    borderColor: `${colors.accent.info}50`,
-                                    backgroundColor: `${colors.accent.info}15`,
-                                  }
-                                ]}
-                                onPress={() => handleShareAccountStatement(partner, "delivery")}
-                              >
-                                <MaterialIcons name="share" size={15} color={colors.accent.info} />
-                                <Text style={{ fontSize: 12, fontWeight: "700", color: colors.accent.info }}>
-                                  Share
-                                </Text>
-                              </Pressable>
-                            </View>
-                          )}
-                        </Animated.View>
-                      );
-                    })}
-                  </View>
-                )}
-              </View>
-            )}
-          </View>
-        ) : (
-          /* PAYMENT HISTORY TAB (Mirrored) */
-          <View>
-            {/* KPI Stats Grid Card */}
-            <Animated.View
-              entering={FadeInDown.duration(200)}
-              style={styles.receivedCard}
-            >
-              <View style={styles.receivedHeader}>
-                <View>
-                  <Text style={styles.receivedCardEmoji}>💸</Text>
-                  <Text style={styles.receivedCardTitle}>Due Balance Payments</Text>
-                </View>
-              </View>
-
-              <View style={styles.receivedDivider} />
-
-              <View style={styles.receivedStatsGrid}>
-                <View style={styles.receivedStatCol}>
-                  <Text style={styles.receivedStatLabel}>Total Paid Today</Text>
-                  <AnimatedCounter
-                    value={totalPaidToday}
-                    prefix="₹"
-                    style={styles.receivedStatValue}
-                  />
-                </View>
-                <View style={styles.receivedStatCol}>
-                  <Text style={styles.receivedStatLabel}>Total Paid This Month</Text>
-                  <AnimatedCounter
-                    value={totalPaidThisMonth}
-                    prefix="₹"
-                    style={styles.receivedStatValue}
-                  />
-                </View>
-              </View>
-            </Animated.View>
-
-            {/* Search Bar */}
-            <View style={styles.searchBarBox}>
-              <MaterialIcons name="search" size={20} color="#5A5F72" style={{ marginRight: 8 }} />
-              <TextInput
-                style={styles.searchInput}
-                placeholder="Search history by title, method or notes..."
-                value={searchQuery}
-                onChangeText={setSearchQuery}
-                placeholderTextColor="#5A5F72"
-              />
-              {searchQuery !== "" && (
-                <Pressable onPress={() => setSearchQuery("")}>
-                  <MaterialIcons name="close" size={20} color="#5A5F72" />
-                </Pressable>
-              )}
-            </View>
-
-            {/* Loading / List Content */}
-            {loading ? (
-              <View style={styles.loaderContainer}>
-                <ActivityIndicator size="large" color="#ef4444" />
-                <Text style={styles.loadingText}>Fetching payment history...</Text>
-              </View>
-            ) : filteredPayments.length === 0 ? (
-              <View style={styles.emptyState}>
-                <View style={styles.emptyCircle}>
-                  <MaterialIcons name="history" size={48} color="#363B4D" />
-                </View>
-                <Text style={styles.emptyHeading}>No Payments Found</Text>
-                <Text style={styles.emptyText}>
-                  No payments towards outstanding balances matched your search query.
-                </Text>
-              </View>
-            ) : (
-              <View style={styles.historyList}>
-                <Text style={styles.sectionTitle}>
-                  Due Payments List ({filteredPayments.length})
-                </Text>
-                {filteredPayments.map((payment: any, i: number) => {
-                  return (
-                    <View key={payment.id || i} style={styles.historyRow}>
-                      <View style={styles.historyLeft}>
-                        <View style={{
-                          width: 38,
-                          height: 38,
-                          borderRadius: 10,
-                          backgroundColor: `${payment.iconColor}18`,
-                          justifyContent: "center",
-                          alignItems: "center",
-                        }}>
-                          <MaterialIcons name={payment.icon as any} size={20} color={payment.iconColor} />
-                        </View>
-                        <View style={{ flex: 1, marginLeft: 10, marginRight: 8 }}>
-                          <Text style={styles.historyTitle} numberOfLines={1}>
-                            {payment.title}
-                          </Text>
-                          <Text style={styles.historyDetails} numberOfLines={1}>
-                            {payment.category} • {payment.paymentMethod}{payment.notes ? ` • ${payment.notes}` : ""}
-                          </Text>
-                        </View>
-                      </View>
-                      <View style={{ alignItems: "flex-end" }}>
-                        <Text style={[styles.historyAmt, { color: payment.amount < 0 ? "#ef4444" : "#10b981" }]}>
-                          {payment.amount < 0 ? "-" : ""}₹{Math.abs(Number(payment.amount)).toLocaleString("en-IN")}
-                        </Text>
-                        <Text style={styles.historyTime}>
-                          {getDayLabel(payment.paidAt)} {payment.paidAt.toLocaleTimeString([], { hour: "2-digit", minute: "2-digit" })}
-                        </Text>
-                        <Pressable
-                          style={styles.undoPaymentBtn}
-                          onPress={() => handleUndoPayment(payment)}
-                        >
-                          <MaterialIcons name="undo" size={12} color="#ef4444" />
-                          <Text style={styles.undoPaymentBtnText}>Undo</Text>
-                        </Pressable>
-                      </View>
-                    </View>
-                  );
-                })}
-              </View>
-            )}
-          </View>
-        )}
-      </ScrollView>
+      />
 
       {/* Pay Balance Modal */}
       <Modal
@@ -2771,10 +3108,10 @@ export default function ExpenseBalances() {
         transparent={true}
         onRequestClose={handleClosePayModal}
       >
-        <View style={styles.modalBackdrop}>
+        <KeyboardAvoidingView behavior={kavBehavior} style={styles.modalBackdrop}>
           <Pressable style={styles.modalFlexSpacer} onPress={handleClosePayModal} />
 
-          <View style={styles.modalContent}>
+          <View style={[styles.modalContent, { paddingBottom: Math.max(insets.bottom + 12, 20) }]}>
             {/* Modal Header */}
             <View style={styles.modalHeader}>
               <Text style={styles.modalTitle}>
@@ -3133,7 +3470,7 @@ export default function ExpenseBalances() {
               </ScrollView>
             )}
           </View>
-        </View>
+        </KeyboardAvoidingView>
       </Modal>
 
       {/* Pay Balance Calendar Modal */}
@@ -3155,12 +3492,12 @@ export default function ExpenseBalances() {
         transparent={true}
         onRequestClose={() => setIsAddExpenseModalOpen(false)}
       >
-        <View style={styles.modalBackdrop}>
+        <KeyboardAvoidingView behavior={kavBehavior} style={styles.modalBackdrop}>
           <Pressable
             style={styles.modalFlexSpacer}
             onPress={() => setIsAddExpenseModalOpen(false)}
           />
-          <View style={styles.modalContent}>
+          <View style={[styles.modalContent, { paddingBottom: Math.max(insets.bottom + 12, 20) }]}>
             <View style={styles.modalHeader}>
               <Text style={styles.modalTitle}>Log New Expense</Text>
               <Pressable
@@ -3330,7 +3667,7 @@ export default function ExpenseBalances() {
               </Pressable>
             </ScrollView>
           </View>
-        </View>
+        </KeyboardAvoidingView>
       </Modal>
 
       {/* Full Calculation Details & Account Ledger Modal (Press and Hold Triggered) */}
@@ -3340,10 +3677,10 @@ export default function ExpenseBalances() {
         transparent={true}
         onRequestClose={handleCloseCalcModal}
       >
-        <View style={styles.modalBackdrop}>
+        <KeyboardAvoidingView behavior={kavBehavior} style={styles.modalBackdrop}>
           <Pressable style={styles.modalFlexSpacer} onPress={handleCloseCalcModal} />
 
-          <View style={[styles.modalContent, { maxHeight: "88%", paddingBottom: 16 }]}>
+          <View style={[styles.modalContent, { maxHeight: "88%", paddingBottom: Math.max(insets.bottom + 12, 16) }]}>
             {/* Modal Header */}
             <View style={styles.modalHeader}>
               <View style={{ flexDirection: "row", alignItems: "center", gap: 10, flex: 1 }}>
@@ -3423,624 +3760,80 @@ export default function ExpenseBalances() {
               </View>
             </View>
 
-            {/* Scrollable Modal Body */}
-            <ScrollView showsVerticalScrollIndicator={false} contentContainerStyle={{ paddingBottom: 20 }}>
-              {/* Overall Balance Hero Status Box */}
-              <View
-                style={{
-                  backgroundColor: colors.bg.primary,
-                  borderRadius: 14,
-                  padding: 14,
-                  marginVertical: 10,
-                  borderWidth: 1.5,
-                  borderColor: calcAccountDetails?.isAdvance
-                    ? `${colors.accent.success}40`
-                    : `${colors.accent.danger}40`,
-                }}
-              >
-                <View style={{ flexDirection: "row", justifyContent: "space-between", alignItems: "center" }}>
-                  <View>
-                    <Text style={{ fontSize: 10, fontWeight: "700", color: colors.text.muted, textTransform: "uppercase", letterSpacing: 0.5 }}>
-                      Net Accounting Position
-                    </Text>
-                    <Text
-                      style={{
-                        fontSize: 22,
-                        fontWeight: "800",
-                        color: calcAccountDetails?.isAdvance ? colors.accent.success : colors.accent.danger,
-                        marginTop: 2,
-                      }}
-                    >
-                      {calcAccountDetails?.isAdvance
-                        ? `₹${Math.abs(calcAccountDetails.netBalance).toLocaleString("en-IN")} Advance Paid`
-                        : `₹${Math.abs(calcAccountDetails?.netBalance || 0).toLocaleString("en-IN")} Outstanding Due`}
-                    </Text>
-                  </View>
-                  <View
-                    style={{
-                      paddingHorizontal: 10,
-                      paddingVertical: 5,
-                      borderRadius: 20,
-                      backgroundColor: calcAccountDetails?.isAdvance
-                        ? `${colors.accent.success}18`
-                        : `${colors.accent.danger}18`,
-                    }}
-                  >
-                    <Text
-                      style={{
-                        fontSize: 11,
-                        fontWeight: "700",
-                        color: calcAccountDetails?.isAdvance ? colors.accent.success : colors.accent.danger,
-                      }}
-                    >
-                      {calcAccountDetails?.isAdvance ? "Dr (Advance Paid)" : "Cr (Outstanding Due)"}
-                    </Text>
-                  </View>
-                </View>
-
-                {/* Mathematical Equation Row */}
-                <View
-                  style={{
-                    flexDirection: "row",
-                    alignItems: "center",
-                    justifyContent: "space-between",
-                    marginTop: 12,
-                    paddingTop: 10,
-                    borderTopWidth: 1,
-                    borderTopColor: colors.border.subtle,
-                  }}
-                >
-                  <View style={{ flex: 1.1 }}>
-                    <Text style={{ fontSize: 9, color: colors.text.muted, fontWeight: "700", textTransform: "uppercase" }}>
-                      Total Credit (Cr)
-                    </Text>
-                    <Text style={{ fontSize: 13, fontWeight: "700", color: colors.accent.danger, marginTop: 2 }}>
-                      ₹{(calcAccountDetails?.totalCredit || 0).toLocaleString("en-IN")}
-                    </Text>
-                  </View>
-                  <Text style={{ fontSize: 15, fontWeight: "800", color: colors.text.muted, paddingHorizontal: 4 }}>-</Text>
-                  <View style={{ flex: 1 }}>
-                    <Text style={{ fontSize: 9, color: colors.text.muted, fontWeight: "700", textTransform: "uppercase" }}>
-                      Total Debit (Dr)
-                    </Text>
-                    <Text style={{ fontSize: 13, fontWeight: "700", color: colors.accent.success, marginTop: 2 }}>
-                      ₹{(calcAccountDetails?.totalDebit || 0).toLocaleString("en-IN")}
-                    </Text>
-                  </View>
-                  <Text style={{ fontSize: 15, fontWeight: "800", color: colors.text.muted, paddingHorizontal: 4 }}>=</Text>
-                  <View style={{ flex: 1.1, alignItems: "flex-end" }}>
-                    <Text style={{ fontSize: 9, color: colors.text.muted, fontWeight: "700", textTransform: "uppercase" }}>
-                      Closing Balance
-                    </Text>
-                    <Text
-                      style={{
-                        fontSize: 13,
-                        fontWeight: "800",
-                        color: calcAccountDetails?.isAdvance ? colors.accent.success : colors.accent.danger,
-                        marginTop: 2,
-                      }}
-                    >
-                      ₹{Math.abs(calcAccountDetails?.netBalance || 0).toLocaleString("en-IN")} {calcAccountDetails?.isAdvance ? "Dr" : "Cr"}
-                    </Text>
-                  </View>
-                </View>
-              </View>
-
-              {/* View Switcher: Account Ledger vs Formula Breakdown */}
-              <View style={{ flexDirection: "row", gap: 8, marginBottom: 12, marginTop: 2 }}>
-                <Pressable
-                  style={{
-                    flex: 1,
-                    paddingVertical: 9,
-                    borderRadius: 10,
-                    alignItems: "center",
-                    backgroundColor: calcViewTab === "ledger" ? colors.accent.primary : colors.bg.primary,
-                    borderWidth: 1,
-                    borderColor: calcViewTab === "ledger" ? colors.accent.primary : colors.border.subtle,
-                  }}
-                  onPress={() => setCalcViewTab("ledger")}
-                >
-                  <Text
-                    style={{
-                      fontSize: 12,
-                      fontWeight: "700",
-                      color: calcViewTab === "ledger" ? "#ffffff" : colors.text.secondary,
-                    }}
-                  >
-                    Accounting Ledger ({displayedLedger.length})
-                  </Text>
-                </Pressable>
-
-                <Pressable
-                  style={{
-                    flex: 1,
-                    paddingVertical: 9,
-                    borderRadius: 10,
-                    alignItems: "center",
-                    backgroundColor: calcViewTab === "breakdown" ? colors.accent.primary : colors.bg.primary,
-                    borderWidth: 1,
-                    borderColor: calcViewTab === "breakdown" ? colors.accent.primary : colors.border.subtle,
-                  }}
-                  onPress={() => setCalcViewTab("breakdown")}
-                >
-                  <Text
-                    style={{
-                      fontSize: 12,
-                      fontWeight: "700",
-                      color: calcViewTab === "breakdown" ? "#ffffff" : colors.text.secondary,
-                    }}
-                  >
-                    Formula Breakdown
-                  </Text>
-                </Pressable>
-              </View>
-
-              {/* TAB 1: STATEMENT LEDGER (Accounting Debit, Credit & Running Balance Table) */}
-              {calcViewTab === "ledger" && (
-                <View>
-                  {/* Ledger Sub-Header Controls */}
-                  <View
-                    style={{
-                      flexDirection: "row",
-                      justifyContent: "space-between",
-                      alignItems: "center",
-                      marginBottom: 8,
-                    }}
-                  >
-                    <View style={{ flexDirection: "row", alignItems: "center", gap: 6 }}>
-                      <View
-                        style={{
-                          paddingHorizontal: 6,
-                          paddingVertical: 2,
-                          borderRadius: 6,
-                          backgroundColor: `${colors.accent.danger}15`,
-                        }}
-                      >
-                        <Text style={{ fontSize: 9, fontWeight: "700", color: colors.accent.danger }}>
-                          Cr = Payable
-                        </Text>
-                      </View>
-                      <View
-                        style={{
-                          paddingHorizontal: 6,
-                          paddingVertical: 2,
-                          borderRadius: 6,
-                          backgroundColor: `${colors.accent.success}15`,
-                        }}
-                      >
-                        <Text style={{ fontSize: 9, fontWeight: "700", color: colors.accent.success }}>
-                          Dr = Paid
-                        </Text>
-                      </View>
+            {/* Calc Modal Body (Ledger uses FlatList outside vertical ScrollView) */}
+            {calcViewTab === "ledger" ? (
+              <View style={styles.calcLedgerTabWrapper}>
+                {calcHeroAndSwitcher}
+                <View style={styles.calcSubHeaderRow}>
+                  <View style={styles.calcSubBadgesRow}>
+                    <View style={styles.calcSubBadgeCr}>
+                      <Text style={styles.calcSubBadgeCrText}>Cr = Payable</Text>
                     </View>
-
-                    {/* Sort Order Toggle */}
-                    <Pressable
-                      style={{
-                        flexDirection: "row",
-                        alignItems: "center",
-                        gap: 4,
-                        backgroundColor: colors.bg.primary,
-                        paddingVertical: 5,
-                        paddingHorizontal: 8,
-                        borderRadius: 8,
-                        borderWidth: 1,
-                        borderColor: colors.border.subtle,
-                      }}
-                      onPress={() => setLedgerSortOrder((prev) => (prev === "desc" ? "asc" : "desc"))}
-                    >
-                      <MaterialIcons
-                        name={ledgerSortOrder === "desc" ? "arrow-downward" : "arrow-upward"}
-                        size={13}
-                        color={colors.accent.primary}
-                      />
-                      <Text style={{ fontSize: 10, fontWeight: "700", color: colors.text.secondary }}>
-                        {ledgerSortOrder === "desc" ? "Newest First" : "Oldest First"}
-                      </Text>
-                    </Pressable>
+                    <View style={styles.calcSubBadgeDr}>
+                      <Text style={styles.calcSubBadgeDrText}>Dr = Paid</Text>
+                    </View>
                   </View>
-
-                  {/* Horizontal Scrollable Accounting Table */}
-                  <ScrollView
-                    horizontal
-                    showsHorizontalScrollIndicator={true}
+                  <Pressable
+                    style={styles.calcSortBtn}
+                    onPress={() => setLedgerSortOrder((prev) => (prev === "desc" ? "asc" : "desc"))}
+                  >
+                    <MaterialIcons
+                      name={ledgerSortOrder === "desc" ? "arrow-downward" : "arrow-upward"}
+                      size={13}
+                      color={colors.accent.primary}
+                    />
+                    <Text style={styles.calcSortBtnText}>
+                      {ledgerSortOrder === "desc" ? "Newest First" : "Oldest First"}
+                    </Text>
+                  </Pressable>
+                </View>
+                <ScrollView
+                  horizontal
+                  showsHorizontalScrollIndicator={true}
+                  nestedScrollEnabled={true}
+                  style={styles.ledgerHorizontalWrap}
+                  contentContainerStyle={styles.ledgerTableMinWidth}
+                >
+                  <FlatList
+                    data={displayedLedger}
+                    keyExtractor={ledgerKeyExtractor}
+                    renderItem={renderLedgerRow}
+                    ListHeaderComponent={ledgerTableHeader}
+                    ListEmptyComponent={ledgerTableEmpty}
+                    ListFooterComponent={ledgerTableFooter}
                     nestedScrollEnabled={true}
-                    contentContainerStyle={{ minWidth: 540, flexDirection: "column" }}
-                  >
-                    {/* Table Header Row */}
-                    <View
-                      style={{
-                        flexDirection: "row",
-                        backgroundColor: colors.bg.card,
-                        paddingVertical: 9,
-                        paddingHorizontal: 10,
-                        borderRadius: 8,
-                        borderWidth: 1,
-                        borderColor: colors.border.subtle,
-                        marginBottom: 6,
-                      }}
-                    >
-                      <Text style={{ width: 175, fontSize: 10, fontWeight: "800", color: colors.text.muted, textTransform: "uppercase", letterSpacing: 0.5 }}>
-                        Date & Particulars
-                      </Text>
-                      <Text style={{ width: 110, fontSize: 10, fontWeight: "800", color: colors.accent.success, textAlign: "right", textTransform: "uppercase", letterSpacing: 0.5 }}>
-                        Debit (Dr)
-                      </Text>
-                      <Text style={{ width: 110, fontSize: 10, fontWeight: "800", color: colors.accent.danger, textAlign: "right", textTransform: "uppercase", letterSpacing: 0.5 }}>
-                        Credit (Cr)
-                      </Text>
-                      <Text style={{ width: 125, fontSize: 10, fontWeight: "800", color: colors.text.primary, textAlign: "right", textTransform: "uppercase", letterSpacing: 0.5 }}>
-                        Balance
-                      </Text>
-                    </View>
-
-                    {/* Data Rows */}
-                    {displayedLedger.length === 0 ? (
-                      <View style={{ padding: 28, alignItems: "center", justifyContent: "center" }}>
-                        <MaterialIcons name="receipt-long" size={38} color={colors.text.muted} />
-                        <Text style={{ fontSize: 12, color: colors.text.muted, marginTop: 8 }}>
-                          No ledger entries logged yet for this account.
-                        </Text>
-                      </View>
-                    ) : (
-                      displayedLedger.map((entry: any, idx: number) => {
-                        const entryDate = entry.date instanceof Date ? entry.date : new Date(entry.date);
-                        const isPayment = entry.type === "payment";
-                        const isCr = (entry.credit || 0) > 0;
-                        const isDr = (entry.debit || 0) > 0;
-                        const balVal = Number(entry.runningBalance || 0);
-                        const balType = balVal > 0 ? "Cr (Due)" : balVal < 0 ? "Dr (Adv)" : "Nil";
-
-                        return (
-                          <View
-                            key={entry.id || idx}
-                            style={{
-                              flexDirection: "row",
-                              alignItems: "center",
-                              backgroundColor: idx % 2 === 0 ? colors.bg.primary : `${colors.bg.card}60`,
-                              paddingVertical: 9,
-                              paddingHorizontal: 10,
-                              borderBottomWidth: 1,
-                              borderBottomColor: colors.border.subtle,
-                              borderRadius: 6,
-                            }}
-                          >
-                            {/* Date & Particulars */}
-                            <View style={{ width: 175, paddingRight: 8 }}>
-                              <View style={{ flexDirection: "row", alignItems: "center", gap: 5 }}>
-                                <View
-                                  style={{
-                                    paddingHorizontal: 5,
-                                    paddingVertical: 1,
-                                    borderRadius: 4,
-                                    backgroundColor: isPayment ? `${colors.accent.success}18` : `${colors.accent.primary}18`,
-                                  }}
-                                >
-                                  <Text
-                                    style={{
-                                      fontSize: 8,
-                                      fontWeight: "800",
-                                      textTransform: "uppercase",
-                                      color: isPayment ? colors.accent.success : colors.accent.primary,
-                                    }}
-                                  >
-                                    {entry.type}
-                                  </Text>
-                                </View>
-                                <Text style={{ fontSize: 10, color: colors.text.muted, fontWeight: "600" }}>
-                                  {entryDate.toLocaleDateString("en-IN", {
-                                    day: "2-digit",
-                                    month: "short",
-                                    year: "numeric",
-                                  })}
-                                </Text>
-                              </View>
-
-                              <Text
-                                style={{
-                                  fontSize: 12,
-                                  fontWeight: "700",
-                                  color: colors.text.primary,
-                                  marginTop: 3,
-                                }}
-                                numberOfLines={1}
-                              >
-                                {entry.title}
-                              </Text>
-
-                              {entry.subtitle ? (
-                                <Text
-                                  style={{
-                                    fontSize: 10,
-                                    color: colors.text.secondary,
-                                    marginTop: 1,
-                                    lineHeight: 14,
-                                  }}
-                                  numberOfLines={2}
-                                >
-                                  {entry.subtitle}
-                                </Text>
-                              ) : null}
-                            </View>
-
-                            {/* Debit (Dr) Column - Payments Disbursed */}
-                            <View style={{ width: 110, alignItems: "flex-end", paddingRight: 6 }}>
-                              {isDr ? (
-                                <View style={{ alignItems: "flex-end" }}>
-                                  <Text style={{ fontSize: 13, fontWeight: "800", color: colors.accent.success }}>
-                                    ₹{Number(entry.debit).toLocaleString("en-IN")}
-                                  </Text>
-                                  <Text style={{ fontSize: 8, fontWeight: "700", color: colors.accent.success }}>
-                                    Dr (Paid)
-                                  </Text>
-                                </View>
-                              ) : (
-                                <Text style={{ fontSize: 13, color: colors.text.muted, fontWeight: "600" }}>—</Text>
-                              )}
-                            </View>
-
-                            {/* Credit (Cr) Column - Purchases / Wages / Owed */}
-                            <View style={{ width: 110, alignItems: "flex-end", paddingRight: 6 }}>
-                              {isCr ? (
-                                <View style={{ alignItems: "flex-end" }}>
-                                  <Text style={{ fontSize: 13, fontWeight: "800", color: colors.accent.danger }}>
-                                    ₹{Number(entry.credit).toLocaleString("en-IN")}
-                                  </Text>
-                                  <Text style={{ fontSize: 8, fontWeight: "700", color: colors.accent.danger }}>
-                                    Cr (Owed)
-                                  </Text>
-                                </View>
-                              ) : (
-                                <Text style={{ fontSize: 13, color: colors.text.muted, fontWeight: "600" }}>—</Text>
-                              )}
-                            </View>
-
-                            {/* Balance Column - Cumulative Running Balance */}
-                            <View style={{ width: 125, alignItems: "flex-end" }}>
-                              <Text
-                                style={{
-                                  fontSize: 13,
-                                  fontWeight: "800",
-                                  color: balVal < 0 ? colors.accent.success : balVal > 0 ? colors.accent.danger : colors.text.muted,
-                                }}
-                              >
-                                ₹{Math.abs(balVal).toLocaleString("en-IN")}
-                              </Text>
-                              <View
-                                style={{
-                                  marginTop: 2,
-                                  paddingHorizontal: 5,
-                                  paddingVertical: 1,
-                                  borderRadius: 4,
-                                  backgroundColor:
-                                    balVal < 0
-                                      ? `${colors.accent.success}18`
-                                      : balVal > 0
-                                      ? `${colors.accent.danger}18`
-                                      : `${colors.border.subtle}40`,
-                                }}
-                              >
-                                <Text
-                                  style={{
-                                    fontSize: 9,
-                                    fontWeight: "800",
-                                    color:
-                                      balVal < 0
-                                        ? colors.accent.success
-                                        : balVal > 0
-                                        ? colors.accent.danger
-                                        : colors.text.muted,
-                                  }}
-                                >
-                                  {balType}
-                                </Text>
-                              </View>
-                            </View>
-                          </View>
-                        );
-                      })
-                    )}
-
-                    {/* Table Summary Footer Row (Totals) */}
-                    {displayedLedger.length > 0 && (
-                      <View
-                        style={{
-                          flexDirection: "row",
-                          alignItems: "center",
-                          backgroundColor: colors.bg.card,
-                          paddingVertical: 10,
-                          paddingHorizontal: 10,
-                          borderRadius: 8,
-                          borderTopWidth: 2,
-                          borderTopColor: colors.border.medium,
-                          marginTop: 6,
-                        }}
-                      >
-                        <View style={{ width: 175 }}>
-                          <Text style={{ fontSize: 11, fontWeight: "800", color: colors.text.primary, textTransform: "uppercase" }}>
-                            Total / Closing
-                          </Text>
-                          <Text style={{ fontSize: 9, color: colors.text.muted, fontWeight: "600" }}>
-                            Account Totals
-                          </Text>
-                        </View>
-
-                        {/* Total Debit */}
-                        <View style={{ width: 110, alignItems: "flex-end", paddingRight: 6 }}>
-                          <Text style={{ fontSize: 13, fontWeight: "800", color: colors.accent.success }}>
-                            ₹{Number(calcAccountDetails?.totalDebit || 0).toLocaleString("en-IN")}
-                          </Text>
-                          <Text style={{ fontSize: 8, fontWeight: "700", color: colors.accent.success }}>
-                            Total Dr
-                          </Text>
-                        </View>
-
-                        {/* Total Credit */}
-                        <View style={{ width: 110, alignItems: "flex-end", paddingRight: 6 }}>
-                          <Text style={{ fontSize: 13, fontWeight: "800", color: colors.accent.danger }}>
-                            ₹{Number(calcAccountDetails?.totalCredit || 0).toLocaleString("en-IN")}
-                          </Text>
-                          <Text style={{ fontSize: 8, fontWeight: "700", color: colors.accent.danger }}>
-                            Total Cr
-                          </Text>
-                        </View>
-
-                        {/* Net Closing Balance */}
-                        <View style={{ width: 125, alignItems: "flex-end" }}>
-                          <Text
-                            style={{
-                              fontSize: 13,
-                              fontWeight: "800",
-                              color: calcAccountDetails?.isAdvance ? colors.accent.success : colors.accent.danger,
-                            }}
-                          >
-                            ₹{Math.abs(calcAccountDetails?.netBalance || 0).toLocaleString("en-IN")}
-                          </Text>
-                          <Text
-                            style={{
-                              fontSize: 9,
-                              fontWeight: "800",
-                              color: calcAccountDetails?.isAdvance ? colors.accent.success : colors.accent.danger,
-                            }}
-                          >
-                            {calcAccountDetails?.isAdvance ? "Dr (Advance Paid)" : "Cr (Outstanding Due)"}
-                          </Text>
-                        </View>
-                      </View>
-                    )}
-                  </ScrollView>
-                </View>
-              )}
-
-              {/* TAB 2: STEP-BY-STEP FORMULA BREAKDOWN */}
-              {calcViewTab === "breakdown" && (
-                <View style={{ gap: 8 }}>
+                    showsVerticalScrollIndicator={true}
+                    style={styles.ledgerFlatList}
+                    initialNumToRender={12}
+                    maxToRenderPerBatch={12}
+                    windowSize={7}
+                  />
+                </ScrollView>
+                {calcModalActionsFooter}
+              </View>
+            ) : (
+              <ScrollView showsVerticalScrollIndicator={false} contentContainerStyle={styles.calcScrollContent}>
+                {calcHeroAndSwitcher}
+                <View style={styles.calcBreakdownList}>
                   {calcAccountDetails?.breakdownStats?.map((stat: any, idx: number) => (
-                    <View
-                      key={idx}
-                      style={{
-                        backgroundColor: colors.bg.primary,
-                        borderRadius: 12,
-                        padding: 12,
-                        borderWidth: 1,
-                        borderColor: colors.border.subtle,
-                        flexDirection: "row",
-                        alignItems: "center",
-                        justifyContent: "space-between",
-                      }}
-                    >
-                      <View style={{ flexDirection: "row", alignItems: "center", gap: 10 }}>
-                        <View
-                          style={{
-                            width: 36,
-                            height: 36,
-                            borderRadius: 10,
-                            backgroundColor: `${stat.color}18`,
-                            justifyContent: "center",
-                            alignItems: "center",
-                          }}
-                        >
+                    <View key={idx} style={styles.calcBreakdownRow}>
+                      <View style={styles.calcBreakdownLeft}>
+                        <View style={[styles.calcBreakdownIconBox, { backgroundColor: `${stat.color}18` }]}>
                           <MaterialIcons name={stat.icon as any} size={18} color={stat.color} />
                         </View>
-                        <Text style={{ fontSize: 13, fontWeight: "600", color: colors.text.primary }}>
-                          {stat.label}
-                        </Text>
+                        <Text style={styles.calcBreakdownLabel}>{stat.label}</Text>
                       </View>
-                      <Text style={{ fontSize: 14, fontWeight: "800", color: stat.color }}>
+                      <Text style={[styles.calcBreakdownValue, { color: stat.color }]}>
                         ₹{Number(stat.value || 0).toLocaleString("en-IN")}
                       </Text>
                     </View>
                   ))}
                 </View>
-              )}
-
-              {/* Modal Actions Footer */}
-              <View style={{ marginTop: 14, gap: 8 }}>
-                <Pressable
-                  style={{
-                    backgroundColor: `${colors.accent.primary}18`,
-                    borderRadius: 12,
-                    height: 46,
-                    borderWidth: 1.5,
-                    borderColor: colors.accent.primary,
-                    flexDirection: "row",
-                    alignItems: "center",
-                    justifyContent: "center",
-                    gap: 8,
-                  }}
-                  onPress={() => {
-                    if (calcTarget && calcTargetType) {
-                      handleShareAccountStatement(calcTarget, calcTargetType);
-                    }
-                  }}
-                >
-                  <MaterialIcons name="share" size={18} color={colors.accent.primary} />
-                  <Text style={{ fontSize: 13, fontWeight: "700", color: colors.accent.primary }}>
-                    Share Account Statement (அறிக்கை பகிர்)
-                  </Text>
-                </Pressable>
-
-                <Pressable
-                  style={{
-                    backgroundColor: colors.accent.primary,
-                    borderRadius: 12,
-                    height: 46,
-                    flexDirection: "row",
-                    alignItems: "center",
-                    justifyContent: "center",
-                    gap: 6,
-                  }}
-                  onPress={() => {
-                    const tgt = calcTarget;
-                    const type = calcTargetType;
-                    handleCloseCalcModal();
-                    if (tgt && type) {
-                      setTimeout(() => {
-                        handleOpenPayModal(tgt, type as any, false);
-                      }, 200);
-                    }
-                  }}
-                >
-                  <MaterialIcons name="payment" size={18} color="#1A1D27" />
-                  <Text style={{ fontSize: 14, fontWeight: "700", color: "#1A1D27" }}>
-                    Record / Settle Payment
-                  </Text>
-                </Pressable>
-
-                <Pressable
-                  style={{
-                    backgroundColor: colors.bg.primary,
-                    borderRadius: 12,
-                    height: 44,
-                    borderWidth: 1,
-                    borderColor: colors.border.medium,
-                    flexDirection: "row",
-                    alignItems: "center",
-                    justifyContent: "center",
-                    gap: 6,
-                  }}
-                  onPress={() => {
-                    const tgt = calcTarget;
-                    const type = calcTargetType;
-                    handleCloseCalcModal();
-                    if (type === "supplier") {
-                      router.push({ pathname: "/settings/raw-materials/suppliers/details", params: { id: tgt.id } } as any);
-                    } else if (type === "worker") {
-                      router.push({ pathname: "/settings/workers/details", params: { id: tgt.id } } as any);
-                    } else if (type === "delivery") {
-                      router.push({ pathname: "/settings/delivery-partners/details", params: { id: tgt.id } } as any);
-                    }
-                  }}
-                >
-                  <MaterialIcons name="person" size={18} color={colors.text.primary} />
-                  <Text style={{ fontSize: 13, fontWeight: "700", color: colors.text.primary }}>
-                    Open Full Profile & History Page
-                  </Text>
-                </Pressable>
-              </View>
-            </ScrollView>
+                {calcModalActionsFooter}
+              </ScrollView>
+            )}
           </View>
-        </View>
+        </KeyboardAvoidingView>
       </Modal>
 
       {selectedShareAccountData && (
@@ -4101,11 +3894,14 @@ const getStyles = (theme: any) => {
     },
     breakdownRow: {
       flexDirection: "row",
+      flexWrap: "wrap",
+      rowGap: 8,
       alignItems: "center",
       justifyContent: "space-between",
     },
     breakdownCol: {
       flex: 1,
+      minWidth: 70,
       alignItems: "center",
     },
     breakdownLabel: {
@@ -4434,6 +4230,7 @@ const getStyles = (theme: any) => {
   },
   receivedStatsGrid: {
     flexDirection: "row",
+    flexWrap: "wrap",
     justifyContent: "space-between",
     gap: 12,
   },
@@ -4514,11 +4311,14 @@ const getStyles = (theme: any) => {
     flex: 1,
   },
   modalContent: {
+    width: "100%",
+    maxWidth: 560,
+    alignSelf: "center",
     backgroundColor: colors.bg.card,
     borderTopLeftRadius: 24,
     borderTopRightRadius: 24,
     minHeight: "75%",
-    maxHeight: "90%",
+    maxHeight: "88%",
     padding: 20,
     shadowColor: "#000",
     shadowOffset: { width: 0, height: -10 },
@@ -4662,6 +4462,8 @@ const getStyles = (theme: any) => {
   },
   methodChip: {
     width: "48%",
+    flexGrow: 1,
+    minWidth: 130,
     flexDirection: "row",
     alignItems: "center",
     borderWidth: 1.5,
@@ -4743,6 +4545,541 @@ const getStyles = (theme: any) => {
     fontSize: 9,
     fontWeight: "700",
     letterSpacing: 0.2,
+  },
+  sectionHeaderSpacing: {
+    marginTop: 20,
+  },
+  pressedCardFade: {
+    opacity: 0.85,
+  },
+  cardDateChevronRow: {
+    flexDirection: "row",
+    alignItems: "center",
+    gap: 4,
+  },
+  cardTitleChipRow: {
+    flexDirection: "row",
+    alignItems: "center",
+    gap: 6,
+  },
+  repayBtnSurface: {
+    borderColor: "#10b981",
+    backgroundColor: "#10b98115",
+  },
+  shareBtnLabel: {
+    fontSize: 12,
+    fontWeight: "700",
+  },
+  expenseExpandedBox: {
+    marginTop: 4,
+    padding: 12,
+    backgroundColor: colors.bg.primary,
+    borderRadius: 10,
+    borderWidth: 1,
+    borderColor: colors.border.subtle,
+    marginBottom: 12,
+  },
+  expenseExpandedLabel: {
+    fontSize: 11,
+    fontWeight: "600",
+    color: colors.text.secondary,
+    marginBottom: 4,
+    textTransform: "uppercase",
+    letterSpacing: 0.5,
+  },
+  expenseExpandedDesc: {
+    fontSize: 13,
+    color: colors.text.primary,
+    lineHeight: 18,
+    marginBottom: 10,
+  },
+  expenseExpandedNoDesc: {
+    fontSize: 13,
+    color: colors.text.muted,
+    fontStyle: "italic",
+    marginBottom: 10,
+  },
+  expenseMetaRow: {
+    flexDirection: "row",
+    justifyContent: "space-between",
+    gap: 16,
+  },
+  expenseMetaCol: {
+    flex: 1,
+  },
+  expenseMetaLabel: {
+    fontSize: 10,
+    color: colors.text.muted,
+    textTransform: "uppercase",
+    fontWeight: "600",
+  },
+  expenseMetaValue: {
+    fontSize: 13,
+    color: colors.text.primary,
+    fontWeight: "600",
+    marginTop: 2,
+  },
+  expenseInvoiceWrap: {
+    marginTop: 12,
+    borderTopWidth: 1,
+    borderTopColor: colors.border.subtle,
+    paddingTop: 12,
+  },
+  expenseInvoiceLabel: {
+    fontSize: 10,
+    color: colors.text.muted,
+    textTransform: "uppercase",
+    fontWeight: "600",
+    marginBottom: 6,
+  },
+  expenseInvoiceImg: {
+    width: "100%",
+    height: 160,
+    borderRadius: 8,
+    backgroundColor: colors.bg.elevated,
+  },
+  historyIconBox: {
+    width: 38,
+    height: 38,
+    borderRadius: 10,
+    justifyContent: "center",
+    alignItems: "center",
+  },
+  historyInfoCol: {
+    flex: 1,
+    marginLeft: 10,
+    marginRight: 8,
+  },
+  historyRightCol: {
+    alignItems: "flex-end",
+  },
+  alignEnd: {
+    alignItems: "flex-end",
+  },
+  ledgerHorizontalWrap: {
+    flexShrink: 1,
+  },
+  ledgerTableMinWidth: {
+    minWidth: 540,
+    flexDirection: "column",
+  },
+  ledgerFlatList: {
+    maxHeight: 300,
+    flexGrow: 0,
+  },
+  ledgerHeaderRow: {
+    flexDirection: "row",
+    backgroundColor: colors.bg.card,
+    paddingVertical: 9,
+    paddingHorizontal: 10,
+    borderRadius: 8,
+    borderWidth: 1,
+    borderColor: colors.border.subtle,
+    marginBottom: 6,
+  },
+  ledgerHeaderDateCol: {
+    width: 175,
+    fontSize: 10,
+    fontWeight: "800",
+    color: colors.text.muted,
+    textTransform: "uppercase",
+    letterSpacing: 0.5,
+  },
+  ledgerHeaderDrCol: {
+    width: 110,
+    fontSize: 10,
+    fontWeight: "800",
+    textAlign: "right",
+    textTransform: "uppercase",
+    letterSpacing: 0.5,
+  },
+  ledgerHeaderCrCol: {
+    width: 110,
+    fontSize: 10,
+    fontWeight: "800",
+    textAlign: "right",
+    textTransform: "uppercase",
+    letterSpacing: 0.5,
+  },
+  ledgerHeaderBalCol: {
+    width: 125,
+    fontSize: 10,
+    fontWeight: "800",
+    textAlign: "right",
+    textTransform: "uppercase",
+    letterSpacing: 0.5,
+  },
+  ledgerDataRow: {
+    flexDirection: "row",
+    alignItems: "center",
+    paddingVertical: 9,
+    paddingHorizontal: 10,
+    borderBottomWidth: 1,
+    borderBottomColor: colors.border.subtle,
+    borderRadius: 6,
+  },
+  ledgerDateCol: {
+    width: 175,
+    paddingRight: 8,
+  },
+  ledgerTypeRow: {
+    flexDirection: "row",
+    alignItems: "center",
+    gap: 5,
+  },
+  ledgerTypeBadge: {
+    paddingHorizontal: 5,
+    paddingVertical: 1,
+    borderRadius: 4,
+  },
+  ledgerTypeBadgeText: {
+    fontSize: 8,
+    fontWeight: "800",
+    textTransform: "uppercase",
+  },
+  ledgerDateText: {
+    fontSize: 10,
+    color: colors.text.muted,
+    fontWeight: "600",
+  },
+  ledgerTitleText: {
+    fontSize: 12,
+    fontWeight: "700",
+    color: colors.text.primary,
+    marginTop: 3,
+  },
+  ledgerSubtitleText: {
+    fontSize: 10,
+    color: colors.text.secondary,
+    marginTop: 1,
+    lineHeight: 14,
+  },
+  ledgerAmountCol: {
+    width: 110,
+    alignItems: "flex-end",
+    paddingRight: 6,
+  },
+  ledgerDrValue: {
+    fontSize: 13,
+    fontWeight: "800",
+    color: colors.accent.success,
+  },
+  ledgerDrSub: {
+    fontSize: 8,
+    fontWeight: "700",
+    color: colors.accent.success,
+  },
+  ledgerCrValue: {
+    fontSize: 13,
+    fontWeight: "800",
+    color: colors.accent.danger,
+  },
+  ledgerCrSub: {
+    fontSize: 8,
+    fontWeight: "700",
+    color: colors.accent.danger,
+  },
+  ledgerDashText: {
+    fontSize: 13,
+    color: colors.text.muted,
+    fontWeight: "600",
+  },
+  ledgerBalCol: {
+    width: 125,
+    alignItems: "flex-end",
+  },
+  ledgerBalValue: {
+    fontSize: 13,
+    fontWeight: "800",
+  },
+  ledgerBalBadge: {
+    marginTop: 2,
+    paddingHorizontal: 5,
+    paddingVertical: 1,
+    borderRadius: 4,
+  },
+  ledgerBalBadgeText: {
+    fontSize: 9,
+    fontWeight: "800",
+  },
+  ledgerEmptyWrap: {
+    padding: 28,
+    alignItems: "center",
+    justifyContent: "center",
+  },
+  ledgerEmptyText: {
+    fontSize: 12,
+    color: colors.text.muted,
+    marginTop: 8,
+  },
+  ledgerFooterRow: {
+    flexDirection: "row",
+    alignItems: "center",
+    backgroundColor: colors.bg.card,
+    paddingVertical: 10,
+    paddingHorizontal: 10,
+    borderRadius: 8,
+    borderTopWidth: 2,
+    borderTopColor: colors.border.medium,
+    marginTop: 6,
+  },
+  ledgerFooterTitleCol: {
+    width: 175,
+  },
+  ledgerFooterTitle: {
+    fontSize: 11,
+    fontWeight: "800",
+    color: colors.text.primary,
+    textTransform: "uppercase",
+  },
+  ledgerFooterSub: {
+    fontSize: 9,
+    color: colors.text.muted,
+    fontWeight: "600",
+  },
+  calcLedgerTabWrapper: {
+    flexShrink: 1,
+  },
+  calcScrollContent: {
+    paddingBottom: 20,
+  },
+  calcHeroWrapper: {
+    flexShrink: 0,
+  },
+  calcHeroCard: {
+    backgroundColor: colors.bg.primary,
+    borderRadius: 14,
+    padding: 14,
+    marginVertical: 10,
+    borderWidth: 1.5,
+  },
+  calcHeroTopRow: {
+    flexDirection: "row",
+    justifyContent: "space-between",
+    alignItems: "center",
+  },
+  calcHeroLabel: {
+    fontSize: 10,
+    fontWeight: "700",
+    color: colors.text.muted,
+    textTransform: "uppercase",
+    letterSpacing: 0.5,
+  },
+  calcHeroValue: {
+    fontSize: 22,
+    fontWeight: "800",
+    marginTop: 2,
+  },
+  calcStatusChip: {
+    paddingHorizontal: 10,
+    paddingVertical: 5,
+    borderRadius: 20,
+  },
+  calcStatusChipText: {
+    fontSize: 11,
+    fontWeight: "700",
+  },
+  calcEquationRow: {
+    flexDirection: "row",
+    alignItems: "center",
+    justifyContent: "space-between",
+    marginTop: 12,
+    paddingTop: 10,
+    borderTopWidth: 1,
+    borderTopColor: colors.border.subtle,
+  },
+  calcEquationColWide: {
+    flex: 1.1,
+  },
+  calcEquationCol: {
+    flex: 1,
+  },
+  calcEquationColRight: {
+    flex: 1.1,
+    alignItems: "flex-end",
+  },
+  calcEquationLabel: {
+    fontSize: 9,
+    color: colors.text.muted,
+    fontWeight: "700",
+    textTransform: "uppercase",
+  },
+  calcEquationVal: {
+    fontSize: 13,
+    fontWeight: "700",
+    marginTop: 2,
+  },
+  calcEquationClosingVal: {
+    fontSize: 13,
+    fontWeight: "800",
+    marginTop: 2,
+  },
+  calcEquationOp: {
+    fontSize: 15,
+    fontWeight: "800",
+    color: colors.text.muted,
+    paddingHorizontal: 4,
+  },
+  calcTabSwitchRow: {
+    flexDirection: "row",
+    gap: 8,
+    marginBottom: 12,
+    marginTop: 2,
+  },
+  calcTabSwitchBtn: {
+    flex: 1,
+    paddingVertical: 9,
+    borderRadius: 10,
+    alignItems: "center",
+    backgroundColor: colors.bg.primary,
+    borderWidth: 1,
+    borderColor: colors.border.subtle,
+  },
+  calcTabSwitchBtnActive: {
+    backgroundColor: colors.accent.primary,
+    borderColor: colors.accent.primary,
+  },
+  calcTabSwitchText: {
+    fontSize: 12,
+    fontWeight: "700",
+    color: colors.text.secondary,
+  },
+  calcTabSwitchTextActive: {
+    color: "#ffffff",
+  },
+  calcSubHeaderRow: {
+    flexDirection: "row",
+    justifyContent: "space-between",
+    alignItems: "center",
+    marginBottom: 8,
+  },
+  calcSubBadgesRow: {
+    flexDirection: "row",
+    alignItems: "center",
+    gap: 6,
+  },
+  calcSubBadgeCr: {
+    paddingHorizontal: 6,
+    paddingVertical: 2,
+    borderRadius: 6,
+    backgroundColor: `${colors.accent.danger}15`,
+  },
+  calcSubBadgeCrText: {
+    fontSize: 9,
+    fontWeight: "700",
+    color: colors.accent.danger,
+  },
+  calcSubBadgeDr: {
+    paddingHorizontal: 6,
+    paddingVertical: 2,
+    borderRadius: 6,
+    backgroundColor: `${colors.accent.success}15`,
+  },
+  calcSubBadgeDrText: {
+    fontSize: 9,
+    fontWeight: "700",
+    color: colors.accent.success,
+  },
+  calcSortBtn: {
+    flexDirection: "row",
+    alignItems: "center",
+    gap: 4,
+    backgroundColor: colors.bg.primary,
+    paddingVertical: 5,
+    paddingHorizontal: 8,
+    borderRadius: 8,
+    borderWidth: 1,
+    borderColor: colors.border.subtle,
+  },
+  calcSortBtnText: {
+    fontSize: 10,
+    fontWeight: "700",
+    color: colors.text.secondary,
+  },
+  calcBreakdownList: {
+    gap: 8,
+  },
+  calcBreakdownRow: {
+    backgroundColor: colors.bg.primary,
+    borderRadius: 12,
+    padding: 12,
+    borderWidth: 1,
+    borderColor: colors.border.subtle,
+    flexDirection: "row",
+    alignItems: "center",
+    justifyContent: "space-between",
+  },
+  calcBreakdownLeft: {
+    flexDirection: "row",
+    alignItems: "center",
+    gap: 10,
+  },
+  calcBreakdownIconBox: {
+    width: 36,
+    height: 36,
+    borderRadius: 10,
+    justifyContent: "center",
+    alignItems: "center",
+  },
+  calcBreakdownLabel: {
+    fontSize: 13,
+    fontWeight: "600",
+    color: colors.text.primary,
+  },
+  calcBreakdownValue: {
+    fontSize: 14,
+    fontWeight: "800",
+  },
+  calcFooterActions: {
+    marginTop: 14,
+    gap: 8,
+    flexShrink: 0,
+  },
+  calcShareActionBtn: {
+    backgroundColor: `${colors.accent.primary}18`,
+    borderRadius: 12,
+    height: 46,
+    borderWidth: 1.5,
+    borderColor: colors.accent.primary,
+    flexDirection: "row",
+    alignItems: "center",
+    justifyContent: "center",
+    gap: 8,
+  },
+  calcShareActionText: {
+    fontSize: 13,
+    fontWeight: "700",
+    color: colors.accent.primary,
+  },
+  calcPayActionBtn: {
+    backgroundColor: colors.accent.primary,
+    borderRadius: 12,
+    height: 46,
+    flexDirection: "row",
+    alignItems: "center",
+    justifyContent: "center",
+    gap: 6,
+  },
+  calcPayActionText: {
+    fontSize: 14,
+    fontWeight: "700",
+    color: "#1A1D27",
+  },
+  calcProfileActionBtn: {
+    backgroundColor: colors.bg.primary,
+    borderRadius: 12,
+    height: 44,
+    borderWidth: 1,
+    borderColor: colors.border.medium,
+    flexDirection: "row",
+    alignItems: "center",
+    justifyContent: "center",
+    gap: 6,
+  },
+  calcProfileActionText: {
+    fontSize: 13,
+    fontWeight: "700",
+    color: colors.text.primary,
   },
 });
 };
