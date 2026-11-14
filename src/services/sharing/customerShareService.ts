@@ -796,7 +796,7 @@ export const customerShareService = {
 
             <div class="net-due-box">
               <div>
-                <div>${netDue > 0 ? 'இறுதி பாக்கி (NET BALANCE DUE):' : netDue < 0 ? 'முன்பணம் வரவு (CUSTOMER ADVANCE):' : 'கணக்கு முடிந்தது (SETTLED):'}</div>
+                <div>${netDue < 0 ? 'முன்பணம் வரவு (CUSTOMER ADVANCE):' : 'இறுதி பாக்கி (NET BALANCE DUE):'}</div>
               </div>
               <div style="font-size: 20px;">${formatCurrency(Math.abs(netDue))}</div>
             </div>

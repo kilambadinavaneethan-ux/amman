@@ -667,11 +667,9 @@ export const AppaEstimateBillView = React.forwardRef<any, AppaEstimateBillViewPr
                       { color: netDue > 0 ? theme.badgeDueText : theme.badgeSettledText },
                     ]}
                   >
-                    {netDue > 0
-                      ? 'இறுதி பாக்கி (NET BALANCE DUE):'
-                      : netDue < 0
-                        ? 'முன்பணம் வரவு (CUSTOMER ADVANCE):'
-                        : 'கணக்கு முடிந்தது (ACCOUNT SETTLED):'}
+                    {netDue < 0
+                      ? 'முன்பணம் வரவு (CUSTOMER ADVANCE):'
+                      : 'இறுதி பாக்கி (NET BALANCE DUE):'}
                   </Text>
                 </View>
                 <Text
