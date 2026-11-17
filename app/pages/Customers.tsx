@@ -33,6 +33,7 @@ import { PRESET_MARKINGS, getMarkingConfig, normalizeMarkings, useCustomMarkings
 import { CustomerShareBottomSheet } from "../../src/components/sharing/CustomerShareBottomSheet";
 import { CustomerShareData } from "../../src/types/sharing";
 import { buildCustomerShareData } from "../../src/utils/customerStatementHelper";
+import { normalizeDateValue } from "../../src/config/firebase";
 
 const AVATAR_COLORS = [
   "#00D68F",
@@ -125,6 +126,77 @@ export default function Customers() {
   const [balanceFilter, setBalanceFilter] = useState("All"); // "All" | "Pending" | "Zero"
   const [collectorFilter, setCollectorFilter] = useState("All"); // "All" | "Unassigned" | "<collector_id>"
   const [markingFilter, setMarkingFilter] = useState("All"); // "All" | "Marked" | "<marking_label>"
+  
+  // Filter Modal states
+  const [isFilterModalOpen, setIsFilterModalOpen] = useState(false);
+  const [draftTypeFilter, setDraftTypeFilter] = useState<"All" | "customer" | "worker" | "supplier" | "delivery_partner">("All");
+  const [draftBalanceFilter, setDraftBalanceFilter] = useState("All");
+  const [draftCollectorFilter, setDraftCollectorFilter] = useState("All");
+  const [draftMarkingFilter, setDraftMarkingFilter] = useState("All");
+
+  const activeFiltersCount = useMemo(() => {
+    let count = 0;
+    if (typeFilter !== "All") count++;
+    if (balanceFilter !== "All") count++;
+    if (collectorFilter !== "All") count++;
+    if (markingFilter !== "All") count++;
+    return count;
+  }, [typeFilter, balanceFilter, collectorFilter, markingFilter]);
+
+  const draftActiveFiltersCount = useMemo(() => {
+    let count = 0;
+    if (draftTypeFilter !== "All") count++;
+    if (draftBalanceFilter !== "All") count++;
+    if (draftCollectorFilter !== "All") count++;
+    if (draftMarkingFilter !== "All") count++;
+    return count;
+  }, [draftTypeFilter, draftBalanceFilter, draftCollectorFilter, draftMarkingFilter]);
+
+  const openFilterModal = () => {
+    setDraftTypeFilter(typeFilter);
+    setDraftBalanceFilter(balanceFilter);
+    setDraftCollectorFilter(collectorFilter);
+    setDraftMarkingFilter(markingFilter);
+    setIsFilterModalOpen(true);
+  };
+
+  const applyFilters = () => {
+    setTypeFilter(draftTypeFilter);
+    setBalanceFilter(draftBalanceFilter);
+    setCollectorFilter(draftCollectorFilter);
+    setMarkingFilter(draftMarkingFilter);
+    setIsFilterModalOpen(false);
+  };
+
+  const resetDraftFilters = () => {
+    setDraftTypeFilter("All");
+    setDraftBalanceFilter("All");
+    setDraftCollectorFilter("All");
+    setDraftMarkingFilter("All");
+  };
+
+  const clearAllFilters = () => {
+    setSearchTerm("");
+    setTypeFilter("All");
+    setBalanceFilter("All");
+    setCollectorFilter("All");
+    setMarkingFilter("All");
+  };
+
+  const getAccountTypeLabel = (type: string) => {
+    switch (type) {
+      case "customer":
+        return "Customers";
+      case "worker":
+        return "Workers";
+      case "supplier":
+        return "Suppliers";
+      case "delivery_partner":
+        return "Delivery Partners";
+      default:
+        return "All Accounts";
+    }
+  };
   const [isSaving, setIsSaving] = useState(false);
   const [contactsVisible, setContactsVisible] = useState(false);
   const [showAddForm, setShowAddForm] = useState(false);
@@ -493,6 +565,112 @@ setContactsVisible(true);
       return d.toLocaleDateString([], { day: "numeric", month: "short", year: "numeric" });
     } catch {
       return dateStr;
+    }
+  };
+
+  const extractDate = (val: any): Date | null => {
+    if (!val) return null;
+    const d = normalizeDateValue(val);
+    return d && !isNaN(d.getTime()) ? d : null;
+  };
+
+  const lastTransactionDatesMap = useMemo(() => {
+    const map = new Map<string, { timestamp: number; type: "payment" | "order" }>();
+
+    const recordTxn = (
+      idKey: string | undefined | null,
+      dateObj: Date | null,
+      type: "payment" | "order"
+    ) => {
+      if (!idKey || !dateObj) return;
+      const t = dateObj.getTime();
+      const current = map.get(idKey);
+      if (
+        !current ||
+        t > current.timestamp ||
+        (t === current.timestamp && type === "payment")
+      ) {
+        map.set(idKey, { timestamp: t, type });
+      }
+    };
+
+    (orders || []).forEach((o: any) => {
+      if (o.status === "cancelled") return;
+      const d =
+        extractDate(o.orderedDate) ||
+        extractDate(o.createdAt) ||
+        extractDate(o.date) ||
+        extractDate(o.updatedAt);
+      if (o.customerId) {
+        recordTxn(o.customerId, d, "order");
+        const stripped = o.customerId.replace(/^(worker_|sup_|supplier_|partner_)/, "");
+        if (stripped !== o.customerId) recordTxn(stripped, d, "order");
+      }
+    });
+
+    (payments || []).forEach((p: any) => {
+      const d =
+        extractDate(p.paymentDate) ||
+        extractDate(p.createdAt) ||
+        extractDate(p.date) ||
+        extractDate(p.timestamp);
+      if (p.customerId) {
+        recordTxn(p.customerId, d, "payment");
+        const stripped = p.customerId.replace(/^(worker_|sup_|supplier_|partner_)/, "");
+        if (stripped !== p.customerId) recordTxn(stripped, d, "payment");
+      }
+    });
+
+    return map;
+  }, [orders, payments]);
+
+  const getLastTransactionInfo = (
+    customer: any
+  ): { date: Date; type: "payment" | "order" } | null => {
+    const id = customer.id;
+    const mapped =
+      lastTransactionDatesMap.get(id) ||
+      lastTransactionDatesMap.get(`worker_${id}`) ||
+      lastTransactionDatesMap.get(`sup_${id}`) ||
+      lastTransactionDatesMap.get(`supplier_${id}`) ||
+      lastTransactionDatesMap.get(`partner_${id}`);
+
+    let latestTime: number | null = mapped ? mapped.timestamp : null;
+    let latestType: "payment" | "order" = mapped ? mapped.type : "order";
+
+    if (customer.lastTransactionDate) {
+      const d = extractDate(customer.lastTransactionDate);
+      if (d) {
+        const t = d.getTime();
+        if (!latestTime || t > latestTime) {
+          latestTime = t;
+        }
+      }
+    }
+
+    if (!latestTime && (customer.createdAt || customer.updatedAt)) {
+      const d = extractDate(customer.createdAt) || extractDate(customer.updatedAt);
+      if (d) {
+        latestTime = d.getTime();
+        latestType = "order";
+      }
+    }
+
+    return latestTime ? { date: new Date(latestTime), type: latestType } : null;
+  };
+
+  const getLastTransactionDate = (customer: any): Date | null => {
+    const info = getLastTransactionInfo(customer);
+    return info ? info.date : null;
+  };
+
+  const formatTransactionDate = (dateVal: Date | any): string => {
+    try {
+      const d = normalizeDateValue(dateVal);
+      if (!d || isNaN(d.getTime())) return "";
+      return d.toLocaleDateString("en-IN", { day: "numeric", month: "short", year: "numeric" });
+    } catch {
+      return "";
     }
   };
 
@@ -1128,190 +1306,103 @@ setContactsVisible(true);
           </Pressable>
         </View>
 
-        {/* Search & Filters */}
+        {/* Search & Filter Bar */}
         <View style={styles.formSection}>
-          <Text style={styles.sectionHeader}>Search & Filters</Text>
-          
-          {/* Account Type Filter */}
-          <Text style={styles.subLabel}>Filter by Account Type</Text>
-          <ScrollView horizontal showsHorizontalScrollIndicator={false} style={styles.filterScroll}>
-            <View style={styles.filterRow}>
-              {[
-                { label: `All Accounts (${unifiedCustomers.length})`, value: "All" },
-                { label: "Customers", value: "customer" },
-                { label: "Workers", value: "worker" },
-                { label: "Suppliers", value: "supplier" },
-                { label: "Delivery Partners", value: "delivery_partner" },
-              ].map((item) => {
-                const active = typeFilter === item.value;
-                return (
-                  <Pressable
-                    key={item.value}
-                    style={[styles.filterPill, active && styles.filterPillActive]}
-                    onPress={() => setTypeFilter(item.value as any)}
-                  >
-                    <Text style={[styles.filterPillText, active && styles.filterPillTextActive]}>
-                      {item.label}
-                    </Text>
-                  </Pressable>
-                );
-              })}
+          <View style={styles.searchFilterRow}>
+            <View style={[styles.searchBox, { flex: 1 }]}>
+              <MaterialIcons name="search" size={20} color={colors.text.muted} style={{ marginRight: 8 }} />
+              <TextInput
+                style={styles.searchInput}
+                value={searchTerm}
+                onChangeText={setSearchTerm}
+                placeholder="Search by name, phone, or location..."
+                placeholderTextColor={colors.text.muted}
+              />
+              {searchTerm ? (
+                <Pressable onPress={() => setSearchTerm("")}>
+                  <MaterialIcons name="close" size={18} color={colors.text.muted} />
+                </Pressable>
+              ) : null}
             </View>
-          </ScrollView>
 
-          {/* Search Box */}
-          <View style={styles.searchBox}>
-            <MaterialIcons name="search" size={20} color={colors.text.muted} style={{ marginRight: 8 }} />
-            <TextInput
-              style={styles.searchInput}
-              value={searchTerm}
-              onChangeText={setSearchTerm}
-              placeholder="Search by name, phone, or location..."
-              placeholderTextColor={colors.text.muted}
-            />
-            {searchTerm ? (
-              <Pressable onPress={() => setSearchTerm("")}>
-                <MaterialIcons name="close" size={18} color={colors.text.muted} />
-              </Pressable>
-            ) : null}
+            <Pressable
+              style={[
+                styles.filterOpenBtn,
+                activeFiltersCount > 0 && styles.filterOpenBtnActive,
+              ]}
+              onPress={openFilterModal}
+            >
+              <MaterialIcons
+                name="tune"
+                size={18}
+                color={activeFiltersCount > 0 ? "#ffffff" : colors.text.primary}
+              />
+              <Text
+                style={[
+                  styles.filterOpenBtnText,
+                  activeFiltersCount > 0 && styles.filterOpenBtnTextActive,
+                ]}
+              >
+                Filters
+              </Text>
+              {activeFiltersCount > 0 && (
+                <View style={styles.filterBadge}>
+                  <Text style={styles.filterBadgeText}>{activeFiltersCount}</Text>
+                </View>
+              )}
+            </Pressable>
           </View>
 
-          {/* Balance Filter Row */}
-          <Text style={styles.subLabel}>Filter by Balance Status</Text>
-          <ScrollView horizontal showsHorizontalScrollIndicator={false} style={styles.filterScroll}>
-            <View style={styles.filterRow}>
-              {[
-                { label: "All Balances", value: "All" },
-                { label: "⭐ Favorites", value: "Favorites" },
-                { label: "Pending Balance (> ₹0)", value: "Pending" },
-                { label: "Zero Balance (₹0)", value: "Zero" },
-              ].map((item) => {
-                const active = balanceFilter === item.value;
-                return (
-                  <Pressable
-                    key={item.value}
-                    style={[styles.filterPill, active && styles.filterPillActive]}
-                    onPress={() => setBalanceFilter(item.value)}
-                  >
-                    <Text style={[styles.filterPillText, active && styles.filterPillTextActive]}>
-                      {item.label}
-                    </Text>
-                  </Pressable>
-                );
-              })}
+          {/* Active Filter Chips & Clear */}
+          {(activeFiltersCount > 0 || searchTerm) && (
+            <View style={styles.activeFiltersBar}>
+              <ScrollView horizontal showsHorizontalScrollIndicator={false} style={styles.activeChipsScroll}>
+                <View style={styles.activeChipsRow}>
+                  {typeFilter !== "All" && (
+                    <View style={styles.activeChip}>
+                      <Text style={styles.activeChipText}>Type: {getAccountTypeLabel(typeFilter)}</Text>
+                      <Pressable onPress={() => setTypeFilter("All")} hitSlop={6}>
+                        <MaterialIcons name="close" size={13} color={colors.accent.primary} />
+                      </Pressable>
+                    </View>
+                  )}
+                  {balanceFilter !== "All" && (
+                    <View style={styles.activeChip}>
+                      <Text style={styles.activeChipText}>Balance: {balanceFilter}</Text>
+                      <Pressable onPress={() => setBalanceFilter("All")} hitSlop={6}>
+                        <MaterialIcons name="close" size={13} color={colors.accent.primary} />
+                      </Pressable>
+                    </View>
+                  )}
+                  {collectorFilter !== "All" && (
+                    <View style={styles.activeChip}>
+                      <Text style={styles.activeChipText}>
+                        Collector: {collectorFilter === "Unassigned" ? "No Collector" : (collectors.find((c: any) => c.id === collectorFilter)?.name || "Collector")}
+                      </Text>
+                      <Pressable onPress={() => setCollectorFilter("All")} hitSlop={6}>
+                        <MaterialIcons name="close" size={13} color={colors.accent.primary} />
+                      </Pressable>
+                    </View>
+                  )}
+                  {markingFilter !== "All" && (
+                    <View style={styles.activeChip}>
+                      <Text style={styles.activeChipText}>Marking: {markingFilter}</Text>
+                      <Pressable onPress={() => setMarkingFilter("All")} hitSlop={6}>
+                        <MaterialIcons name="close" size={13} color={colors.accent.primary} />
+                      </Pressable>
+                    </View>
+                  )}
+                </View>
+              </ScrollView>
+
+              <Pressable
+                style={styles.clearAllBtn}
+                onPress={clearAllFilters}
+              >
+                <MaterialIcons name="filter-list-off" size={14} color={colors.accent.danger} />
+                <Text style={styles.clearAllBtnText}>Clear All</Text>
+              </Pressable>
             </View>
-          </ScrollView>
-
-          {/* Collector Filter Row */}
-          <Text style={styles.subLabel}>Filter by Assigned Collector</Text>
-          <ScrollView horizontal showsHorizontalScrollIndicator={false} style={styles.filterScroll}>
-            <View style={styles.filterRow}>
-              <Pressable
-                style={[styles.filterPill, collectorFilter === "All" && styles.filterPillActive]}
-                onPress={() => setCollectorFilter("All")}
-              >
-                <Text style={[styles.filterPillText, collectorFilter === "All" && styles.filterPillTextActive]}>
-                  All Collectors
-                </Text>
-              </Pressable>
-              
-              <Pressable
-                style={[styles.filterPill, collectorFilter === "Unassigned" && styles.filterPillActive]}
-                onPress={() => setCollectorFilter("Unassigned")}
-              >
-                <Text style={[styles.filterPillText, collectorFilter === "Unassigned" && styles.filterPillTextActive]}>
-                  No Collector
-                </Text>
-              </Pressable>
-
-              {collectors.map((c: any) => {
-                const active = collectorFilter === c.id;
-                return (
-                  <Pressable
-                    key={c.id}
-                    style={[styles.filterPill, active && styles.filterPillActive]}
-                    onPress={() => setCollectorFilter(c.id)}
-                  >
-                    <Text style={[styles.filterPillText, active && styles.filterPillTextActive]}>
-                      {c.name}
-                    </Text>
-                  </Pressable>
-                );
-              })}
-            </View>
-          </ScrollView>
-
-          {/* Profile Marking Filter Row */}
-          <Text style={styles.subLabel}>Filter by Profile Marking</Text>
-          <ScrollView horizontal showsHorizontalScrollIndicator={false} style={styles.filterScroll}>
-            <View style={styles.filterRow}>
-              <Pressable
-                style={[styles.filterPill, markingFilter === "All" && styles.filterPillActive]}
-                onPress={() => setMarkingFilter("All")}
-              >
-                <Text style={[styles.filterPillText, markingFilter === "All" && styles.filterPillTextActive]}>
-                  All Markings
-                </Text>
-              </Pressable>
-              
-              <Pressable
-                style={[styles.filterPill, markingFilter === "Marked" && styles.filterPillActive]}
-                onPress={() => setMarkingFilter("Marked")}
-              >
-                <Text style={[styles.filterPillText, markingFilter === "Marked" && styles.filterPillTextActive]}>
-                  🏷️ Any Marked
-                </Text>
-              </Pressable>
-
-              {allMarkingPresets.map((p) => {
-                const active = markingFilter.toLowerCase() === p.label.toLowerCase();
-                const cfg = getMarkingConfig(p.label, theme.isDark);
-                return (
-                  <Pressable
-                    key={p.id}
-                    style={[
-                      styles.filterPill,
-                      active && {
-                        backgroundColor: cfg.bg,
-                        borderColor: cfg.border,
-                      },
-                    ]}
-                    onPress={() => setMarkingFilter(active ? "All" : p.label)}
-                  >
-                    <MaterialIcons
-                      name={p.icon}
-                      size={14}
-                      color={active ? cfg.color : colors.text.muted}
-                      style={{ marginRight: 4 }}
-                    />
-                    <Text
-                      style={[
-                        styles.filterPillText,
-                        active && { color: cfg.color, fontWeight: "800" },
-                      ]}
-                    >
-                      {p.label}
-                    </Text>
-                  </Pressable>
-                );
-              })}
-            </View>
-          </ScrollView>
-
-          {/* Reset button */}
-          {(searchTerm || balanceFilter !== "All" || collectorFilter !== "All" || markingFilter !== "All") && (
-            <Pressable
-              style={styles.resetFiltersBtn}
-              onPress={() => {
-                setSearchTerm("");
-                setBalanceFilter("All");
-                setCollectorFilter("All");
-                setMarkingFilter("All");
-              }}
-            >
-              <MaterialIcons name="filter-list-off" size={16} color={colors.accent.danger} />
-              <Text style={styles.resetFiltersBtnText}>Reset Search & Filters</Text>
-            </Pressable>
           )}
         </View>
 
@@ -1330,6 +1421,14 @@ setContactsVisible(true);
             displayedCustomers.map((customer: any) => {
               const avatarColor = getAvatarColor(customer.name || "Client");
               const initial = (customer.name || "C").substring(0, 1).toUpperCase();
+              const hasBalanceDue =
+                Number(
+                  customer.displayBalance !== undefined
+                    ? customer.displayBalance
+                    : customer.balance || 0
+                ) > 0;
+              const lastTxnInfo = hasBalanceDue ? getLastTransactionInfo(customer) : null;
+              const lastDueDate = getLastDueDate(customer);
 
               return (
                 <View key={customer.id} style={styles.customerCard}>
@@ -1439,32 +1538,52 @@ setContactsVisible(true);
                           Collector: {customer.collectorName}
                         </Text>
                       ) : null}
-                      {getLastDueDate(customer) ? (
-                        <View style={[
-                          styles.listDueRow, 
-                          getDueDateStatus(getLastDueDate(customer)) === "Overdue" ? styles.listDueOverdue : 
-                          getLastDueDate(customer).status === "Completed" ? styles.listDueCompleted : styles.listDuePending
-                        ]}>
-                          <MaterialIcons 
-                            name={getDueDateStatus(getLastDueDate(customer)) === "Overdue" ? "error-outline" : 
-                                  getLastDueDate(customer).status === "Completed" ? "check-circle" : "event"} 
-                            size={12} 
-                            color={
-                              getDueDateStatus(getLastDueDate(customer)) === "Overdue" ? "#b91c1c" : 
-                              getLastDueDate(customer).status === "Completed" ? "#15803d" : "#c2410c"
-                            } 
-                          />
-                          <Text style={[
-                            styles.listDueText,
-                            {
-                              color: getDueDateStatus(getLastDueDate(customer)) === "Overdue" ? "#b91c1c" : 
-                                     getLastDueDate(customer).status === "Completed" ? "#15803d" : "#c2410c"
-                            }
-                          ]}>
-                            {getDueDateStatus(getLastDueDate(customer)) === "Overdue" ? "Overdue: " : 
-                             getLastDueDate(customer).status === "Completed" ? "Due (Paid): " : "Next Due: "}
-                            {formatDueDate(getLastDueDate(customer).date)}
-                          </Text>
+                      {((hasBalanceDue && lastTxnInfo) || lastDueDate) ? (
+                        <View style={styles.datesRowContainer}>
+                          {hasBalanceDue && lastTxnInfo ? (
+                            <View style={styles.listLastTxnRow}>
+                              <View
+                                style={[
+                                  styles.txnTypeDot,
+                                  {
+                                    backgroundColor:
+                                      lastTxnInfo.type === "payment" ? "#10B981" : "#EF4444",
+                                  },
+                                ]}
+                              />
+                              <Text style={styles.listLastTxnText}>
+                                Last Txn: {formatTransactionDate(lastTxnInfo.date)}
+                              </Text>
+                            </View>
+                          ) : null}
+                          {lastDueDate ? (
+                            <View style={[
+                              styles.listDueRow, 
+                              getDueDateStatus(lastDueDate) === "Overdue" ? styles.listDueOverdue : 
+                              lastDueDate.status === "Completed" ? styles.listDueCompleted : styles.listDuePending
+                            ]}>
+                              <MaterialIcons 
+                                name={getDueDateStatus(lastDueDate) === "Overdue" ? "error-outline" : 
+                                      lastDueDate.status === "Completed" ? "check-circle" : "event"} 
+                                size={12} 
+                                color={
+                                  getDueDateStatus(lastDueDate) === "Overdue" ? "#b91c1c" : 
+                                  lastDueDate.status === "Completed" ? "#15803d" : "#c2410c"
+                                } 
+                              />
+                              <Text style={[
+                                styles.listDueText,
+                                {
+                                  color: getDueDateStatus(lastDueDate) === "Overdue" ? "#b91c1c" : 
+                                         lastDueDate.status === "Completed" ? "#15803d" : "#c2410c"
+                                }
+                              ]}>
+                                {getDueDateStatus(lastDueDate) === "Overdue" ? "Overdue: " : 
+                                 lastDueDate.status === "Completed" ? "Due (Paid): " : "Next Due: "}
+                                {formatDueDate(lastDueDate.date)}
+                              </Text>
+                            </View>
+                          ) : null}
                         </View>
                       ) : null}
                     </View>
@@ -2354,6 +2473,7 @@ setContactsVisible(true);
                   const sharePct = summaryMetrics.totalSum > 0 ? ((bal / summaryMetrics.totalSum) * 100).toFixed(1) : "0";
                   const lastDue = getLastDueDate(item);
                   const dueStatus = lastDue ? getDueDateStatus(lastDue) : null;
+                  const itemLastTxn = getLastTransactionInfo(item);
 
                   return (
                     <View
@@ -2401,6 +2521,25 @@ setContactsVisible(true);
                             <Text style={{ fontSize: 10, fontWeight: "600", color: colors.accent.primary, marginTop: 1 }}>
                               Collector: {item.collectorName}
                             </Text>
+                          ) : null}
+                          {itemLastTxn ? (
+                            <View style={{ flexDirection: "row", alignItems: "center", gap: 4, marginTop: 3 }}>
+                              <View
+                                style={[
+                                  styles.txnTypeDot,
+                                  {
+                                    width: 6,
+                                    height: 6,
+                                    borderRadius: 3,
+                                    backgroundColor:
+                                      itemLastTxn.type === "payment" ? "#10B981" : "#EF4444",
+                                  },
+                                ]}
+                              />
+                              <Text style={{ fontSize: 10, fontWeight: "600", color: colors.text.secondary }}>
+                                Last Txn: {formatTransactionDate(itemLastTxn.date)}
+                              </Text>
+                            </View>
                           ) : null}
                           {lastDue ? (
                             <View style={{ flexDirection: "row", alignItems: "center", gap: 3, marginTop: 3 }}>
@@ -2506,6 +2645,191 @@ setContactsVisible(true);
             </ScrollView>
           </View>
         </KeyboardAvoidingView>
+      </Modal>
+
+      {/* ========== FILTER MODAL ========== */}
+      <Modal
+        visible={isFilterModalOpen}
+        animationType="fade"
+        transparent={true}
+        onRequestClose={() => setIsFilterModalOpen(false)}
+      >
+        <View style={styles.modalBackdrop}>
+          <Pressable style={styles.modalOverlay} onPress={() => setIsFilterModalOpen(false)} />
+          <View style={[styles.modalContent, { maxHeight: "88%", paddingBottom: 16 }]}>
+            <View style={styles.modalHeader}>
+              <View style={{ flexDirection: "row", alignItems: "center", gap: 8 }}>
+                <MaterialIcons name="tune" size={22} color={colors.accent.primary} />
+                <Text style={styles.modalTitle}>Filter Accounts</Text>
+              </View>
+              <Pressable style={styles.modalCloseBtn} onPress={() => setIsFilterModalOpen(false)}>
+                <MaterialIcons name="close" size={22} color={colors.text.secondary} />
+              </Pressable>
+            </View>
+
+            <ScrollView showsVerticalScrollIndicator={false} style={{ flexShrink: 1 }}>
+              {/* Account Type Filter */}
+              <Text style={styles.modalFilterSectionTitle}>Account Type</Text>
+              <View style={styles.modalFilterChipsWrap}>
+                {[
+                  { label: `All Accounts (${unifiedCustomers.length})`, value: "All" },
+                  { label: "Customers", value: "customer" },
+                  { label: "Workers", value: "worker" },
+                  { label: "Suppliers", value: "supplier" },
+                  { label: "Delivery Partners", value: "delivery_partner" },
+                ].map((item) => {
+                  const active = draftTypeFilter === item.value;
+                  return (
+                    <Pressable
+                      key={item.value}
+                      style={[styles.filterPill, active && styles.filterPillActive]}
+                      onPress={() => setDraftTypeFilter(item.value as any)}
+                    >
+                      <Text style={[styles.filterPillText, active && styles.filterPillTextActive]}>
+                        {item.label}
+                      </Text>
+                    </Pressable>
+                  );
+                })}
+              </View>
+
+              {/* Balance Filter */}
+              <Text style={styles.modalFilterSectionTitle}>Balance Status</Text>
+              <View style={styles.modalFilterChipsWrap}>
+                {[
+                  { label: "All Balances", value: "All" },
+                  { label: "⭐ Favorites", value: "Favorites" },
+                  { label: "Pending Balance (> ₹0)", value: "Pending" },
+                  { label: "Zero Balance (₹0)", value: "Zero" },
+                ].map((item) => {
+                  const active = draftBalanceFilter === item.value;
+                  return (
+                    <Pressable
+                      key={item.value}
+                      style={[styles.filterPill, active && styles.filterPillActive]}
+                      onPress={() => setDraftBalanceFilter(item.value)}
+                    >
+                      <Text style={[styles.filterPillText, active && styles.filterPillTextActive]}>
+                        {item.label}
+                      </Text>
+                    </Pressable>
+                  );
+                })}
+              </View>
+
+              {/* Collector Filter */}
+              <Text style={styles.modalFilterSectionTitle}>Assigned Collector</Text>
+              <View style={styles.modalFilterChipsWrap}>
+                <Pressable
+                  style={[styles.filterPill, draftCollectorFilter === "All" && styles.filterPillActive]}
+                  onPress={() => setDraftCollectorFilter("All")}
+                >
+                  <Text style={[styles.filterPillText, draftCollectorFilter === "All" && styles.filterPillTextActive]}>
+                    All Collectors
+                  </Text>
+                </Pressable>
+
+                <Pressable
+                  style={[styles.filterPill, draftCollectorFilter === "Unassigned" && styles.filterPillActive]}
+                  onPress={() => setDraftCollectorFilter("Unassigned")}
+                >
+                  <Text style={[styles.filterPillText, draftCollectorFilter === "Unassigned" && styles.filterPillTextActive]}>
+                    No Collector
+                  </Text>
+                </Pressable>
+
+                {collectors.map((c: any) => {
+                  const active = draftCollectorFilter === c.id;
+                  return (
+                    <Pressable
+                      key={c.id}
+                      style={[styles.filterPill, active && styles.filterPillActive]}
+                      onPress={() => setDraftCollectorFilter(c.id)}
+                    >
+                      <Text style={[styles.filterPillText, active && styles.filterPillTextActive]}>
+                        {c.name}
+                      </Text>
+                    </Pressable>
+                  );
+                })}
+              </View>
+
+              {/* Profile Marking Filter */}
+              <Text style={styles.modalFilterSectionTitle}>Profile Marking</Text>
+              <View style={styles.modalFilterChipsWrap}>
+                <Pressable
+                  style={[styles.filterPill, draftMarkingFilter === "All" && styles.filterPillActive]}
+                  onPress={() => setDraftMarkingFilter("All")}
+                >
+                  <Text style={[styles.filterPillText, draftMarkingFilter === "All" && styles.filterPillTextActive]}>
+                    All Markings
+                  </Text>
+                </Pressable>
+
+                <Pressable
+                  style={[styles.filterPill, draftMarkingFilter === "Marked" && styles.filterPillActive]}
+                  onPress={() => setDraftMarkingFilter("Marked")}
+                >
+                  <Text style={[styles.filterPillText, draftMarkingFilter === "Marked" && styles.filterPillTextActive]}>
+                    🏷️ Any Marked
+                  </Text>
+                </Pressable>
+
+                {allMarkingPresets.map((p) => {
+                  const active = draftMarkingFilter.toLowerCase() === p.label.toLowerCase();
+                  const cfg = getMarkingConfig(p.label, theme.isDark);
+                  return (
+                    <Pressable
+                      key={p.id}
+                      style={[
+                        styles.filterPill,
+                        active && {
+                          backgroundColor: cfg.bg,
+                          borderColor: cfg.border,
+                        },
+                      ]}
+                      onPress={() => setDraftMarkingFilter(active ? "All" : p.label)}
+                    >
+                      <MaterialIcons
+                        name={p.icon}
+                        size={14}
+                        color={active ? cfg.color : colors.text.muted}
+                        style={{ marginRight: 4 }}
+                      />
+                      <Text
+                        style={[
+                          styles.filterPillText,
+                          active && { color: cfg.color, fontWeight: "800" },
+                        ]}
+                      >
+                        {p.label}
+                      </Text>
+                    </Pressable>
+                  );
+                })}
+              </View>
+            </ScrollView>
+
+            {/* Modal Actions */}
+            <View style={[styles.modalFormActions, { marginTop: 16, paddingTop: 12, borderTopWidth: 1, borderTopColor: colors.border.subtle }]}>
+              <Pressable
+                style={[styles.modalFormActionBtn, styles.modalCancelBtn]}
+                onPress={resetDraftFilters}
+              >
+                <Text style={styles.modalCancelBtnText}>Reset All</Text>
+              </Pressable>
+
+              <Pressable
+                style={[styles.modalFormActionBtn, styles.modalSaveBtn, { flex: 1 }]}
+                onPress={applyFilters}
+              >
+                <Text style={styles.modalSaveBtnText}>
+                  {draftActiveFiltersCount > 0 ? `Apply Filters (${draftActiveFiltersCount})` : "Apply Filters"}
+                </Text>
+              </Pressable>
+            </View>
+          </View>
+        </View>
       </Modal>
 
       {selectedShareCustomerData && (
@@ -2871,6 +3195,140 @@ const getStyles = (theme: any) => {
     fontWeight: "700",
     color: colors.accent.danger,
   },
+  searchFilterRow: {
+    flexDirection: "row",
+    alignItems: "center",
+    gap: 8,
+  },
+  filterOpenBtn: {
+    flexDirection: "row",
+    alignItems: "center",
+    justifyContent: "center",
+    gap: 6,
+    height: 44,
+    paddingHorizontal: 12,
+    borderRadius: 10,
+    backgroundColor: colors.bg.primary,
+    borderWidth: 1,
+    borderColor: colors.border.medium,
+  },
+  filterOpenBtnActive: {
+    backgroundColor: colors.accent.primary,
+    borderColor: colors.accent.primary,
+  },
+  filterOpenBtnText: {
+    fontSize: 13,
+    fontWeight: "700",
+    color: colors.text.primary,
+  },
+  filterOpenBtnTextActive: {
+    color: "#ffffff",
+  },
+  filterBadge: {
+    backgroundColor: colors.accent.danger,
+    borderRadius: 10,
+    minWidth: 18,
+    height: 18,
+    alignItems: "center",
+    justifyContent: "center",
+    paddingHorizontal: 4,
+  },
+  filterBadgeText: {
+    color: "#ffffff",
+    fontSize: 10,
+    fontWeight: "800",
+  },
+  activeFiltersBar: {
+    flexDirection: "row",
+    alignItems: "center",
+    justifyContent: "space-between",
+    gap: 8,
+    marginTop: 10,
+  },
+  activeChipsScroll: {
+    flexGrow: 0,
+    flexShrink: 1,
+  },
+  activeChipsRow: {
+    flexDirection: "row",
+    alignItems: "center",
+    gap: 6,
+  },
+  activeChip: {
+    flexDirection: "row",
+    alignItems: "center",
+    gap: 5,
+    backgroundColor: "#6C5CE715",
+    borderWidth: 1,
+    borderColor: "#6C5CE735",
+    borderRadius: 8,
+    paddingVertical: 3,
+    paddingHorizontal: 8,
+  },
+  activeChipText: {
+    fontSize: 11,
+    fontWeight: "600",
+    color: colors.accent.primary,
+  },
+  clearAllBtn: {
+    flexDirection: "row",
+    alignItems: "center",
+    gap: 4,
+    paddingVertical: 4,
+    paddingHorizontal: 8,
+    borderRadius: 8,
+    backgroundColor: "#fee2e2",
+    flexShrink: 0,
+  },
+  clearAllBtnText: {
+    fontSize: 11,
+    fontWeight: "700",
+    color: colors.accent.danger,
+  },
+  modalFilterSectionTitle: {
+    fontSize: 12,
+    fontWeight: "800",
+    color: colors.text.secondary,
+    textTransform: "uppercase",
+    letterSpacing: 0.5,
+    marginTop: 14,
+    marginBottom: 8,
+  },
+  modalFilterChipsWrap: {
+    flexDirection: "row",
+    flexWrap: "wrap",
+    gap: 6,
+    marginBottom: 4,
+  },
+  datesRowContainer: {
+    flexDirection: "row",
+    flexWrap: "wrap",
+    alignItems: "center",
+    gap: 6,
+    marginTop: 6,
+  },
+  listLastTxnRow: {
+    flexDirection: "row",
+    alignItems: "center",
+    gap: 4,
+    paddingVertical: 3,
+    paddingHorizontal: 8,
+    borderRadius: 6,
+    backgroundColor: theme.isDark ? colors.bg.primary : "#F1F5F9",
+    borderWidth: 1,
+    borderColor: colors.border.medium,
+    alignSelf: "flex-start",
+  },
+  listLastTxnText: {
+    fontSize: 11,
+    fontWeight: "600",
+    color: colors.text.secondary,
+  },
+  txnTypeDot: {
+    width: 7,
+    height: 7,
+    borderRadius: 3.5,
+  },
   listDueRow: {
     flexDirection: "row",
     alignItems: "center",
@@ -2878,7 +3336,6 @@ const getStyles = (theme: any) => {
     paddingVertical: 3,
     paddingHorizontal: 8,
     borderRadius: 6,
-    marginTop: 6,
     alignSelf: "flex-start",
   },
   listDueOverdue: {
